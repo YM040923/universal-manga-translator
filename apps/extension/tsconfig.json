@@ -1,0 +1,10 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "types": ["chrome"],
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "outDir": "dist"
+  },
+  "include": ["src/**/*.ts", "vite.config.ts"],
+  "exclude": ["src/**/*.test.ts"]
+}
