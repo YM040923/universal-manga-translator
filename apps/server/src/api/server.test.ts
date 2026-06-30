@@ -56,3 +56,22 @@ test("second identical submit is served from persistent cache", async () => {
   }
 });
 
+
+test("submit returns structured failure and publishes job.failed", async () => {
+  const events: string[] = [];
+  const { EventBus } = await import("./events.js");
+  const eventBus = new EventBus();
+  eventBus.subscribe((event) => events.push(event.type));
+  const app = await buildServer({
+    provider: "mock",
+    targetLanguage: "zh-CN",
+    eventBus,
+    visionProvider: { profile: "throwing", process: async () => { throw new Error("provider exploded"); } },
+  });
+  const response = await app.inject({ method: "POST", url: "/v1/surfaces/submit", payload: { task } });
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.json().ok, false);
+  assert.equal(response.json().result.status, "failed");
+  assert.deepEqual(events.filter((type) => type.startsWith("job.")), ["job.queued", "job.processing", "job.failed"]);
+  await app.close();
+});

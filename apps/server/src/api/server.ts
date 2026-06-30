@@ -1,4 +1,4 @@
-﻿import cors from "@fastify/cors";
+import cors from "@fastify/cors";
 import websocket from "@fastify/websocket";
 import Fastify, { type FastifyInstance } from "fastify";
 import type { SurfaceResult, SurfaceTask } from "@umt/shared";
@@ -42,32 +42,38 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
     const started = Date.now();
     const task = request.body.task;
     eventBus.publish({ type: "job.queued", surfaceId: task.surfaceId });
-    const { buffer: imageBuffer } = await readTaskImage(task);
-    const imageHash = sha256Hex(imageBuffer);
-    const normalized = await normalizeForProvider(imageBuffer, { maxLongEdge: options.maxImageLongEdge ?? 1600, jpegQuality: Math.round((options.jpegQuality ?? 0.75) * 100) });
-    const cacheKey = buildCacheKey({ imageHash, targetLanguage: task.targetLanguage, providerProfile: provider.profile, layoutVersion: LAYOUT_VERSION });
-    const cached = surfaceCache?.get(cacheKey) ?? memoryCache.get(cacheKey);
-    if (cached) {
-      const cachedForSurface: SurfaceResult = { ...cached, surfaceId: task.surfaceId, status: "cached" };
-      eventBus.publish({ type: "job.cached", surfaceId: task.surfaceId, result: cachedForSurface });
-      return { ok: true, surfaceId: task.surfaceId, status: "cached", result: cachedForSurface };
-    }
+    try {
+      const { buffer: imageBuffer } = await readTaskImage(task);
+      const imageHash = sha256Hex(imageBuffer);
+      const normalized = await normalizeForProvider(imageBuffer, { maxLongEdge: options.maxImageLongEdge ?? 1600, jpegQuality: Math.round((options.jpegQuality ?? 0.75) * 100) });
+      const cacheKey = buildCacheKey({ imageHash, targetLanguage: task.targetLanguage, providerProfile: provider.profile, layoutVersion: LAYOUT_VERSION });
+      const cached = surfaceCache?.get(cacheKey) ?? memoryCache.get(cacheKey);
+      if (cached) {
+        const cachedForSurface: SurfaceResult = { ...cached, surfaceId: task.surfaceId, status: "cached" };
+        eventBus.publish({ type: "job.cached", surfaceId: task.surfaceId, result: cachedForSurface });
+        return { ok: true, surfaceId: task.surfaceId, status: "cached", result: cachedForSurface };
+      }
 
-    eventBus.publish({ type: "job.processing", surfaceId: task.surfaceId });
-    const regions = await provider.process({ task, imageBuffer: normalized.buffer, imageHash, width: normalized.width, height: normalized.height });
-    const result: SurfaceResult = {
-      surfaceId: task.surfaceId,
-      imageHash,
-      status: regions.length ? "completed" : "empty",
-      regions: layoutRegions(regions),
-      providerProfile: provider.profile,
-      layoutVersion: LAYOUT_VERSION,
-      elapsedMs: Date.now() - started,
-    };
-    memoryCache.set(cacheKey, result);
-    surfaceCache?.save(cacheKey, result);
-    eventBus.publish({ type: "job.completed", surfaceId: task.surfaceId, result });
-    return { ok: true, surfaceId: task.surfaceId, status: result.status, result };
+      eventBus.publish({ type: "job.processing", surfaceId: task.surfaceId });
+      const regions = await provider.process({ task, imageBuffer: normalized.buffer, imageHash, width: normalized.width, height: normalized.height });
+      const result: SurfaceResult = {
+        surfaceId: task.surfaceId,
+        imageHash,
+        status: regions.length ? "completed" : "empty",
+        regions: layoutRegions(regions),
+        providerProfile: provider.profile,
+        layoutVersion: LAYOUT_VERSION,
+        elapsedMs: Date.now() - started,
+      };
+      memoryCache.set(cacheKey, result);
+      surfaceCache?.save(cacheKey, result);
+      eventBus.publish({ type: "job.completed", surfaceId: task.surfaceId, result });
+      return { ok: true, surfaceId: task.surfaceId, status: result.status, result };
+    } catch (error) {
+      const failed = { surfaceId: task.surfaceId, status: "failed" as const, recoverable: true, error: error instanceof Error ? error.message : String(error) };
+      eventBus.publish({ type: "job.failed", surfaceId: task.surfaceId, result: failed });
+      return { ok: false, error: failed.error, result: failed };
+    }
   });
 
   return app;
