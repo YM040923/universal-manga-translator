@@ -1,6 +1,7 @@
 ﻿import cors from "@fastify/cors";
 import Fastify, { type FastifyInstance } from "fastify";
-import { buildCacheKey, sha256Hex, type SurfaceResult, type SurfaceTask } from "@umt/shared";
+import type { SurfaceResult, SurfaceTask } from "@umt/shared";
+import { buildCacheKey, sha256Hex } from "@umt/shared/hashing";
 import { LAYOUT_VERSION, layoutRegions } from "../layout/layout.js";
 import { MockProvider } from "../providers/mock-provider.js";
 import type { VisionProvider } from "../providers/provider.js";
@@ -52,4 +53,6 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
 
   return app;
 }
+
+
 

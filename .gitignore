@@ -6,3 +6,12 @@ coverage/
 .playwright/
 test-results/
 .worktrees/
+
+apps/extension/dist-test/
+apps/extension/dist/
+packages/shared/dist/
+packages/shared/src/*.js
+packages/shared/src/*.js.map
+packages/shared/src/*.d.ts
+packages/shared/src/*.d.ts.map
+apps/server/dist/
