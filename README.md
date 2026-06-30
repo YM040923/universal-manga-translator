@@ -1,4 +1,4 @@
-﻿# Universal Manga Translator
+# Universal Manga Translator
 
 ## Development
 
@@ -21,3 +21,6 @@ Phase 2 adds persistent SQLite cache, backend image URL input, WebSocket job eve
 ## Phase 3 Verification
 
 Phase 3 adds automatic scan-on-load, throttled scroll-triggered prefetch, pause/resume controls, and cache-hit regression coverage. The loaded-extension E2E now verifies that the mock translated overlay appears automatically without clicking the translate button.
+## Phase 4 Verification
+
+Phase 4 adds provider image normalization/compression, tolerant OpenAI JSON extraction, structured failed submit responses, `job.failed` WebSocket events, and extension-side failed translation counters. Verified on 2026-06-30 with `pnpm test`, `pnpm build`, `pnpm test:e2e`, and `pnpm exec playwright test tests/integration/extension-loaded.spec.ts`.
