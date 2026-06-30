@@ -1,7 +1,7 @@
 import type { SurfaceTask } from "@umt/shared/types";
 import type { DetectedSurface } from "../detector/surface-detector";
 
-export function createSurfaceTask(surface: DetectedSurface, priority: SurfaceTask["viewportPriority"]): SurfaceTask {
+export function createSurfaceTask(surface: DetectedSurface, priority: SurfaceTask["viewportPriority"], targetLanguage = "zh-CN"): SurfaceTask {
   return {
     surfaceId: surface.surfaceId,
     pageUrl: location.href,
@@ -14,6 +14,6 @@ export function createSurfaceTask(surface: DetectedSurface, priority: SurfaceTas
     renderSize: { width: surface.rect.width, height: surface.rect.height },
     readingDirection: "auto",
     sourceLanguage: "auto",
-    targetLanguage: "zh-CN",
+    targetLanguage,
   };
 }

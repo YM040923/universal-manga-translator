@@ -17,11 +17,12 @@ test("createSurfaceTask sends image surfaces by URL", () => {
     score: 10,
   };
 
-  const task = createSurfaceTask(surface, "p0");
+  const task = createSurfaceTask(surface, "p0", "ja");
 
   assert.equal(task.imageUrl, "https://cdn.example/page.jpg");
   assert.equal("imageData" in task, false);
   assert.equal(task.domain, "reader.example");
+  assert.equal(task.targetLanguage, "ja");
 });
 
 test("createSurfaceTask sends canvas fallback surfaces by image data", () => {
