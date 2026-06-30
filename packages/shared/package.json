@@ -1,0 +1,12 @@
+﻿{
+    "name":  "@umt/shared",
+    "version":  "0.1.0",
+    "type":  "module",
+    "main":  "dist/index.js",
+    "types":  "dist/index.d.ts",
+    "scripts":  {
+                    "build":  "tsc -p tsconfig.json",
+                    "test":  "pnpm build \u0026\u0026 node --test dist/*.test.js",
+                    "typecheck":  "tsc -p tsconfig.json --noEmit"
+                }
+}
