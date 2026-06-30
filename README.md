@@ -24,3 +24,6 @@ Phase 3 adds automatic scan-on-load, throttled scroll-triggered prefetch, pause/
 ## Phase 4 Verification
 
 Phase 4 adds provider image normalization/compression, tolerant OpenAI JSON extraction, structured failed submit responses, `job.failed` WebSocket events, and extension-side failed translation counters. Verified on 2026-06-30 with `pnpm test`, `pnpm build`, `pnpm test:e2e`, and `pnpm exec playwright test tests/integration/extension-loaded.spec.ts`.
+## Phase 5 Verification
+
+Phase 5 adds mixed manga surface support: normal `<img>` pages, CSS `background-image` panels, exportable `<canvas>` readers, image-data fallback submission, and overlay refresh on scroll/resize/layout changes. Verified on 2026-06-30 with `pnpm test`, `pnpm build`, `pnpm test:e2e`, and `pnpm exec playwright test tests/integration/extension-loaded.spec.ts`.
