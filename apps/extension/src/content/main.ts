@@ -77,6 +77,7 @@ async function bootstrap(): Promise<void> {
       renderer.setVisible(overlaysVisible);
       panel.setStatus(overlaysVisible ? "UMT: overlays visible" : "UMT: overlays hidden");
     },
+    onOpenSettings: () => chrome.runtime?.openOptionsPage?.(),
   });
 
   panel.mount();
