@@ -87,5 +87,11 @@ void client.health().then((ok) => {
   panel.setStatus(ok ? "UMT: backend connected" : "UMT: backend offline");
   if (ok) autoScheduler.requestRun("load");
 });
-window.addEventListener("scroll", () => autoScheduler.requestRun("scroll"), { passive: true });
-window.addEventListener("resize", () => autoScheduler.requestRun("resize"));
+window.addEventListener("scroll", () => {
+  renderer.refreshAll();
+  autoScheduler.requestRun("scroll");
+}, { passive: true });
+window.addEventListener("resize", () => {
+  renderer.refreshAll();
+  autoScheduler.requestRun("resize");
+});

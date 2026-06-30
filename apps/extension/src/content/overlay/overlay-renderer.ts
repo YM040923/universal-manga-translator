@@ -1,7 +1,13 @@
-﻿import { mapNaturalBoxToRenderedBox } from "@umt/shared/geometry";
+import { mapNaturalBoxToRenderedBox } from "@umt/shared/geometry";
 import type { Size, SurfaceResult } from "@umt/shared/types";
 
 const manualEdits = new Map<string, string>();
+
+interface RenderState {
+  element: HTMLElement;
+  naturalSize: Size;
+  result: SurfaceResult;
+}
 
 function manualEditKey(imageHash: string, targetLanguage: string, regionId: string): string {
   return `${imageHash}:${targetLanguage}:${regionId}`;
@@ -17,6 +23,7 @@ export function loadManualEdit(imageHash: string, targetLanguage: string, region
 
 export class OverlayRenderer {
   private readonly root: HTMLDivElement;
+  private readonly rendered = new Map<string, RenderState>();
 
   constructor() {
     this.root = document.createElement("div");
@@ -35,6 +42,15 @@ export class OverlayRenderer {
   }
 
   render(element: HTMLElement, naturalSize: Size, result: SurfaceResult): void {
+    this.rendered.set(result.surfaceId, { element, naturalSize, result });
+    this.renderSurface(element, naturalSize, result);
+  }
+
+  refreshAll(): void {
+    for (const { element, naturalSize, result } of this.rendered.values()) this.renderSurface(element, naturalSize, result);
+  }
+
+  private renderSurface(element: HTMLElement, naturalSize: Size, result: SurfaceResult): void {
     this.clearSurface(result.surfaceId);
     const rect = element.getBoundingClientRect();
     const renderedRect = { x: rect.x + window.scrollX, y: rect.y + window.scrollY, width: rect.width, height: rect.height };
