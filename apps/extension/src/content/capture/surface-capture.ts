@@ -1,4 +1,4 @@
-﻿import type { SurfaceTask } from "@umt/shared/types";
+import type { SurfaceTask } from "@umt/shared/types";
 import type { DetectedSurface } from "../detector/surface-detector";
 
 export function createSurfaceTask(surface: DetectedSurface, priority: SurfaceTask["viewportPriority"]): SurfaceTask {
@@ -6,7 +6,8 @@ export function createSurfaceTask(surface: DetectedSurface, priority: SurfaceTas
     surfaceId: surface.surfaceId,
     pageUrl: location.href,
     domain: location.hostname,
-    imageUrl: surface.imageUrl,
+    ...(surface.imageUrl ? { imageUrl: surface.imageUrl } : {}),
+    ...(surface.imageData ? { imageData: surface.imageData } : {}),
     viewportPriority: priority,
     surfaceRect: surface.rect,
     naturalSize: surface.naturalSize,

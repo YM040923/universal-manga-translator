@@ -1,4 +1,4 @@
-﻿import test from "node:test";
+import test from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
 import { detectImageSurfaces } from "./surface-detector.js";
@@ -10,5 +10,30 @@ test("keeps large manga-like images and ignores small icons", () => {
   Object.defineProperty(doc.querySelector("#page"), "getBoundingClientRect", { value: () => ({ x: 0, y: 0, width: 800, height: 1200 }) });
   const surfaces = detectImageSurfaces(doc);
   assert.equal(surfaces.length, 1);
+  assert.equal(surfaces[0]?.kind, "image");
   assert.equal(surfaces[0]?.element.id, "page");
+});
+
+test("detects large CSS background manga surfaces", () => {
+  const dom = new JSDOM(`<body><main><div id="bg" style="background-image:url('/chapter/bg-page-001.jpg')"></div></main></body>`, { url: "https://example.test" });
+  const doc = dom.window.document;
+  const bg = doc.querySelector<HTMLElement>("#bg")!;
+  Object.defineProperty(bg, "getBoundingClientRect", { value: () => ({ x: 20, y: 40, width: 760, height: 1180 }) });
+  const surfaces = detectImageSurfaces(doc);
+  assert.equal(surfaces.length, 1);
+  assert.equal(surfaces[0]?.kind, "background");
+  assert.equal(surfaces[0]?.imageUrl, "https://example.test/chapter/bg-page-001.jpg");
+  assert.equal(surfaces[0]?.naturalSize.width, 760);
+});
+
+test("detects exportable canvas manga surfaces", () => {
+  const dom = new JSDOM(`<body><canvas id="canvas" width="900" height="1300"></canvas></body>`, { url: "https://example.test" });
+  const doc = dom.window.document;
+  const canvas = doc.querySelector<HTMLCanvasElement>("#canvas")!;
+  Object.defineProperty(canvas, "getBoundingClientRect", { value: () => ({ x: 0, y: 100, width: 900, height: 1300 }) });
+  Object.defineProperty(canvas, "toDataURL", { value: () => "data:image/png;base64,abc123" });
+  const surfaces = detectImageSurfaces(doc);
+  assert.equal(surfaces.length, 1);
+  assert.equal(surfaces[0]?.kind, "canvas");
+  assert.equal(surfaces[0]?.imageData, "data:image/png;base64,abc123");
 });

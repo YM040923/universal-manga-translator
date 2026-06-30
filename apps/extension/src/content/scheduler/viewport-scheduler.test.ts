@@ -1,4 +1,4 @@
-﻿import test from "node:test";
+import test from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
 import { prioritizeSurfaces } from "./viewport-scheduler.js";
@@ -6,6 +6,7 @@ import { prioritizeSurfaces } from "./viewport-scheduler.js";
 const dom = new JSDOM(`<body></body>`);
 const surface = (surfaceId: string, y: number) => ({
   surfaceId,
+  kind: "image" as const,
   element: dom.window.document.createElement("img"),
   imageUrl: `/${surfaceId}.jpg`,
   rect: { x: 0, y, width: 800, height: 1000 },
