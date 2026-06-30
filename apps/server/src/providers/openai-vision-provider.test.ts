@@ -40,3 +40,13 @@ test("parses JSON regions from an OpenAI-compatible response", async () => {
     globalThis.fetch = originalFetch;
   }
 });
+
+test("extracts fenced JSON from model response", () => {
+  const parsed = OpenAIVisionProvider.parseRegionsFromContent("```json\n{\"regions\":[{\"id\":\"r1\",\"box\":{\"x\":0,\"y\":0,\"width\":1,\"height\":1},\"sourceText\":\"a\",\"translatedText\":\"b\",\"confidence\":1,\"orientation\":\"horizontal\",\"kind\":\"dialogue\"}]}\n```");
+  assert.equal(parsed[0]?.translatedText, "b");
+});
+
+test("extracts JSON object from prefix and suffix text", () => {
+  const parsed = OpenAIVisionProvider.parseRegionsFromContent("Here is the result {\"regions\":[]} thanks");
+  assert.deepEqual(parsed, []);
+});

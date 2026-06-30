@@ -15,6 +15,14 @@ export class OpenAIVisionProvider implements VisionProvider {
     this.profile = `openai-compatible:${options.model}`;
   }
 
+  static parseRegionsFromContent(content: string): TextRegion[] {
+    const fenced = content.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1];
+    const candidate = fenced ?? content.slice(content.indexOf("{"), content.lastIndexOf("}") + 1);
+    if (!candidate || candidate.trim().length === 0) return [];
+    const parsed = JSON.parse(candidate) as { regions?: TextRegion[] };
+    return Array.isArray(parsed.regions) ? parsed.regions : [];
+  }
+
   async process(input: ProviderInput): Promise<TextRegion[]> {
     const response = await fetch(`${this.options.baseUrl.replace(/\/$/, "")}/chat/completions`, {
       method: "POST",
@@ -33,8 +41,6 @@ export class OpenAIVisionProvider implements VisionProvider {
     });
     if (!response.ok) throw new Error(`OpenAI-compatible provider failed: ${response.status}`);
     const payload = (await response.json()) as { choices?: Array<{ message?: { content?: string } }> };
-    const content = payload.choices?.[0]?.message?.content ?? "{\"regions\":[]}";
-    const parsed = JSON.parse(content) as { regions?: TextRegion[] };
-    return Array.isArray(parsed.regions) ? parsed.regions : [];
+    return OpenAIVisionProvider.parseRegionsFromContent(payload.choices?.[0]?.message?.content ?? "{\"regions\":[]}");
   }
 }
