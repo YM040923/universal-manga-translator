@@ -1,21 +1,20 @@
-﻿import { BackendClient, SurfaceSubmitTracker } from "./client/backend-client";
+import { BackendClient, SurfaceSubmitTracker } from "./client/backend-client";
 import { createSurfaceTask } from "./capture/surface-capture";
 import { detectImageSurfaces } from "./detector/surface-detector";
 import { OverlayRenderer } from "./overlay/overlay-renderer";
 import { FloatingPanel } from "./panel/floating-panel";
 import { AutoScheduler } from "./scheduler/auto-scheduler";
 import { prioritizeSurfaces } from "./scheduler/viewport-scheduler";
+import { TranslationStatusCounter } from "./status/job-status-counter";
 
 const client = new BackendClient();
 const renderer = new OverlayRenderer();
 const submitTracker = new SurfaceSubmitTracker();
+const statusCounter = new TranslationStatusCounter();
 let overlaysVisible = true;
-let queued = 0;
-let processing = 0;
-let completed = 0;
 
 function setCountersStatus(): void {
-  panel.setStatus(`UMT: queued ${queued} | processing ${processing} | done ${completed}`);
+  panel.setStatus(statusCounter.format());
 }
 
 function viewportRect() {
@@ -29,8 +28,18 @@ async function translateVisibleAndNearby(): Promise<void> {
   panel.setStatus(`UMT: submitting ${fresh.length} new surfaces`);
   for (const item of fresh) {
     submitTracker.markSubmitted(item.surface.surfaceId);
-    const response = await client.submit(createSurfaceTask(item.surface, item.priority));
-    if (response.ok && response.result) renderer.render(item.surface.element, item.surface.naturalSize, response.result);
+    try {
+      const response = await client.submit(createSurfaceTask(item.surface, item.priority));
+      if (response.ok && response.result) {
+        renderer.render(item.surface.element, item.surface.naturalSize, response.result);
+      } else {
+        statusCounter.recordFailedResponse(item.surface.surfaceId);
+        setCountersStatus();
+      }
+    } catch {
+      statusCounter.recordFailedResponse(item.surface.surfaceId);
+      setCountersStatus();
+    }
   }
 }
 
@@ -68,9 +77,7 @@ const panel = new FloatingPanel({
 panel.mount();
 try {
   client.connectEvents((event) => {
-    if (event.type === "job.queued") queued += 1;
-    if (event.type === "job.processing") processing += 1;
-    if (event.type === "job.completed" || event.type === "job.cached") completed += 1;
+    statusCounter.recordEvent(event);
     setCountersStatus();
   });
 } catch {
