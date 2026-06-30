@@ -1,5 +1,20 @@
-﻿import { copyFileSync, mkdirSync } from "node:fs";
-import { dirname, resolve } from "node:path";
-const target = resolve("dist/manifest.json");
-mkdirSync(dirname(target), { recursive: true });
-copyFileSync(resolve("public/manifest.json"), target);
+import { copyFileSync, mkdirSync, readdirSync, statSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+
+const sourceRoot = resolve("public");
+const targetRoot = resolve("dist");
+copyDir(sourceRoot, targetRoot);
+
+function copyDir(source, target) {
+  mkdirSync(target, { recursive: true });
+  for (const entry of readdirSync(source)) {
+    const sourcePath = join(source, entry);
+    const targetPath = join(target, entry);
+    if (statSync(sourcePath).isDirectory()) {
+      copyDir(sourcePath, targetPath);
+    } else {
+      mkdirSync(dirname(targetPath), { recursive: true });
+      copyFileSync(sourcePath, targetPath);
+    }
+  }
+}

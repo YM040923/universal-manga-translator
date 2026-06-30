@@ -7,5 +7,6 @@
   "host_permissions": ["http://127.0.0.1:47831/*", "http://*/*", "https://*/*"],
   "background": { "service_worker": "background.js", "type": "module" },
   "content_scripts": [{ "matches": ["http://*/*", "https://*/*"], "js": ["content.js"], "run_at": "document_idle" }],
+  "options_page": "options.html",
   "action": { "default_title": "Universal Manga Translator" }
 }

@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Universal Manga Translator Settings</title>
+    <style>
+      body { margin: 0; font: 14px system-ui, sans-serif; background: #0f172a; color: #e5e7eb; }
+      .umt-options { max-width: 720px; margin: 48px auto; padding: 24px; background: #111827; border-radius: 16px; box-shadow: 0 20px 60px rgba(0,0,0,.35); }
+      form { display: grid; gap: 16px; }
+      label { display: grid; gap: 6px; }
+      .checkbox { display: flex; align-items: center; gap: 8px; }
+      input { padding: 10px 12px; border-radius: 10px; border: 1px solid #374151; background: #020617; color: #f9fafb; }
+      button { width: fit-content; border: 0; border-radius: 10px; padding: 10px 16px; background: #2563eb; color: white; cursor: pointer; }
+      [data-options-status] { min-height: 20px; color: #86efac; }
+    </style>
+  </head>
+  <body>
+    <main id="app"></main>
+    <script type="module" src="./options.js"></script>
+  </body>
+</html>
