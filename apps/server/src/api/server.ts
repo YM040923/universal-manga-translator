@@ -6,6 +6,7 @@ import { LAYOUT_VERSION, layoutRegions } from "../layout/layout.js";
 import { MockProvider } from "../providers/mock-provider.js";
 import type { VisionProvider } from "../providers/provider.js";
 import type { SurfaceCache } from "../cache/surface-cache.js";
+import { readTaskImage } from "../image/image-input.js";
 
 export interface BuildServerOptions {
   provider: string;
@@ -31,7 +32,7 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
   app.post<{ Body: { task: SurfaceTask } }>("/v1/surfaces/submit", async (request) => {
     const started = Date.now();
     const task = request.body.task;
-    const imageBuffer = decodeImageData(task.imageData ?? "");
+    const { buffer: imageBuffer } = await readTaskImage(task);
     const imageHash = sha256Hex(imageBuffer);
     const cacheKey = buildCacheKey({ imageHash, targetLanguage: task.targetLanguage, providerProfile: provider.profile, layoutVersion: LAYOUT_VERSION });
     const cached = surfaceCache?.get(cacheKey) ?? memoryCache.get(cacheKey);
@@ -57,6 +58,7 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
 
   return app;
 }
+
 
 
 
