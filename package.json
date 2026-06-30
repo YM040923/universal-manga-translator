@@ -1,0 +1,20 @@
+﻿{
+  "name": "universal-manga-translator",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "pnpm -r build",
+    "test": "pnpm -r test",
+    "typecheck": "pnpm -r typecheck",
+    "dev:server": "pnpm --filter @umt/server dev",
+    "dev:extension": "pnpm --filter @umt/extension dev",
+    "test:e2e": "playwright test tests/integration"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.45.0",
+    "@types/node": "^20.14.0",
+    "typescript": "^5.5.0",
+    "vitest": "^1.6.0"
+  }
+}

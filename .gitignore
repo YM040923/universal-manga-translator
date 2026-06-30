@@ -1,2 +1,8 @@
-
+﻿node_modules/
+dist/
+.env
+apps/server/data/
+coverage/
+.playwright/
+test-results/
 .worktrees/
