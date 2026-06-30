@@ -1,0 +1,4 @@
+﻿body { margin: 0; background: #0f172a; }
+.reader { width: 820px; margin: 0 auto; background: #111827; padding: 24px 0; }
+.reader img { display: block; width: 800px; height: 1200px; margin: 24px auto; background: white; }
+.icon { width: 32px; height: 32px; }

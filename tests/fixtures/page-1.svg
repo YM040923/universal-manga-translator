@@ -1,0 +1,5 @@
+﻿<svg xmlns="http://www.w3.org/2000/svg" width="800" height="1200">
+  <rect width="800" height="1200" fill="white"/>
+  <ellipse cx="400" cy="220" rx="220" ry="120" fill="#f8fafc" stroke="#111827" stroke-width="4"/>
+  <text x="330" y="230" font-size="42">Hello</text>
+</svg>
