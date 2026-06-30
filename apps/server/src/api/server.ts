@@ -5,11 +5,13 @@ import { buildCacheKey, sha256Hex } from "@umt/shared/hashing";
 import { LAYOUT_VERSION, layoutRegions } from "../layout/layout.js";
 import { MockProvider } from "../providers/mock-provider.js";
 import type { VisionProvider } from "../providers/provider.js";
+import type { SurfaceCache } from "../cache/surface-cache.js";
 
 export interface BuildServerOptions {
   provider: string;
   targetLanguage: string;
   visionProvider?: VisionProvider;
+  surfaceCache?: SurfaceCache;
 }
 
 function decodeImageData(imageData: string): Buffer {
@@ -21,6 +23,7 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
   const app = Fastify({ logger: false });
   const provider = options.visionProvider ?? new MockProvider();
   const memoryCache = new Map<string, SurfaceResult>();
+  const surfaceCache = options.surfaceCache;
   await app.register(cors, { origin: true });
 
   app.get("/health", async () => ({ ok: true, provider: options.provider, targetLanguage: options.targetLanguage }));
@@ -31,7 +34,7 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
     const imageBuffer = decodeImageData(task.imageData ?? "");
     const imageHash = sha256Hex(imageBuffer);
     const cacheKey = buildCacheKey({ imageHash, targetLanguage: task.targetLanguage, providerProfile: provider.profile, layoutVersion: LAYOUT_VERSION });
-    const cached = memoryCache.get(cacheKey);
+    const cached = surfaceCache?.get(cacheKey) ?? memoryCache.get(cacheKey);
     if (cached) {
       const cachedForSurface: SurfaceResult = { ...cached, surfaceId: task.surfaceId, status: "cached" };
       return { ok: true, surfaceId: task.surfaceId, status: "cached", result: cachedForSurface };
@@ -48,11 +51,13 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
       elapsedMs: Date.now() - started,
     };
     memoryCache.set(cacheKey, result);
+    surfaceCache?.save(cacheKey, result);
     return { ok: true, surfaceId: task.surfaceId, status: result.status, result };
   });
 
   return app;
 }
+
 
 
 
