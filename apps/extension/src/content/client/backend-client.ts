@@ -1,8 +1,43 @@
-﻿import type { ApiResponse, SubmitSurfaceRequest, SubmitSurfaceResponse } from "@umt/shared/protocol";
+﻿import type { ServerEvent } from "@umt/shared/protocol";
+import type { ApiResponse, SubmitSurfaceRequest, SubmitSurfaceResponse } from "@umt/shared/protocol";
 import type { SurfaceTask } from "@umt/shared/types";
+
+export function createEventUrl(baseUrl: string): string {
+  const url = new URL(baseUrl);
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  url.pathname = `${url.pathname.replace(/\/$/, "")}/v1/events`;
+  url.search = "";
+  return url.toString();
+}
+
+export class SurfaceSubmitTracker {
+  private readonly submitted = new Set<string>();
+
+  shouldSubmit(surfaceId: string): boolean {
+    return !this.submitted.has(surfaceId);
+  }
+
+  markSubmitted(surfaceId: string): void {
+    this.submitted.add(surfaceId);
+  }
+
+  clear(): void {
+    this.submitted.clear();
+  }
+}
 
 export class BackendClient {
   constructor(private readonly baseUrl = "http://127.0.0.1:47831") {}
+
+  eventsUrl(): string {
+    return createEventUrl(this.baseUrl);
+  }
+
+  connectEvents(onEvent: (event: ServerEvent) => void): WebSocket {
+    const socket = new WebSocket(this.eventsUrl());
+    socket.addEventListener("message", (message) => onEvent(JSON.parse(String(message.data)) as ServerEvent));
+    return socket;
+  }
 
   async health(): Promise<boolean> {
     try {
