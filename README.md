@@ -17,3 +17,7 @@ The MVP vertical slice is verified when `pnpm test`, `pnpm build`, and `pnpm tes
 ## Phase 2 Verification
 
 Phase 2 adds persistent SQLite cache, backend image URL input, WebSocket job events, and extension-side submission dedupe. Verification includes `pnpm test`, `pnpm build`, `pnpm test:e2e`, and `pnpm exec playwright test tests/integration/extension-loaded.spec.ts`.
+
+## Phase 3 Verification
+
+Phase 3 adds automatic scan-on-load, throttled scroll-triggered prefetch, pause/resume controls, and cache-hit regression coverage. The loaded-extension E2E now verifies that the mock translated overlay appears automatically without clicking the translate button.
