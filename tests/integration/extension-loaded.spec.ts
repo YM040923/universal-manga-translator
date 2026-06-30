@@ -1,4 +1,4 @@
-﻿import { test, expect, chromium } from "@playwright/test";
+import { test, expect, chromium } from "@playwright/test";
 import { spawn } from "node:child_process";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -11,7 +11,7 @@ function spawnProcess(command: string, args: string[]) {
   return spawn(command, args, { cwd: root, shell: true, stdio: "ignore" });
 }
 
-test("loaded extension automatically renders mock overlay on fixture page", async () => {
+test("loaded extension automatically renders mock overlay on mixed fixture page", async () => {
   const backend = spawnProcess("pnpm", ["--filter", "@umt/server", "dev"]);
   const staticServer = spawnProcess("pnpm", ["exec", "http-server", "tests/fixtures", "-p", "47832", "-a", "127.0.0.1", "--silent"]);
   const context = await chromium.launchPersistentContext("", {
@@ -30,12 +30,12 @@ test("loaded extension automatically renders mock overlay on fixture page", asyn
     const page = await context.newPage();
     await page.goto("http://127.0.0.1:47832/simple-manga.html");
     await expect(page.locator("[data-umt-panel]")).toContainText("backend connected", { timeout: 10000 });
-    await expect(page.locator("[data-umt-region-id='r1']")).toContainText("测试译文", { timeout: 10000 });
+    await expect(page.locator(".reader .background-page")).toHaveCount(1);
+    await expect(page.locator(".reader canvas.canvas-page")).toHaveCount(1);
+    await expect(page.locator("[data-umt-region-id='r1']").first()).toContainText("测试译文", { timeout: 10000 });
   } finally {
     await context.close();
     backend.kill();
     staticServer.kill();
   }
 });
-
-

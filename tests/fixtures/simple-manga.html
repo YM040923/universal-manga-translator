@@ -1,4 +1,4 @@
-﻿<!doctype html>
+<!doctype html>
 <html>
   <head>
     <meta charset="UTF-8" />
@@ -8,7 +8,18 @@
   <body>
     <img class="icon" src="./page-1.svg" alt="small icon" />
     <main class="reader">
-      <img src="./page-1.svg" alt="page 1" />
+      <img class="page-image" src="./page-1.svg" alt="page 1" />
+      <div class="background-page" role="img" aria-label="background page"></div>
+      <canvas class="canvas-page" width="800" height="1200" aria-label="canvas page"></canvas>
     </main>
+    <script>
+      const canvas = document.querySelector(".canvas-page");
+      const ctx = canvas.getContext("2d");
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = "#111827";
+      ctx.font = "48px sans-serif";
+      ctx.fillText("CANVAS PAGE", 180, 220);
+    </script>
   </body>
 </html>
