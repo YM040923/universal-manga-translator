@@ -41,7 +41,8 @@ import { SurfaceCache } from "../cache/surface-cache.js";
 test("second identical submit is served from persistent cache", async () => {
   const dir = mkdtempSync(join(tmpdir(), "umt-submit-cache-"));
   try {
-    const surfaceCache = new SurfaceCache(openDatabase(join(dir, "cache.sqlite")));
+    const db = openDatabase(join(dir, "cache.sqlite"));
+    const surfaceCache = new SurfaceCache(db);
     const app = await buildServer({ provider: "mock", targetLanguage: "zh-CN", surfaceCache });
     const first = await app.inject({ method: "POST", url: "/v1/surfaces/submit", payload: { task } });
     const second = await app.inject({ method: "POST", url: "/v1/surfaces/submit", payload: { task: { ...task, surfaceId: "surface-2" } } });
@@ -49,7 +50,9 @@ test("second identical submit is served from persistent cache", async () => {
     assert.equal(second.json().status, "cached");
     assert.equal(second.json().result.surfaceId, "surface-2");
     await app.close();
+    db.close();
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
