@@ -1,4 +1,4 @@
-﻿import type { Rect, Size } from "./types";
+﻿import type { Rect, Size } from "./types.js";
 
 export function mapNaturalBoxToRenderedBox(box: Rect, naturalSize: Size, renderedRect: Rect): Rect {
   const scaleX = renderedRect.width / naturalSize.width;
@@ -22,3 +22,4 @@ export function visibleRatio(subject: Rect, viewport: Rect): number {
   const overlap = intersectRect(subject, viewport);
   return overlap ? area(overlap) / subjectArea : 0;
 }
+

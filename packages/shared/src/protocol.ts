@@ -1,4 +1,4 @@
-﻿import type { FailedResult, JobStatus, SurfaceResult, SurfaceTask } from "./types";
+﻿import type { FailedResult, JobStatus, SurfaceResult, SurfaceTask } from "./types.js";
 
 export interface SubmitSurfaceRequest { task: SurfaceTask; }
 export interface SubmitSurfaceResponse { ok: true; surfaceId: string; status: JobStatus; result?: SurfaceResult; }
@@ -12,3 +12,4 @@ export type ServerEvent =
   | { type: "job.cached"; surfaceId: string; result: SurfaceResult }
   | { type: "job.completed"; surfaceId: string; result: SurfaceResult }
   | { type: "job.failed"; surfaceId: string; result: FailedResult };
+
