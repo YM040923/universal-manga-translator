@@ -5,6 +5,7 @@ import type { SurfaceResult, SurfaceTask } from "@umt/shared";
 import { buildCacheKey, sha256Hex } from "@umt/shared/hashing";
 import type { SurfaceCache } from "../cache/surface-cache.js";
 import { readTaskImage } from "../image/image-input.js";
+import { normalizeForProvider } from "../image/normalize.js";
 import { LAYOUT_VERSION, layoutRegions } from "../layout/layout.js";
 import { MockProvider } from "../providers/mock-provider.js";
 import type { VisionProvider } from "../providers/provider.js";
@@ -16,6 +17,8 @@ export interface BuildServerOptions {
   visionProvider?: VisionProvider;
   surfaceCache?: SurfaceCache;
   eventBus?: EventBus;
+  maxImageLongEdge?: number;
+  jpegQuality?: number;
 }
 
 export async function buildServer(options: BuildServerOptions): Promise<FastifyInstance> {
@@ -41,6 +44,7 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
     eventBus.publish({ type: "job.queued", surfaceId: task.surfaceId });
     const { buffer: imageBuffer } = await readTaskImage(task);
     const imageHash = sha256Hex(imageBuffer);
+    const normalized = await normalizeForProvider(imageBuffer, { maxLongEdge: options.maxImageLongEdge ?? 1600, jpegQuality: Math.round((options.jpegQuality ?? 0.75) * 100) });
     const cacheKey = buildCacheKey({ imageHash, targetLanguage: task.targetLanguage, providerProfile: provider.profile, layoutVersion: LAYOUT_VERSION });
     const cached = surfaceCache?.get(cacheKey) ?? memoryCache.get(cacheKey);
     if (cached) {
@@ -50,7 +54,7 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
     }
 
     eventBus.publish({ type: "job.processing", surfaceId: task.surfaceId });
-    const regions = await provider.process({ task, imageBuffer, imageHash, width: task.naturalSize.width, height: task.naturalSize.height });
+    const regions = await provider.process({ task, imageBuffer: normalized.buffer, imageHash, width: normalized.width, height: normalized.height });
     const result: SurfaceResult = {
       surfaceId: task.surfaceId,
       imageHash,
@@ -68,3 +72,4 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
 
   return app;
 }
+

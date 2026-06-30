@@ -5,6 +5,8 @@
   openaiBaseUrl: string;
   openaiApiKey: string;
   openaiModel: string;
+  maxImageLongEdge: number;
+  jpegQuality: number;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
@@ -15,5 +17,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     openaiBaseUrl: env.OPENAI_BASE_URL ?? "https://api.openai.com/v1",
     openaiApiKey: env.OPENAI_API_KEY ?? "",
     openaiModel: env.OPENAI_MODEL ?? "gpt-4.1-mini",
+    maxImageLongEdge: Number(env.MAX_IMAGE_LONG_EDGE ?? 1600),
+    jpegQuality: Number(env.JPEG_QUALITY ?? 0.75),
   };
 }

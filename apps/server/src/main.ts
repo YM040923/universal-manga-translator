@@ -18,7 +18,8 @@ const visionProvider = config.provider === "openai-compatible"
   ? new OpenAIVisionProvider({ baseUrl: config.openaiBaseUrl, apiKey: config.openaiApiKey, model: config.openaiModel, targetLanguage: config.targetLanguage })
   : new MockProvider();
 const eventBus = new EventBus();
-const app = await buildServer({ provider: config.provider, targetLanguage: config.targetLanguage, visionProvider, surfaceCache, eventBus });
+const app = await buildServer({ provider: config.provider, targetLanguage: config.targetLanguage, visionProvider, surfaceCache, eventBus, maxImageLongEdge: config.maxImageLongEdge, jpegQuality: config.jpegQuality });
 await app.listen({ host: "127.0.0.1", port: config.port });
 console.log(`Universal Manga Translator backend listening on http://127.0.0.1:${config.port}`);
+
 

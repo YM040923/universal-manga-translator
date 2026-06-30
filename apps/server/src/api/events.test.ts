@@ -7,7 +7,7 @@ const task = {
   surfaceId: "surface-events",
   pageUrl: "https://example.test/chapter/1",
   domain: "example.test",
-  imageData: "data:text/plain;base64,aGVsbG8=",
+  imageData: "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxMCIgaGVpZ2h0PSIxMCI+PHJlY3Qgd2lkdGg9IjEwIiBoZWlnaHQ9IjEwIiBmaWxsPSJ3aGl0ZSIvPjwvc3ZnPg==",
   viewportPriority: "p0",
   surfaceRect: { x: 0, y: 0, width: 600, height: 800 },
   naturalSize: { width: 600, height: 800 },
@@ -39,3 +39,4 @@ test("websocket receives submit lifecycle events", async () => {
     await app.close();
   }
 });
+
