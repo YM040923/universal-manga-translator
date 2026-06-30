@@ -1,46 +1,55 @@
 ﻿import cors from "@fastify/cors";
+import websocket from "@fastify/websocket";
 import Fastify, { type FastifyInstance } from "fastify";
 import type { SurfaceResult, SurfaceTask } from "@umt/shared";
 import { buildCacheKey, sha256Hex } from "@umt/shared/hashing";
+import type { SurfaceCache } from "../cache/surface-cache.js";
+import { readTaskImage } from "../image/image-input.js";
 import { LAYOUT_VERSION, layoutRegions } from "../layout/layout.js";
 import { MockProvider } from "../providers/mock-provider.js";
 import type { VisionProvider } from "../providers/provider.js";
-import type { SurfaceCache } from "../cache/surface-cache.js";
-import { readTaskImage } from "../image/image-input.js";
+import { EventBus } from "./events.js";
 
 export interface BuildServerOptions {
   provider: string;
   targetLanguage: string;
   visionProvider?: VisionProvider;
   surfaceCache?: SurfaceCache;
-}
-
-function decodeImageData(imageData: string): Buffer {
-  const base64 = imageData.includes(",") ? imageData.split(",").at(-1) ?? "" : imageData;
-  return Buffer.from(base64, "base64");
+  eventBus?: EventBus;
 }
 
 export async function buildServer(options: BuildServerOptions): Promise<FastifyInstance> {
   const app = Fastify({ logger: false });
   const provider = options.visionProvider ?? new MockProvider();
+  const eventBus = options.eventBus ?? new EventBus();
   const memoryCache = new Map<string, SurfaceResult>();
   const surfaceCache = options.surfaceCache;
+
   await app.register(cors, { origin: true });
+  await app.register(websocket);
+
+  app.get("/v1/events", { websocket: true }, (socket) => {
+    const unsubscribe = eventBus.subscribe((event) => socket.send(JSON.stringify(event)));
+    socket.on("close", unsubscribe);
+  });
 
   app.get("/health", async () => ({ ok: true, provider: options.provider, targetLanguage: options.targetLanguage }));
 
   app.post<{ Body: { task: SurfaceTask } }>("/v1/surfaces/submit", async (request) => {
     const started = Date.now();
     const task = request.body.task;
+    eventBus.publish({ type: "job.queued", surfaceId: task.surfaceId });
     const { buffer: imageBuffer } = await readTaskImage(task);
     const imageHash = sha256Hex(imageBuffer);
     const cacheKey = buildCacheKey({ imageHash, targetLanguage: task.targetLanguage, providerProfile: provider.profile, layoutVersion: LAYOUT_VERSION });
     const cached = surfaceCache?.get(cacheKey) ?? memoryCache.get(cacheKey);
     if (cached) {
       const cachedForSurface: SurfaceResult = { ...cached, surfaceId: task.surfaceId, status: "cached" };
+      eventBus.publish({ type: "job.cached", surfaceId: task.surfaceId, result: cachedForSurface });
       return { ok: true, surfaceId: task.surfaceId, status: "cached", result: cachedForSurface };
     }
 
+    eventBus.publish({ type: "job.processing", surfaceId: task.surfaceId });
     const regions = await provider.process({ task, imageBuffer, imageHash, width: task.naturalSize.width, height: task.naturalSize.height });
     const result: SurfaceResult = {
       surfaceId: task.surfaceId,
@@ -53,13 +62,9 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
     };
     memoryCache.set(cacheKey, result);
     surfaceCache?.save(cacheKey, result);
+    eventBus.publish({ type: "job.completed", surfaceId: task.surfaceId, result });
     return { ok: true, surfaceId: task.surfaceId, status: result.status, result };
   });
 
   return app;
 }
-
-
-
-
-
