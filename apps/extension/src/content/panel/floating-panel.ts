@@ -1,44 +1,64 @@
+export type FloatingPanelState = "idle" | "busy" | "done" | "paused" | "offline" | "error";
+
 export interface FloatingPanelActions {
   onTranslateCurrent: () => void;
-  onRescan: () => void;
-  onToggleOverlays: () => void;
-  onTogglePause: () => void;
-  onOpenSettings?: () => void;
 }
 
 export class FloatingPanel {
   readonly root: HTMLDivElement;
-  private readonly status: HTMLDivElement;
+  private readonly button: HTMLButtonElement;
+  private readonly status: HTMLSpanElement;
 
   constructor(actions: FloatingPanelActions) {
     this.root = document.createElement("div");
     this.root.dataset.umtPanel = "true";
-    this.root.style.cssText = "position:fixed;right:16px;top:96px;z-index:2147483647;background:#111827;color:white;padding:10px;border-radius:12px;font:12px system-ui;box-shadow:0 8px 24px rgba(0,0,0,.25);display:grid;gap:6px;";
-    this.status = document.createElement("div");
-    this.status.textContent = "UMT: connecting";
-    const buttons = [
-      this.button("Translate", actions.onTranslateCurrent),
-      this.button("Rescan", actions.onRescan),
-      this.button("Pause/Resume", actions.onTogglePause),
-      this.button("Show/Hide", actions.onToggleOverlays),
-    ];
-    if (actions.onOpenSettings) buttons.push(this.button("Settings", actions.onOpenSettings));
-    this.root.append(this.status, ...buttons);
+    this.root.dataset.state = "idle";
+    this.root.style.cssText = "position:fixed;right:18px;bottom:92px;z-index:2147483647;font:13px system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;";
+
+    this.button = document.createElement("button");
+    this.button.dataset.umtFloatingButton = "true";
+    this.button.type = "button";
+    this.button.style.cssText = "display:flex;align-items:center;gap:8px;border:1px solid rgba(255,122,26,.35);border-radius:999px;background:linear-gradient(135deg,#ff7a1a,#ff4d00);color:#fff;padding:10px 14px;box-shadow:0 10px 26px rgba(255,96,20,.28);cursor:pointer;font-weight:800;letter-spacing:.02em;";
+    this.button.addEventListener("click", actions.onTranslateCurrent);
+
+    const icon = document.createElement("span");
+    icon.textContent = "\u6f2b";
+    icon.style.cssText = "display:grid;place-items:center;width:22px;height:22px;border-radius:50%;background:rgba(255,255,255,.2);font-weight:900;";
+
+    this.status = document.createElement("span");
+    this.status.dataset.umtStatus = "true";
+    this.status.textContent = "\u7ffb\u8bd1";
+
+    this.button.append(icon, this.status);
+    this.root.append(this.button);
   }
 
   mount(): void {
     if (!document.documentElement.contains(this.root)) document.documentElement.append(this.root);
   }
 
-  setStatus(text: string): void {
+  setStatus(text: string, state: FloatingPanelState = "idle"): void {
     this.status.textContent = text;
+    this.root.dataset.state = state;
+    if (state === "offline" || state === "error") {
+      this.button.style.background = "linear-gradient(135deg,#64748b,#334155)";
+      this.button.style.boxShadow = "0 10px 26px rgba(51,65,85,.22)";
+    } else if (state === "busy") {
+      this.button.style.background = "linear-gradient(135deg,#2563eb,#4f46e5)";
+      this.button.style.boxShadow = "0 10px 26px rgba(37,99,235,.24)";
+    } else if (state === "done") {
+      this.button.style.background = "linear-gradient(135deg,#16a34a,#15803d)";
+      this.button.style.boxShadow = "0 10px 26px rgba(22,163,74,.24)";
+    } else if (state === "paused") {
+      this.button.style.background = "linear-gradient(135deg,#f59e0b,#d97706)";
+      this.button.style.boxShadow = "0 10px 26px rgba(217,119,6,.22)";
+    } else {
+      this.button.style.background = "linear-gradient(135deg,#ff7a1a,#ff4d00)";
+      this.button.style.boxShadow = "0 10px 26px rgba(255,96,20,.28)";
+    }
   }
 
-  private button(label: string, onClick: () => void): HTMLButtonElement {
-    const button = document.createElement("button");
-    button.textContent = label;
-    button.style.cssText = "border:0;border-radius:8px;padding:6px 8px;cursor:pointer;";
-    button.addEventListener("click", onClick);
-    return button;
+  setEnabled(enabled: boolean): void {
+    this.root.style.display = enabled ? "" : "none";
   }
 }

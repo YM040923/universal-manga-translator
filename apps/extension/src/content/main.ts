@@ -58,27 +58,6 @@ async function bootstrap(): Promise<void> {
 
   const panel = new FloatingPanel({
     onTranslateCurrent: () => void translateVisibleAndNearby(),
-    onRescan: () => {
-      submitTracker.clear();
-      scan();
-      autoScheduler.requestRun("rescan");
-    },
-    onTogglePause: () => {
-      if (autoScheduler.isPaused()) {
-        autoScheduler.resume();
-        panel.setStatus("UMT: resumed");
-        autoScheduler.requestRun("resume");
-      } else {
-        autoScheduler.pause();
-        panel.setStatus("UMT: paused");
-      }
-    },
-    onToggleOverlays: () => {
-      overlaysVisible = !overlaysVisible;
-      renderer.setVisible(overlaysVisible);
-      panel.setStatus(overlaysVisible ? "UMT: overlays visible" : "UMT: overlays hidden");
-    },
-    onOpenSettings: () => chrome.runtime?.openOptionsPage?.(),
   });
 
   panel.mount();
@@ -114,3 +93,4 @@ async function bootstrap(): Promise<void> {
 function settingsStatus(settings: ExtensionSettings): string {
   return settings.autoTranslateDefault ? `UMT: backend connected | ${settings.targetLanguage}` : `UMT: backend connected | auto off | ${settings.targetLanguage}`;
 }
+
