@@ -1,6 +1,6 @@
-import type { Rect, Size } from "@umt/shared/types";
+﻿import type { Rect, Size } from "@umt/shared/types";
 
-export type SurfaceKind = "image" | "background" | "canvas";
+export type SurfaceKind = "image" | "background" | "canvas" | "screenshot";
 
 export interface DetectedSurface {
   surfaceId: string;

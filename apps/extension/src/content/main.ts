@@ -1,5 +1,7 @@
 ﻿import { BackendClient, SurfaceSubmitTracker } from "./client/backend-client";
 import { createSurfaceTask } from "./capture/surface-capture";
+import { createScreenshotSurface, readImageSize } from "./capture/screenshot-crop";
+import { requestVisibleTabScreenshot } from "./capture/screenshot-request";
 import { detectImageSurfaces } from "./detector/surface-detector";
 import { isUmtContentCommand } from "./messages";
 import { OverlayRenderer } from "./overlay/overlay-renderer";
@@ -65,16 +67,45 @@ async function bootstrap(): Promise<void> {
         if (response.ok && response.result) {
           renderer.render(item.surface.element, item.surface.naturalSize, response.result);
         } else {
+          const fallbackRendered = await submitScreenshotFallback(item);
+          if (!fallbackRendered) {
+            statusCounter.recordFailedResponse(item.surface.surfaceId);
+            setCountersStatus();
+          }
+        }
+      } catch {
+        const fallbackRendered = await submitScreenshotFallback(item);
+        if (!fallbackRendered) {
           statusCounter.recordFailedResponse(item.surface.surfaceId);
           setCountersStatus();
         }
-      } catch {
-        statusCounter.recordFailedResponse(item.surface.surfaceId);
-        setCountersStatus();
       }
     });
   }
 
+
+  async function submitScreenshotFallback(item: PrioritizedSurface): Promise<boolean> {
+    try {
+      const screenshotDataUrl = await requestVisibleTabScreenshot();
+      const screenshotSize = await readImageSize(screenshotDataUrl);
+      const screenshotSurface = await createScreenshotSurface({
+        screenshotDataUrl,
+        viewportRect: item.surface.rect,
+        viewportSize: { width: window.innerWidth, height: window.innerHeight },
+        screenshotSize,
+        surfaceId: `screenshot:${item.surface.surfaceId}`,
+        element: item.surface.element,
+      });
+      const retry = await client.submit(createSurfaceTask(screenshotSurface, item.priority, settings.targetLanguage));
+      if (retry.ok && retry.result) {
+        renderer.render(item.surface.element, screenshotSurface.naturalSize, retry.result);
+        return true;
+      }
+    } catch {
+      return false;
+    }
+    return false;
+  }
   function scan(): void {
     const prioritized = prioritizeSurfaces(detectImageSurfaces(document), viewportRect());
     setPanelStatus(`UMT: found ${prioritized.length} manga surfaces`);
@@ -198,3 +229,6 @@ async function runWithConcurrency<T>(items: T[], concurrency: number, worker: (i
   }
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, () => runNext()));
 }
+
+
+
