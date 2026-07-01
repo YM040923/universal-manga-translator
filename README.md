@@ -69,3 +69,6 @@ Use the floating panel `Settings` button to change backend URL, target language,
 ## Phase 8 Verification
 
 Phase 8 adds `pnpm doctor`, root script tests, and Windows helper scripts for building the unpacked extension, starting the backend, and running a full local check. Verified on 2026-07-01 with `pnpm doctor`, `pnpm test`, `pnpm build`, `pnpm test:e2e`, `pnpm exec playwright test tests/integration/extension-loaded.spec.ts`, `scripts/build-extension.ps1`, and `scripts/check.ps1`.
+## Phase 9 Verification
+
+Phase 9 adds page-change observation for lazy-loaded and dynamically appended manga pages. The content script now reacts to DOM mutations, captured image load events, and resize observation by refreshing overlays and scheduling translation when auto-translate is enabled. Verified on 2026-07-01 with `pnpm doctor`, `pnpm test`, `pnpm build`, `pnpm test:e2e`, and `pnpm exec playwright test tests/integration/extension-loaded.spec.ts`; loaded-extension E2E includes a dynamically appended manga image fixture.
