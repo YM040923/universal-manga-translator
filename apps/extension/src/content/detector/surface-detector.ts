@@ -31,7 +31,7 @@ function urlScore(url: string): number {
 }
 
 function scoreImage(img: HTMLImageElement, rect: Rect): number {
-  return sizeScore(rect) + urlScore(img.currentSrc || img.src);
+  return sizeScore(rect) + urlScore(extractImageUrl(img));
 }
 
 function scoreGenericSurface(rect: Rect, url = ""): number {
@@ -46,6 +46,37 @@ function absoluteUrl(url: string, base: string): string {
   }
 }
 
+function extractImageUrl(img: HTMLImageElement): string {
+  const base = img.ownerDocument.location.href;
+  for (const attr of ["data-src", "data-original", "data-lazy-src", "data-url", "data-image", "data-cfsrc"]) {
+    const value = img.getAttribute(attr);
+    if (value && !isPlaceholderImageUrl(value)) return absoluteUrl(value, base);
+  }
+  const srcset = img.getAttribute("srcset") || img.getAttribute("data-srcset");
+  const srcsetUrl = srcset ? pickBestSrcsetUrl(srcset, base) : "";
+  if (srcsetUrl && !isPlaceholderImageUrl(srcsetUrl)) return srcsetUrl;
+  const src = img.currentSrc || img.src || img.getAttribute("src") || "";
+  return src ? absoluteUrl(src, base) : "";
+}
+
+function pickBestSrcsetUrl(srcset: string, base: string): string {
+  const candidates = srcset.split(",")
+    .map((part) => part.trim())
+    .map((part) => {
+      const [url = "", descriptor = ""] = part.split(/\s+/, 2);
+      const width = Number(/^(\d+)w$/.exec(descriptor)?.[1] ?? 0);
+      const density = Number(/^(\d+(?:\.\d+)?)x$/.exec(descriptor)?.[1] ?? 0);
+      return { url, rank: width || density || 1 };
+    })
+    .filter((candidate) => candidate.url && !isPlaceholderImageUrl(candidate.url));
+  candidates.sort((a, b) => b.rank - a.rank);
+  return candidates[0] ? absoluteUrl(candidates[0].url, base) : "";
+}
+
+function isPlaceholderImageUrl(url: string): boolean {
+  return /placeholder|blank|spacer|loading|lazy|transparent|1x1/i.test(url) || url.startsWith("data:image/gif");
+}
+
 function extractBackgroundUrl(backgroundImage: string, base: string): string | null {
   const match = /url\(["']?([^"')]+)["']?\)/i.exec(backgroundImage);
   if (!match?.[1] || match[1].startsWith("data:")) return match?.[1] ?? null;
@@ -56,7 +87,7 @@ function detectImgSurfaces(root: Document): DetectedSurface[] {
   return [...root.querySelectorAll<HTMLImageElement>("img")]
     .map((img, index) => {
       const rect = rectFromElement(img);
-      const imageUrl = img.currentSrc || img.src;
+      const imageUrl = extractImageUrl(img);
       const naturalSize = { width: img.naturalWidth || Number(img.width) || rect.width, height: img.naturalHeight || Number(img.height) || rect.height };
       return { surfaceId: `img:${index}:${imageUrl}`, kind: "image" as const, element: img, imageUrl, rect, naturalSize, score: scoreImage(img, rect) };
     })
@@ -95,5 +126,20 @@ function detectCanvasSurfaces(root: Document): DetectedSurface[] {
 }
 
 export function detectImageSurfaces(root: Document = document): DetectedSurface[] {
-  return [...detectImgSurfaces(root), ...detectBackgroundSurfaces(root), ...detectCanvasSurfaces(root)];
+  return dedupeSurfaces([...detectImgSurfaces(root), ...detectBackgroundSurfaces(root), ...detectCanvasSurfaces(root)]);
+}
+
+function dedupeSurfaces(surfaces: DetectedSurface[]): DetectedSurface[] {
+  const byKey = new Map<string, DetectedSurface>();
+  for (const surface of surfaces) {
+    const key = surface.imageUrl ? `url:${surface.imageUrl}` : surface.imageData ? `data:${surface.imageData.slice(0, 80)}` : surface.surfaceId;
+    const current = byKey.get(key);
+    if (!current || compareSurfaceQuality(surface, current) > 0) byKey.set(key, surface);
+  }
+  return [...byKey.values()];
+}
+
+function compareSurfaceQuality(a: DetectedSurface, b: DetectedSurface): number {
+  if (a.score != b.score) return a.score - b.score;
+  return a.rect.width * a.rect.height - b.rect.width * b.rect.height;
 }

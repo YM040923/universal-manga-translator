@@ -89,3 +89,46 @@ test("BackendClient reads recent diagnostics", async () => {
   assert.equal(response.ok, true);
   assert.equal(response.ok && response.records[0]?.surfaceId, "s1");
 });
+
+
+test("BackendClient retries transient submit failures", async () => {
+  let attempts = 0;
+  globalThis.fetch = (async () => {
+    attempts += 1;
+    if (attempts === 1) throw new Error("temporary network failure");
+    return new Response(JSON.stringify({ ok: true, surfaceId: "s1", status: "completed" }), { status: 200, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+
+  const response = await new BackendClient("http://127.0.0.1:47831", { retryCount: 1 }).submit(fakeTask());
+
+  assert.equal(response.ok, true);
+  assert.equal(attempts, 2);
+});
+
+test("BackendClient passes an AbortSignal for timed submit requests", async () => {
+  let signalSeen = false;
+  globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+    signalSeen = init?.signal instanceof AbortSignal;
+    return new Response(JSON.stringify({ ok: true, surfaceId: "s1", status: "completed" }), { status: 200, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+
+  await new BackendClient("http://127.0.0.1:47831", { timeoutMs: 5000 }).submit(fakeTask());
+
+  assert.equal(signalSeen, true);
+});
+
+function fakeTask() {
+  return {
+    surfaceId: "s1",
+    pageUrl: "https://example.test/chapter/1",
+    domain: "example.test",
+    imageData: "data:image/png;base64,abc",
+    viewportPriority: "p0" as const,
+    surfaceRect: { x: 0, y: 0, width: 100, height: 100 },
+    naturalSize: { width: 100, height: 100 },
+    renderSize: { width: 100, height: 100 },
+    readingDirection: "auto" as const,
+    sourceLanguage: "auto",
+    targetLanguage: "zh-CN",
+  };
+}

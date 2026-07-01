@@ -37,3 +37,38 @@ test("detects exportable canvas manga surfaces", () => {
   assert.equal(surfaces[0]?.kind, "canvas");
   assert.equal(surfaces[0]?.imageData, "data:image/png;base64,abc123");
 });
+
+test("detects lazy-loaded manga image urls from common data attributes", () => {
+  const dom = new JSDOM(`<body><img id="lazy" src="/placeholder.gif" data-src="/chapter/page-002.jpg" width="800" height="1200" /></body>`, { url: "https://example.test" });
+  const doc = dom.window.document;
+  Object.defineProperty(doc.querySelector("#lazy"), "getBoundingClientRect", { value: () => ({ x: 0, y: 0, width: 800, height: 1200 }) });
+
+  const surfaces = detectImageSurfaces(doc);
+
+  assert.equal(surfaces.length, 1);
+  assert.equal(surfaces[0]?.imageUrl, "https://example.test/chapter/page-002.jpg");
+});
+
+test("detects manga image urls from srcset when currentSrc is unavailable", () => {
+  const dom = new JSDOM(`<body><img id="srcset" src="/placeholder.gif" srcset="/chapter/page-small.jpg 400w, /chapter/page-large.jpg 1200w" width="800" height="1200" /></body>`, { url: "https://example.test" });
+  const doc = dom.window.document;
+  Object.defineProperty(doc.querySelector("#srcset"), "getBoundingClientRect", { value: () => ({ x: 0, y: 0, width: 800, height: 1200 }) });
+
+  const surfaces = detectImageSurfaces(doc);
+
+  assert.equal(surfaces.length, 1);
+  assert.equal(surfaces[0]?.imageUrl, "https://example.test/chapter/page-large.jpg");
+});
+
+
+test("deduplicates surfaces that point to the same manga image url", () => {
+  const dom = new JSDOM(`<body><img id="a" src="/chapter/page-003.jpg" width="800" height="1200" /><img id="b" data-src="/chapter/page-003.jpg" src="/placeholder.gif" width="800" height="1200" /></body>`, { url: "https://example.test" });
+  const doc = dom.window.document;
+  Object.defineProperty(doc.querySelector("#a"), "getBoundingClientRect", { value: () => ({ x: 0, y: 0, width: 800, height: 1200 }) });
+  Object.defineProperty(doc.querySelector("#b"), "getBoundingClientRect", { value: () => ({ x: 0, y: 0, width: 800, height: 1200 }) });
+
+  const surfaces = detectImageSurfaces(doc);
+
+  assert.equal(surfaces.length, 1);
+  assert.equal(surfaces[0]?.imageUrl, "https://example.test/chapter/page-003.jpg");
+});

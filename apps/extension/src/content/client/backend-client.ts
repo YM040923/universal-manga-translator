@@ -27,8 +27,13 @@ export class SurfaceSubmitTracker {
 
 export interface DiagnosticsResponse { ok: true; records: Array<Record<string, unknown>>; }
 
+export interface BackendClientOptions {
+  timeoutMs?: number;
+  retryCount?: number;
+}
+
 export class BackendClient {
-  constructor(private readonly baseUrl = "http://127.0.0.1:47831") {}
+  constructor(private readonly baseUrl = "http://127.0.0.1:47831", private readonly options: BackendClientOptions = {}) {}
 
   eventsUrl(): string {
     return createEventUrl(this.baseUrl);
@@ -55,21 +60,11 @@ export class BackendClient {
   }
 
   async submit(task: SurfaceTask): Promise<ApiResponse<SubmitSurfaceResponse>> {
-    const response = await fetch(`${this.baseUrl}/v1/surfaces/submit`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ task } satisfies SubmitSurfaceRequest),
-    });
-    return (await response.json()) as ApiResponse<SubmitSurfaceResponse>;
+    return this.postJson<SubmitSurfaceResponse>("/v1/surfaces/submit", { task } satisfies SubmitSurfaceRequest);
   }
 
   async retranslate(task: SurfaceTask): Promise<ApiResponse<SubmitSurfaceResponse>> {
-    const response = await fetch(`${this.baseUrl}/v1/surfaces/retranslate`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ task } satisfies SubmitSurfaceRequest),
-    });
-    return (await response.json()) as ApiResponse<SubmitSurfaceResponse>;
+    return this.postJson<SubmitSurfaceResponse>("/v1/surfaces/retranslate", { task } satisfies SubmitSurfaceRequest);
   }
 
   async cancelSurface(surfaceId: string): Promise<ApiResponse<CancelSurfaceResponse>> {
@@ -98,11 +93,34 @@ export class BackendClient {
   }
 
   async saveManualOverride(override: ManualOverridePayload): Promise<ApiResponse<SaveManualOverrideResponse>> {
-    const response = await fetch(`${this.baseUrl}/v1/overrides`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(override satisfies SaveManualOverrideRequest),
-    });
-    return (await response.json()) as ApiResponse<SaveManualOverrideResponse>;
+    return this.postJson<SaveManualOverrideResponse>("/v1/overrides", override satisfies SaveManualOverrideRequest);
+  }
+
+  private async postJson<T>(path: string, payload: unknown): Promise<ApiResponse<T>> {
+    const maxAttempts = Math.max(1, Math.min(6, Math.trunc(this.options.retryCount ?? 0) + 1));
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      const controller = typeof AbortController !== "undefined" && this.options.timeoutMs ? new AbortController() : undefined;
+      const timeout = controller ? setTimeout(() => controller.abort(), Math.max(1000, this.options.timeoutMs ?? 0)) : undefined;
+      try {
+        const response = await fetch(`${this.baseUrl}${path}`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(payload),
+          ...(controller ? { signal: controller.signal } : {}),
+        });
+        if (!response.ok && response.status >= 500 && attempt < maxAttempts) {
+          lastError = new Error(`Backend ${response.status}`);
+          continue;
+        }
+        return (await response.json()) as ApiResponse<T>;
+      } catch (error) {
+        lastError = error;
+        if (attempt >= maxAttempts) throw error;
+      } finally {
+        if (timeout) clearTimeout(timeout);
+      }
+    }
+    throw lastError instanceof Error ? lastError : new Error(String(lastError));
   }
 }

@@ -20,13 +20,17 @@ void bootstrap();
 
 async function bootstrap(): Promise<void> {
   let settings = await loadSettings();
-  let client = new BackendClient(settings.backendUrl);
+  let client = createClient(settings);
   let renderer = createRenderer(settings, client);
   const submitTracker = new SurfaceSubmitTracker();
   const statusCounter = new TranslationStatusCounter();
   const debugRenderer = new DebugOverlayRenderer();
   let overlaysVisible = true;
   debugRenderer.setEnabled(settings.debugOverlayEnabled);
+
+  function createClient(current: ExtensionSettings): BackendClient {
+    return new BackendClient(current.backendUrl, { timeoutMs: current.requestTimeoutMs, retryCount: current.retryCount });
+  }
 
   function createRenderer(current: ExtensionSettings, backend: BackendClient): OverlayRenderer {
     return new OverlayRenderer({ targetLanguage: current.targetLanguage, onManualEdit: (override) => void backend.saveManualOverride(override) });
@@ -227,9 +231,11 @@ async function bootstrap(): Promise<void> {
   async function reloadSettings(): Promise<void> {
     const previousBackendUrl = settings.backendUrl;
     const previousTargetLanguage = settings.targetLanguage;
+    const previousTimeoutMs = settings.requestTimeoutMs;
+    const previousRetryCount = settings.retryCount;
     settings = await loadSettings();
     debugRenderer.setEnabled(settings.debugOverlayEnabled);
-    if (settings.backendUrl !== previousBackendUrl) client = new BackendClient(settings.backendUrl);
+    if (settings.backendUrl !== previousBackendUrl || settings.requestTimeoutMs !== previousTimeoutMs || settings.retryCount !== previousRetryCount) client = createClient(settings);
     if (settings.targetLanguage !== previousTargetLanguage || settings.backendUrl !== previousBackendUrl) renderer = createRenderer(settings, client);
     updatePanelForSettings();
     if (shouldAutoTranslate()) autoScheduler.requestRun("settings");

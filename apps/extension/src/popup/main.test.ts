@@ -147,3 +147,15 @@ test("popup saves debug overlay toggle", async () => {
 
   assert.equal(storage.current.debugOverlayEnabled, true);
 });
+
+
+test("popup debug overlay label is readable Chinese", async () => {
+  const dom = setupDom();
+  const root = dom.window.document.querySelector<HTMLElement>("#app")!;
+
+  await mountPopupPage(root, deps());
+
+  const text = root.textContent ?? "";
+  assert.match(text, /调试覆盖/);
+  assert.doesNotMatch(text, /璋|瘯|洊/);
+});
