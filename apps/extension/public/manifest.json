@@ -8,5 +8,5 @@
   "background": { "service_worker": "background.js", "type": "module" },
   "content_scripts": [{ "matches": ["http://*/*", "https://*/*"], "js": ["content.js"], "run_at": "document_idle" }],
   "options_page": "options.html",
-  "action": { "default_title": "Universal Manga Translator" }
+  "action": { "default_title": "Universal Manga Translator", "default_popup": "popup.html" }
 }
