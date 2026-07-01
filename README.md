@@ -27,3 +27,14 @@ Phase 4 adds provider image normalization/compression, tolerant OpenAI JSON extr
 ## Phase 5 Verification
 
 Phase 5 adds mixed manga surface support: normal `<img>` pages, CSS `background-image` panels, exportable `<canvas>` readers, image-data fallback submission, and overlay refresh on scroll/resize/layout changes. Verified on 2026-06-30 with `pnpm test`, `pnpm build`, `pnpm test:e2e`, and `pnpm exec playwright test tests/integration/extension-loaded.spec.ts`.
+## Extension Settings
+
+Open the extension options page from the floating panel `Settings` button or from Chrome's extension details page. Current settings are stored in `chrome.storage.sync`:
+
+- Backend URL, default `http://127.0.0.1:47831`.
+- Target language, default `zh-CN`.
+- Auto translate current and nearby pages, enabled by default.
+
+## Phase 6 Verification
+
+Phase 6 adds persistent extension settings, an options page, configured backend URL/target language, an auto-translate toggle, a floating-panel Settings button, and a build regression check that prevents Chrome content scripts from containing static module imports. Verified on 2026-07-01 with `pnpm test`, `pnpm build`, `pnpm test:e2e`, and `pnpm exec playwright test tests/integration/extension-loaded.spec.ts`.
