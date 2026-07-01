@@ -7,6 +7,8 @@ export function scoreCandidate(candidate) {
   const width = Number(candidate.width) || 0;
   const height = Number(candidate.height) || 0;
   const url = String(candidate.url || "");
+  if (width < 120 || height < 120) return 0;
+  if (/sprite|static\/pc|icon|logo|avatar/i.test(url)) return 0;
   if (width >= 300 && height >= 300) score += 4;
   if (height / Math.max(width, 1) >= 1.1) score += 3;
   if (width >= 600) score += 1;

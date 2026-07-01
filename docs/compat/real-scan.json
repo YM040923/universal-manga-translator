@@ -1,0 +1,50 @@
+{
+  "generatedAt": "2026-07-01T03:59:48.583Z",
+  "reports": [
+    {
+      "url": "https://xkcd.com/1/",
+      "candidateCount": 4,
+      "likelySurfaceCount": 1,
+      "byKind": {
+        "image": 1
+      },
+      "likely": [
+        {
+          "kind": "image",
+          "index": 1,
+          "url": "https://imgs.xkcd.com/comics/barrel_cropped_(1).jpg",
+          "width": 577,
+          "height": 311,
+          "x": 353,
+          "y": 388
+        }
+      ]
+    },
+    {
+      "url": "https://www.webtoons.com/en/fantasy/tower-of-god/list?title_no=95",
+      "candidateCount": 69,
+      "likelySurfaceCount": 1,
+      "byKind": {
+        "background": 1
+      },
+      "likely": [
+        {
+          "kind": "background",
+          "index": 41,
+          "url": "url(\"https://webtoon-phinf.pstatic.net/20230408_147/1680918244853P9prU_JPEG/0TowerOfGod_landingpage_desktop_bg.jpg\")",
+          "width": 1400,
+          "height": 321,
+          "x": 0,
+          "y": 109
+        }
+      ]
+    },
+    {
+      "url": "https://mangaplus.shueisha.co.jp/titles/100020",
+      "candidateCount": 17,
+      "likelySurfaceCount": 0,
+      "byKind": {},
+      "likely": []
+    }
+  ]
+}

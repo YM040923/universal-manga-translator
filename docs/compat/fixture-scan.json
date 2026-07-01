@@ -1,0 +1,63 @@
+{
+  "generatedAt": "2026-07-01T03:58:08.263Z",
+  "reports": [
+    {
+      "url": "http://127.0.0.1:47832/simple-manga.html",
+      "candidateCount": 4,
+      "likelySurfaceCount": 3,
+      "byKind": {
+        "image": 1,
+        "canvas": 1,
+        "background": 1
+      },
+      "likely": [
+        {
+          "kind": "image",
+          "index": 1,
+          "url": "http://127.0.0.1:47832/page-1.svg",
+          "width": 800,
+          "height": 1200,
+          "x": 240,
+          "y": 84
+        },
+        {
+          "kind": "canvas",
+          "index": 0,
+          "url": "",
+          "width": 800,
+          "height": 1200,
+          "x": 240,
+          "y": 2532
+        },
+        {
+          "kind": "background",
+          "index": 3,
+          "url": "url(\"http://127.0.0.1:47832/page-1.svg\")",
+          "width": 800,
+          "height": 1200,
+          "x": 240,
+          "y": 1308
+        }
+      ]
+    },
+    {
+      "url": "http://127.0.0.1:47832/dynamic-manga.html",
+      "candidateCount": 1,
+      "likelySurfaceCount": 1,
+      "byKind": {
+        "image": 1
+      },
+      "likely": [
+        {
+          "kind": "image",
+          "index": 0,
+          "url": "http://127.0.0.1:47832/page-1.svg",
+          "width": 800,
+          "height": 1200,
+          "x": 240,
+          "y": 48
+        }
+      ]
+    }
+  ]
+}

@@ -21,3 +21,7 @@ test("summarizeCandidates counts likely surfaces by kind", () => {
   assert.deepEqual(summary.byKind, { image: 1, background: 1 });
   assert.equal(summary.likelySurfaceCount, 2);
 });
+test("scoreCandidate rejects tiny webtoon sprite backgrounds", () => {
+  const candidate = { kind: "background", width: 6, height: 10, url: "https://webtoons-static.pstatic.net/image/static/pc/sprite/sp_webtoon.png" };
+  assert.equal(scoreCandidate(candidate) < 6, true);
+});
