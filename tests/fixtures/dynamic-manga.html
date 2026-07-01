@@ -1,0 +1,20 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="stylesheet" href="./fixtures.css" />
+    <title>Dynamic Manga Fixture</title>
+  </head>
+  <body>
+    <main class="reader" id="reader"></main>
+    <script>
+      setTimeout(() => {
+        const img = document.createElement("img");
+        img.className = "page-image";
+        img.src = "./page-1.svg";
+        img.alt = "dynamic page";
+        document.querySelector("#reader").append(img);
+      }, 500);
+    </script>
+  </body>
+</html>
