@@ -54,3 +54,24 @@ test("BackendClient reads sanitized provider config status", async () => {
   assert.equal(status.ok, true);
   assert.equal(status.ok && status.openAICompatible.apiKeyConfigured, true);
 });
+
+test("BackendClient calls cache management and task control endpoints", async () => {
+  const calls: Array<{ url: string; init: RequestInit }> = [];
+  globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+    calls.push({ url: String(url), init: init ?? {} });
+    if (String(url).endsWith("/v1/cache/stats")) return new Response(JSON.stringify({ ok: true, stats: { entries: 1, bytes: 10, updatedAt: 123 } }), { status: 200 });
+    if (String(url).endsWith("/v1/cache/clear")) return new Response(JSON.stringify({ ok: true, deleted: 1 }), { status: 200 });
+    if (String(url).endsWith("/v1/surfaces/cancel")) return new Response(JSON.stringify({ ok: true, surfaceId: "s1", status: "accepted", cancellable: false }), { status: 200 });
+    return new Response(JSON.stringify({ ok: true, surfaceId: "s1", status: "completed" }), { status: 200 });
+  }) as typeof fetch;
+  const client = new BackendClient("http://127.0.0.1:47831");
+
+  await client.cacheStats();
+  await client.clearCache();
+  await client.cancelSurface("s1");
+
+  assert.equal(calls[0]?.url, "http://127.0.0.1:47831/v1/cache/stats");
+  assert.equal(calls[1]?.url, "http://127.0.0.1:47831/v1/cache/clear");
+  assert.equal(calls[1]?.init.method, "POST");
+  assert.deepEqual(JSON.parse(String(calls[2]?.init.body)), { surfaceId: "s1" });
+});

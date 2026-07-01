@@ -1,4 +1,4 @@
-import type { ApiResponse, ConfigStatusResponse, ManualOverridePayload, SaveManualOverrideRequest, SaveManualOverrideResponse, ServerEvent, SubmitSurfaceRequest, SubmitSurfaceResponse } from "@umt/shared/protocol";
+import type { ApiResponse, CacheStatsResponse, CancelSurfaceRequest, CancelSurfaceResponse, ClearCacheResponse, ConfigStatusResponse, ManualOverridePayload, SaveManualOverrideRequest, SaveManualOverrideResponse, ServerEvent, SubmitSurfaceRequest, SubmitSurfaceResponse } from "@umt/shared/protocol";
 import type { SurfaceTask } from "@umt/shared/types";
 
 export function createEventUrl(baseUrl: string): string {
@@ -59,6 +59,34 @@ export class BackendClient {
       body: JSON.stringify({ task } satisfies SubmitSurfaceRequest),
     });
     return (await response.json()) as ApiResponse<SubmitSurfaceResponse>;
+  }
+
+  async retranslate(task: SurfaceTask): Promise<ApiResponse<SubmitSurfaceResponse>> {
+    const response = await fetch(`${this.baseUrl}/v1/surfaces/retranslate`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ task } satisfies SubmitSurfaceRequest),
+    });
+    return (await response.json()) as ApiResponse<SubmitSurfaceResponse>;
+  }
+
+  async cancelSurface(surfaceId: string): Promise<ApiResponse<CancelSurfaceResponse>> {
+    const response = await fetch(`${this.baseUrl}/v1/surfaces/cancel`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ surfaceId } satisfies CancelSurfaceRequest),
+    });
+    return (await response.json()) as ApiResponse<CancelSurfaceResponse>;
+  }
+
+  async cacheStats(): Promise<ApiResponse<CacheStatsResponse>> {
+    const response = await fetch(`${this.baseUrl}/v1/cache/stats`, { cache: "no-store" });
+    return (await response.json()) as ApiResponse<CacheStatsResponse>;
+  }
+
+  async clearCache(): Promise<ApiResponse<ClearCacheResponse>> {
+    const response = await fetch(`${this.baseUrl}/v1/cache/clear`, { method: "POST" });
+    return (await response.json()) as ApiResponse<ClearCacheResponse>;
   }
 
   async saveManualOverride(override: ManualOverridePayload): Promise<ApiResponse<SaveManualOverrideResponse>> {

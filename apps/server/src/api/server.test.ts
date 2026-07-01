@@ -151,3 +151,32 @@ test("cache management API reports stats and clears cache", async () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("retranslate bypasses cache and cancel returns accepted status", async () => {
+  let calls = 0;
+  const app = await buildServer({
+    provider: "mock",
+    targetLanguage: "zh-CN",
+    visionProvider: {
+      profile: "counting",
+      process: async () => {
+        calls += 1;
+        return [{ id: "r1", box: { x: 0, y: 0, width: 10, height: 10 }, sourceText: "hi", translatedText: `translated ${calls}`, confidence: 1, orientation: "horizontal", kind: "dialogue" }];
+      },
+    },
+  });
+
+  const first = await app.inject({ method: "POST", url: "/v1/surfaces/submit", payload: { task } });
+  const second = await app.inject({ method: "POST", url: "/v1/surfaces/submit", payload: { task: { ...task, surfaceId: "cached-surface" } } });
+  const third = await app.inject({ method: "POST", url: "/v1/surfaces/retranslate", payload: { task: { ...task, surfaceId: "retranslated-surface" } } });
+  const cancelled = await app.inject({ method: "POST", url: "/v1/surfaces/cancel", payload: { surfaceId: "retranslated-surface" } });
+
+  assert.equal(first.json().status, "completed");
+  assert.equal(second.json().status, "cached");
+  assert.equal(third.statusCode, 200);
+  assert.equal(third.json().status, "completed");
+  assert.equal(third.json().result.regions[0].translatedText, "translated 2");
+  assert.equal(cancelled.statusCode, 200);
+  assert.deepEqual(cancelled.json(), { ok: true, surfaceId: "retranslated-surface", status: "accepted", cancellable: false });
+  await app.close();
+});

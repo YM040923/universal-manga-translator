@@ -81,9 +81,8 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
     return { ok: true, deleted: surfaceCache ? persistent : memory };
   });
 
-  app.post<{ Body: { task: SurfaceTask } }>("/v1/surfaces/submit", async (request) => {
+  const processSurface = async (task: SurfaceTask, force = false) => {
     const started = Date.now();
-    const task = request.body.task;
     eventBus.publish({ type: "job.queued", surfaceId: task.surfaceId });
     try {
       const { buffer: imageBuffer } = await readTaskImage(task);
@@ -91,7 +90,7 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
       const normalized = await normalizeForProvider(imageBuffer, { maxLongEdge: options.maxImageLongEdge ?? 1600, jpegQuality: Math.round((options.jpegQuality ?? 0.75) * 100) });
       const cacheKey = buildCacheKey({ imageHash, targetLanguage: task.targetLanguage, providerProfile: provider.profile, layoutVersion: LAYOUT_VERSION });
       const cached = surfaceCache?.get(cacheKey) ?? memoryCache.get(cacheKey);
-      if (cached) {
+      if (cached && !force) {
         const cachedForSurface: SurfaceResult = { ...cached, surfaceId: task.surfaceId, status: "cached" };
         const result = applyStoredOverrides(cachedForSurface, task.targetLanguage, manualOverrideStore);
         eventBus.publish({ type: "job.cached", surfaceId: task.surfaceId, result });
@@ -119,6 +118,18 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
       eventBus.publish({ type: "job.failed", surfaceId: task.surfaceId, result: failed });
       return { ok: false, error: failed.error, result: failed };
     }
+  };
+
+  app.post<{ Body: { task: SurfaceTask } }>("/v1/surfaces/submit", async (request) => {
+    return processSurface(request.body.task);
+  });
+
+  app.post<{ Body: { task: SurfaceTask } }>("/v1/surfaces/retranslate", async (request) => {
+    return processSurface(request.body.task, true);
+  });
+
+  app.post<{ Body: { surfaceId: string } }>("/v1/surfaces/cancel", async (request) => {
+    return { ok: true, surfaceId: request.body.surfaceId, status: "accepted", cancellable: false };
   });
 
   return app;

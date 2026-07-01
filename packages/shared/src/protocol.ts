@@ -5,6 +5,11 @@ export interface SubmitSurfaceResponse { ok: true; surfaceId: string; status: Jo
 export interface ErrorResponse { ok: false; error: string; }
 export type ApiResponse<T> = T | ErrorResponse;
 
+export interface CacheStatsResponse { ok: true; stats: { entries: number; bytes: number; updatedAt: number | null }; }
+export interface ClearCacheResponse { ok: true; deleted: number; }
+export interface CancelSurfaceRequest { surfaceId: string; }
+export interface CancelSurfaceResponse { ok: true; surfaceId: string; status: "accepted"; cancellable: boolean; }
+
 export interface ManualOverridePayload {
   imageHash: string;
   targetLanguage: string;
