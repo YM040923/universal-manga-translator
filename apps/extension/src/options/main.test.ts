@@ -82,10 +82,18 @@ function setupDom(): void {
   globalThis.HTMLElement = dom.window.HTMLElement;
 }
 
-function deps(options: { storage?: SettingsStorageArea; checkBackend?: (backendUrl: string) => Promise<boolean>; configStatus?: OptionsPageDeps["configStatus"] } = {}): OptionsPageDeps {
+function deps(options: {
+  storage?: SettingsStorageArea;
+  checkBackend?: (backendUrl: string) => Promise<boolean>;
+  configStatus?: OptionsPageDeps["configStatus"];
+  cacheStats?: OptionsPageDeps["cacheStats"];
+  clearCache?: OptionsPageDeps["clearCache"];
+} = {}): OptionsPageDeps {
   const result: OptionsPageDeps = { storage: options.storage ?? fakeStorage(DEFAULT_SETTINGS) };
   if (options.checkBackend) result.checkBackend = options.checkBackend;
   if (options.configStatus) result.configStatus = options.configStatus;
+  if (options.cacheStats) result.cacheStats = options.cacheStats;
+  if (options.clearCache) result.clearCache = options.clearCache;
   return result;
 }
 
@@ -130,4 +138,23 @@ test("settings page displays backend provider status without secrets", async () 
   assert.match(status, /gpt-4\.1-mini/);
   assert.match(status, /API key 已配置/);
   assert.doesNotMatch(status, /sk-/);
+});
+
+test("settings page shows cache stats and clears backend cache", async () => {
+  setupDom();
+  let cleared = false;
+  await mountOptionsPage(document.querySelector<HTMLElement>("#app")!, deps({
+    cacheStats: async () => ({ ok: true, stats: { entries: 3, bytes: 2048, updatedAt: 123 } }),
+    clearCache: async () => { cleared = true; return { ok: true, deleted: 3 }; },
+  }));
+
+  document.querySelector<HTMLButtonElement>("[data-action='cache-stats']")!.click();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.match(document.querySelector<HTMLElement>("[data-cache-status]")?.textContent ?? "", /3/);
+  assert.match(document.querySelector<HTMLElement>("[data-cache-status]")?.textContent ?? "", /2 KB/);
+
+  document.querySelector<HTMLButtonElement>("[data-action='clear-cache']")!.click();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(cleared, true);
+  assert.match(document.querySelector<HTMLElement>("[data-cache-status]")?.textContent ?? "", /已清理 3/);
 });

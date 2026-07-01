@@ -120,3 +120,15 @@ test("popup sends manual selection command to active tab", async () => {
 
   assert.deepEqual(sent, [{ tabId: 123, message: { source: "umt-popup", command: "selectRegion" } }]);
 });
+
+test("popup sends retranslate command to active tab", async () => {
+  const dom = setupDom();
+  const sent: unknown[] = [];
+  const root = dom.window.document.querySelector<HTMLElement>("#app")!;
+
+  await mountPopupPage(root, deps({ sentMessages: sent }));
+  root.querySelector<HTMLButtonElement>("[data-action='retranslate']")!.click();
+  await Promise.resolve();
+
+  assert.deepEqual(sent, [{ tabId: 123, message: { source: "umt-popup", command: "retranslate" } }]);
+});

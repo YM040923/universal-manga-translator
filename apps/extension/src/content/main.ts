@@ -84,6 +84,25 @@ async function bootstrap(): Promise<void> {
     });
   }
 
+  async function retranslateSelectedSurfaces(): Promise<void> {
+    submitTracker.clear();
+    const fresh = selectedSurfaces();
+    if (!fresh.length) {
+      setPanelStatus("UMT: no surfaces to retranslate", "done");
+      return;
+    }
+    setPanelStatus(`UMT: retranslating ${fresh.length}`, "busy");
+    await runWithConcurrency(fresh, settings.maxConcurrentSubmissions, async (item) => {
+      try {
+        const response = await client.retranslate(createSurfaceTask(item.surface, item.priority, settings.targetLanguage));
+        if (response.ok && response.result) renderer.render(item.surface.element, item.surface.naturalSize, response.result);
+      } catch {
+        statusCounter.recordFailedResponse(item.surface.surfaceId);
+        setCountersStatus();
+      }
+    });
+  }
+
 
   async function submitScreenshotFallback(item: PrioritizedSurface): Promise<boolean> {
     try {
@@ -247,6 +266,7 @@ async function bootstrap(): Promise<void> {
     if (message.command === "togglePause") togglePause();
     if (message.command === "clearPage") clearCurrentPage();
     if (message.command === "selectRegion") startManualSelection();
+    if (message.command === "retranslate") void retranslateSelectedSurfaces();
     return false;
   });
 }

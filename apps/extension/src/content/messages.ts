@@ -1,4 +1,4 @@
-﻿export type UmtContentCommandName = "translate" | "refresh" | "togglePause" | "clearPage" | "selectRegion";
+﻿export type UmtContentCommandName = "translate" | "refresh" | "togglePause" | "clearPage" | "selectRegion" | "retranslate";
 
 export interface UmtContentCommand {
   source: "umt-popup";
@@ -30,7 +30,8 @@ export function isUmtContentCommand(value: unknown): value is UmtContentCommand 
     candidate.command === "refresh" ||
     candidate.command === "togglePause" ||
     candidate.command === "clearPage" ||
-    candidate.command === "selectRegion"
+    candidate.command === "selectRegion" ||
+    candidate.command === "retranslate"
   );
 }
 

@@ -1,10 +1,12 @@
-import type { ApiResponse, ConfigStatusResponse } from "@umt/shared/protocol";
+import type { ApiResponse, CacheStatsResponse, ClearCacheResponse, ConfigStatusResponse } from "@umt/shared/protocol";
 import { loadSettings, saveSettings, type ExtensionSettings, type ImageRange, type SettingsStorageArea } from "../settings/settings.js";
 
 export interface OptionsPageDeps {
   storage?: SettingsStorageArea;
   checkBackend?: (backendUrl: string) => Promise<boolean>;
   configStatus?: (backendUrl: string) => Promise<ApiResponse<ConfigStatusResponse>>;
+  cacheStats?: (backendUrl: string) => Promise<ApiResponse<CacheStatsResponse>>;
+  clearCache?: (backendUrl: string) => Promise<ApiResponse<ClearCacheResponse>>;
 }
 
 const TEXT = {
@@ -39,6 +41,9 @@ const TEXT = {
   fullPageLimit: "\u6574\u9875\u6700\u5927\u56fe\u7247\u6570",
   retryCount: "\u91cd\u8bd5\u6b21\u6570",
   cacheHint: "\u5f53\u524d\u9875\u9762\u7f13\u5b58\u53ef\u4ee5\u5728 popup \u4e2d\u6e05\u7406\u3002\u540e\u7aef\u6301\u4e45\u7f13\u5b58\u7531\u672c\u5730\u670d\u52a1\u7ba1\u7406\u3002",
+  cacheStats: "\u67e5\u770b\u7f13\u5b58",
+  clearCache: "\u6e05\u7406\u7f13\u5b58",
+  cacheCleared: "\u5df2\u6e05\u7406",
   save: "\u4fdd\u5b58\u8bbe\u7f6e",
   saved: "\u5df2\u4fdd\u5b58",
   saveFailed: "\u4fdd\u5b58\u5931\u8d25",
@@ -52,6 +57,7 @@ export async function mountOptionsPage(root: HTMLElement, deps: OptionsPageDeps 
   const status = root.querySelector<HTMLElement>("[data-options-status]")!;
   const backendHealth = root.querySelector<HTMLElement>("[data-backend-health]")!;
   const providerStatus = root.querySelector<HTMLElement>("[data-provider-status]")!;
+  const cacheStatus = root.querySelector<HTMLElement>("[data-cache-status]")!;
 
   root.querySelector<HTMLButtonElement>("[data-action='check-provider']")!.addEventListener("click", () => {
     const backendUrl = field<HTMLInputElement>(form, "backendUrl").value;
@@ -80,6 +86,26 @@ export async function mountOptionsPage(root: HTMLElement, deps: OptionsPageDeps 
     }).catch(() => {
       backendHealth.textContent = TEXT.offline;
       backendHealth.dataset.state = "bad";
+    });
+  });
+
+  root.querySelector<HTMLButtonElement>("[data-action='cache-stats']")!.addEventListener("click", () => {
+    const backendUrl = field<HTMLInputElement>(form, "backendUrl").value;
+    cacheStatus.textContent = TEXT.checking;
+    void (deps.cacheStats ?? defaultCacheStats)(backendUrl).then((response) => {
+      cacheStatus.textContent = response.ok ? `${response.stats.entries} \u6761 | ${formatBytes(response.stats.bytes)}` : TEXT.offline;
+    }).catch(() => {
+      cacheStatus.textContent = TEXT.offline;
+    });
+  });
+
+  root.querySelector<HTMLButtonElement>("[data-action='clear-cache']")!.addEventListener("click", () => {
+    const backendUrl = field<HTMLInputElement>(form, "backendUrl").value;
+    cacheStatus.textContent = TEXT.checking;
+    void (deps.clearCache ?? defaultClearCache)(backendUrl).then((response) => {
+      cacheStatus.textContent = response.ok ? `${TEXT.cacheCleared} ${response.deleted}` : TEXT.offline;
+    }).catch(() => {
+      cacheStatus.textContent = TEXT.offline;
     });
   });
 
@@ -150,6 +176,7 @@ function markup(settings: ExtensionSettings): string {
           <label>${TEXT.concurrency} <input name="maxConcurrentSubmissions" type="number" min="1" max="8" value="${settings.maxConcurrentSubmissions}" /></label>
           <label>${TEXT.fullPageLimit} <input name="maxFullPageSurfaces" type="number" min="1" max="300" value="${settings.maxFullPageSurfaces}" /></label>
           <label>${TEXT.retryCount} <input name="retryCount" type="number" min="0" max="5" value="${settings.retryCount}" /></label>
+          <div class="provider-status-row"><button type="button" data-action="cache-stats">${TEXT.cacheStats}</button><button type="button" data-action="clear-cache">${TEXT.clearCache}</button><span data-cache-status class="health">${TEXT.notChecked}</span></div>
           <p class="hint">${TEXT.cacheHint}</p>
         </section>
 
@@ -191,6 +218,21 @@ async function defaultCheckBackend(backendUrl: string): Promise<boolean> {
 async function defaultConfigStatus(backendUrl: string): Promise<ApiResponse<ConfigStatusResponse>> {
   const response = await fetch(`${backendUrl.replace(/\/$/, "")}/v1/config/status`, { cache: "no-store" });
   return (await response.json()) as ApiResponse<ConfigStatusResponse>;
+}
+
+async function defaultCacheStats(backendUrl: string): Promise<ApiResponse<CacheStatsResponse>> {
+  const response = await fetch(`${backendUrl.replace(/\/$/, "")}/v1/cache/stats`, { cache: "no-store" });
+  return (await response.json()) as ApiResponse<CacheStatsResponse>;
+}
+
+async function defaultClearCache(backendUrl: string): Promise<ApiResponse<ClearCacheResponse>> {
+  const response = await fetch(`${backendUrl.replace(/\/$/, "")}/v1/cache/clear`, { method: "POST" });
+  return (await response.json()) as ApiResponse<ClearCacheResponse>;
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  return `${Math.round(bytes / 1024)} KB`;
 }
 
 function escapeAttr(value: string): string {
