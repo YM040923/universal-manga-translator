@@ -1,4 +1,4 @@
-﻿import test from "node:test";
+import test from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
 import { mountOptionsPage, type OptionsPageDeps } from "./main.js";
@@ -41,6 +41,7 @@ test("settings page saves advanced fields while preserving site settings", async
   setChecked("pretranslateNextPage", true);
   setChecked("floatingButtonEnabled", false);
   setChecked("autoTranslateDefault", false);
+  setChecked("debugOverlayEnabled", true);
   setValue("requestTimeoutMs", "45000");
   setValue("maxConcurrentSubmissions", "4");
   setValue("maxFullPageSurfaces", "120");
@@ -58,6 +59,7 @@ test("settings page saves advanced fields while preserving site settings", async
   assert.equal(storage.saved.pretranslateNextPage, true);
   assert.equal(storage.saved.floatingButtonEnabled, false);
   assert.equal(storage.saved.autoTranslateDefault, false);
+  assert.equal(storage.saved.debugOverlayEnabled, true);
   assert.equal(storage.saved.requestTimeoutMs, 45000);
   assert.equal(storage.saved.maxConcurrentSubmissions, 4);
   assert.equal(storage.saved.maxFullPageSurfaces, 120);

@@ -35,6 +35,7 @@ const TEXT = {
   pretranslate: "\u9884\u7ffb\u8bd1\u4e0b\u4e00\u9875",
   floating: "\u663e\u793a\u60ac\u6d6e\u7ffb\u8bd1\u6309\u94ae",
   autoDefault: "\u65b0\u7f51\u7ad9\u9ed8\u8ba4\u81ea\u52a8\u7ffb\u8bd1",
+  debugOverlay: "调试覆盖层",
   performance: "\u6027\u80fd / \u7f13\u5b58",
   timeout: "\u8bf7\u6c42\u8d85\u65f6\uff08ms\uff09",
   concurrency: "\u6700\u5927\u5e76\u53d1\u63d0\u4ea4\u6570",
@@ -122,6 +123,7 @@ export async function mountOptionsPage(root: HTMLElement, deps: OptionsPageDeps 
       pretranslateNextPage: field<HTMLInputElement>(form, "pretranslateNextPage").checked,
       floatingButtonEnabled: field<HTMLInputElement>(form, "floatingButtonEnabled").checked,
       autoTranslateDefault: field<HTMLInputElement>(form, "autoTranslateDefault").checked,
+      debugOverlayEnabled: field<HTMLInputElement>(form, "debugOverlayEnabled").checked,
       requestTimeoutMs: Number(field<HTMLInputElement>(form, "requestTimeoutMs").value),
       maxConcurrentSubmissions: Number(field<HTMLInputElement>(form, "maxConcurrentSubmissions").value),
       maxFullPageSurfaces: Number(field<HTMLInputElement>(form, "maxFullPageSurfaces").value),
@@ -168,6 +170,7 @@ function markup(settings: ExtensionSettings): string {
           ${checkbox("pretranslateNextPage", TEXT.pretranslate, settings.pretranslateNextPage)}
           ${checkbox("floatingButtonEnabled", TEXT.floating, settings.floatingButtonEnabled)}
           ${checkbox("autoTranslateDefault", TEXT.autoDefault, settings.autoTranslateDefault)}
+          ${checkbox("debugOverlayEnabled", TEXT.debugOverlay, settings.debugOverlayEnabled)}
         </section>
 
         <section class="settings-card" data-section="performance">

@@ -1,4 +1,4 @@
-﻿import test from "node:test";
+import test from "node:test";
 import assert from "node:assert/strict";
 import {
   DEFAULT_SETTINGS,
@@ -158,3 +158,14 @@ function fakeStorage(initial: Partial<ExtensionSettings> & { autoTranslate?: boo
   };
 }
 
+test("loadSettings includes debug overlay default", async () => {
+  const settings = await loadSettings(fakeStorage());
+  assert.equal(settings.debugOverlayEnabled, false);
+});
+
+test("saveSettings persists debug overlay setting", async () => {
+  const storage = fakeStorage();
+  await saveSettings({ debugOverlayEnabled: true }, storage);
+  const saved = storage.saved as ExtensionSettings;
+  assert.equal(saved.debugOverlayEnabled, true);
+});

@@ -29,6 +29,7 @@ export interface ExtensionSettings {
   imageRange: ImageRange;
   pretranslateNextPage: boolean;
   floatingButtonEnabled: boolean;
+  debugOverlayEnabled: boolean;
   siteSettings: Record<string, SiteSettings>;
   /** @deprecated Use autoTranslateDefault. Kept optional for migration from older UI code. */
   autoTranslate?: boolean;
@@ -57,6 +58,7 @@ export const DEFAULT_SETTINGS: ExtensionSettings = {
   imageRange: "viewport",
   pretranslateNextPage: false,
   floatingButtonEnabled: true,
+  debugOverlayEnabled: false,
   siteSettings: {},
 };
 
@@ -79,6 +81,7 @@ export function normalizeSettings(input: LegacyExtensionSettings = {}): Extensio
     imageRange: input.imageRange === "fullPage" || input.imageRange === "viewport" ? input.imageRange : DEFAULT_SETTINGS.imageRange,
     pretranslateNextPage: typeof input.pretranslateNextPage === "boolean" ? input.pretranslateNextPage : DEFAULT_SETTINGS.pretranslateNextPage,
     floatingButtonEnabled: typeof input.floatingButtonEnabled === "boolean" ? input.floatingButtonEnabled : DEFAULT_SETTINGS.floatingButtonEnabled,
+    debugOverlayEnabled: typeof input.debugOverlayEnabled === "boolean" ? input.debugOverlayEnabled : DEFAULT_SETTINGS.debugOverlayEnabled,
     siteSettings: normalizeSiteSettings(input.siteSettings),
   };
 }

@@ -2,6 +2,7 @@ import { BackendClient, SurfaceSubmitTracker } from "./client/backend-client";
 import { createSurfaceTask } from "./capture/surface-capture";
 import { createScreenshotSurface, readImageSize } from "./capture/screenshot-crop";
 import { requestVisibleTabScreenshot } from "./capture/screenshot-request";
+import { DebugOverlayRenderer } from "./debug-overlay-renderer";
 import { detectImageSurfaces } from "./detector/surface-detector";
 import { isUmtContentCommand } from "./messages";
 import { OverlayRenderer } from "./overlay/overlay-renderer";
@@ -22,7 +23,9 @@ async function bootstrap(): Promise<void> {
   let renderer = createRenderer(settings, client);
   const submitTracker = new SurfaceSubmitTracker();
   const statusCounter = new TranslationStatusCounter();
+  const debugRenderer = new DebugOverlayRenderer();
   let overlaysVisible = true;
+  debugRenderer.setEnabled(settings.debugOverlayEnabled);
 
   function createRenderer(current: ExtensionSettings, backend: BackendClient): OverlayRenderer {
     return new OverlayRenderer({ targetLanguage: current.targetLanguage, onManualEdit: (override) => void backend.saveManualOverride(override) });
@@ -51,8 +54,9 @@ async function bootstrap(): Promise<void> {
 
   function selectedSurfaces(): PrioritizedSurface[] {
     const prioritized = prioritizeSurfaces(detectImageSurfaces(document), viewportRect());
-    if (settings.imageRange === "fullPage") return prioritized.slice(0, settings.maxFullPageSurfaces);
-    return prioritized.filter((item) => item.priority === "p0" || item.priority === "p1");
+    const selected = settings.imageRange === "fullPage" ? prioritized.slice(0, settings.maxFullPageSurfaces) : prioritized.filter((item) => item.priority === "p0" || item.priority === "p1");
+    for (const item of selected) debugRenderer.markSurface(item.surface.surfaceId, item.surface.element, "detected", `${item.priority} ${item.surface.kind}`);
+    return selected;
   }
 
   async function translateSelectedSurfaces(): Promise<void> {
@@ -64,12 +68,16 @@ async function bootstrap(): Promise<void> {
     setPanelStatus(`UMT: submitting ${fresh.length}`, "busy");
     await runWithConcurrency(fresh, settings.maxConcurrentSubmissions, async (item) => {
       submitTracker.markSubmitted(item.surface.surfaceId);
+      debugRenderer.markSurface(item.surface.surfaceId, item.surface.element, "submitting", `${item.priority} ${item.surface.kind}`);
       try {
         const response = await client.submit(createSurfaceTask(item.surface, item.priority, settings.targetLanguage));
         if (response.ok && isRenderableSurfaceResult(response.result)) {
           renderer.render(item.surface.element, item.surface.naturalSize, response.result);
+          debugRenderer.markResult(item.surface.element, item.surface.naturalSize, response.result);
         } else {
-          const fallbackRendered = await submitScreenshotFallback(item);
+          debugRenderer.markSurface(item.surface.surfaceId, item.surface.element, "empty", "trying screenshot fallback");
+          debugRenderer.markSurface(item.surface.surfaceId, item.surface.element, "failed", "trying screenshot fallback");
+        const fallbackRendered = await submitScreenshotFallback(item);
           if (!fallbackRendered) {
             statusCounter.recordFailedResponse(item.surface.surfaceId);
             setCountersStatus();
@@ -120,6 +128,7 @@ async function bootstrap(): Promise<void> {
       const retry = await client.submit(createSurfaceTask(screenshotSurface, item.priority, settings.targetLanguage));
       if (retry.ok && isRenderableSurfaceResult(retry.result)) {
         renderer.render(item.surface.element, screenshotSurface.naturalSize, retry.result);
+        debugRenderer.markResult(item.surface.element, screenshotSurface.naturalSize, retry.result);
         return true;
       }
     } catch {
@@ -146,6 +155,7 @@ async function bootstrap(): Promise<void> {
   function refreshPage(): void {
     submitTracker.clear();
     renderer.refreshAll();
+    debugRenderer.clear();
     scan();
     autoScheduler.requestRun("popup-refresh");
   }
@@ -154,6 +164,7 @@ async function bootstrap(): Promise<void> {
     submitTracker.clear();
     overlaysVisible = false;
     renderer.setVisible(false);
+    debugRenderer.clear();
     setPanelStatus("UMT: page cleared", "idle");
   }
 
@@ -208,6 +219,7 @@ async function bootstrap(): Promise<void> {
     const previousBackendUrl = settings.backendUrl;
     const previousTargetLanguage = settings.targetLanguage;
     settings = await loadSettings();
+    debugRenderer.setEnabled(settings.debugOverlayEnabled);
     if (settings.backendUrl !== previousBackendUrl) client = new BackendClient(settings.backendUrl);
     if (settings.targetLanguage !== previousTargetLanguage || settings.backendUrl !== previousBackendUrl) renderer = createRenderer(settings, client);
     updatePanelForSettings();
@@ -227,6 +239,7 @@ async function bootstrap(): Promise<void> {
   const pageChangeObserver = new PageChangeObserver(document, {
     onChange: (reason) => {
       renderer.refreshAll();
+      if (settings.debugOverlayEnabled) scan();
       if (shouldAutoTranslate()) autoScheduler.requestRun(reason);
     },
   });
@@ -248,17 +261,19 @@ async function bootstrap(): Promise<void> {
 
   window.addEventListener("scroll", () => {
     renderer.refreshAll();
+    if (settings.debugOverlayEnabled) scan();
     if (shouldAutoTranslate()) autoScheduler.requestRun("scroll");
   }, { passive: true });
 
   window.addEventListener("resize", () => {
     renderer.refreshAll();
+    if (settings.debugOverlayEnabled) scan();
     if (shouldAutoTranslate()) autoScheduler.requestRun("resize");
   });
 
   chrome.storage?.onChanged?.addListener((changes, areaName) => {
     if (areaName !== "sync") return;
-    const relevant = ["backendUrl", "targetLanguage", "translationModel", "autoTranslateDefault", "imageRange", "pretranslateNextPage", "floatingButtonEnabled", "siteSettings", "providerProfile", "openAICompatibleBaseUrl", "requestTimeoutMs", "maxConcurrentSubmissions", "maxFullPageSurfaces", "retryCount", "autoTranslate"];
+    const relevant = ["backendUrl", "targetLanguage", "translationModel", "autoTranslateDefault", "imageRange", "pretranslateNextPage", "floatingButtonEnabled", "siteSettings", "providerProfile", "openAICompatibleBaseUrl", "requestTimeoutMs", "maxConcurrentSubmissions", "maxFullPageSurfaces", "retryCount", "autoTranslate", "debugOverlayEnabled"];
     if (relevant.some((key) => Object.prototype.hasOwnProperty.call(changes, key))) void reloadSettings();
   });
 

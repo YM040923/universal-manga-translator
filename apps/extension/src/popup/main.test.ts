@@ -1,4 +1,4 @@
-﻿import test from "node:test";
+import test from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
 import { mountPopupPage, type PopupDeps } from "./main.js";
@@ -131,4 +131,19 @@ test("popup sends retranslate command to active tab", async () => {
   await Promise.resolve();
 
   assert.deepEqual(sent, [{ tabId: 123, message: { source: "umt-popup", command: "retranslate" } }]);
+});
+
+test("popup saves debug overlay toggle", async () => {
+  const dom = setupDom();
+  const storage = fakeStorage(DEFAULT_SETTINGS);
+  const root = dom.window.document.querySelector<HTMLElement>("#app")!;
+
+  await mountPopupPage(root, deps({ storage }));
+  const debug = root.querySelector<HTMLInputElement>("[data-field='debug-overlay']")!;
+  assert.ok(debug);
+  debug.checked = true;
+  debug.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
+  await Promise.resolve();
+
+  assert.equal(storage.current.debugOverlayEnabled, true);
 });
