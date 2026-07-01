@@ -133,3 +133,38 @@ test("provider prompt avoids empty placeholder region examples", async () => {
     globalThis.fetch = originalFetch;
   }
 });
+
+test("provider prompt requests coordinates in the provided image coordinate space", async () => {
+  const originalFetch = globalThis.fetch;
+  let prompt = "";
+  globalThis.fetch = async (_url, init) => {
+    const body = JSON.parse(String(init?.body));
+    prompt = body.messages[0].content[0].text;
+    return new Response(JSON.stringify({ choices: [{ message: { content: "{\"regions\":[]}" } }] }), { status: 200, headers: { "content-type": "application/json" } });
+  };
+  try {
+    const provider = new OpenAIVisionProvider({ baseUrl: "https://api.example.test/v1", apiKey: "key", model: "vision", targetLanguage: "zh-CN" });
+    await provider.process({
+      task: {
+        surfaceId: "s1",
+        pageUrl: "https://example.test",
+        domain: "example.test",
+        viewportPriority: "p0",
+        surfaceRect: { x: 0, y: 0, width: 10, height: 10 },
+        naturalSize: { width: 20, height: 20 },
+        renderSize: { width: 10, height: 10 },
+        readingDirection: "auto",
+        sourceLanguage: "auto",
+        targetLanguage: "zh-CN",
+      },
+      imageBuffer: Buffer.from("abc"),
+      imageHash: "hash",
+      width: 10,
+      height: 10,
+    });
+    assert.match(prompt, /provided image pixels/i);
+    assert.doesNotMatch(prompt, /original image pixels/i);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

@@ -1,4 +1,4 @@
-﻿import test from "node:test";
+import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -178,5 +178,34 @@ test("retranslate bypasses cache and cancel returns accepted status", async () =
   assert.equal(third.json().result.regions[0].translatedText, "translated 2");
   assert.equal(cancelled.statusCode, 200);
   assert.deepEqual(cancelled.json(), { ok: true, surfaceId: "retranslated-surface", status: "accepted", cancellable: false });
+  await app.close();
+});
+test("submit maps provider boxes from normalized provider image back to original image pixels", async () => {
+  const sharp = await import("sharp");
+  const largeImage = await sharp.default({ create: { width: 2000, height: 1000, channels: 3, background: "white" } }).png().toBuffer();
+  const largeTask = {
+    ...task,
+    imageData: `data:image/png;base64,${largeImage.toString("base64")}`,
+    naturalSize: { width: 2000, height: 1000 },
+    renderSize: { width: 1000, height: 500 },
+    surfaceRect: { x: 0, y: 0, width: 1000, height: 500 },
+  };
+  const app = await buildServer({
+    provider: "test",
+    targetLanguage: "zh-CN",
+    maxImageLongEdge: 1000,
+    visionProvider: {
+      profile: "box-provider",
+      process: async (input) => {
+        assert.equal(input.width, 1000);
+        assert.equal(input.height, 500);
+        return [{ id: "r1", box: { x: 100, y: 50, width: 200, height: 100 }, sourceText: "hi", translatedText: "你好", confidence: 1, orientation: "horizontal", kind: "dialogue" }];
+      },
+    },
+  });
+
+  const response = await app.inject({ method: "POST", url: "/v1/surfaces/submit", payload: { task: largeTask } });
+
+  assert.deepEqual(response.json().result.regions[0].box, { x: 200, y: 100, width: 400, height: 200 });
   await app.close();
 });

@@ -1,4 +1,4 @@
-﻿import { BackendClient, SurfaceSubmitTracker } from "./client/backend-client";
+import { BackendClient, SurfaceSubmitTracker } from "./client/backend-client";
 import { createSurfaceTask } from "./capture/surface-capture";
 import { createScreenshotSurface, readImageSize } from "./capture/screenshot-crop";
 import { requestVisibleTabScreenshot } from "./capture/screenshot-request";
@@ -11,6 +11,7 @@ import { ManualSelectionController } from "./selection/manual-selection";
 import { PageChangeObserver } from "./scheduler/page-change-observer";
 import { prioritizeSurfaces, type PrioritizedSurface } from "./scheduler/viewport-scheduler";
 import { TranslationStatusCounter } from "./status/job-status-counter";
+import { isRenderableSurfaceResult } from "./translation-result";
 import { getEffectiveSiteSettings, loadSettings, type ExtensionSettings } from "../settings/settings";
 
 void bootstrap();
@@ -65,7 +66,7 @@ async function bootstrap(): Promise<void> {
       submitTracker.markSubmitted(item.surface.surfaceId);
       try {
         const response = await client.submit(createSurfaceTask(item.surface, item.priority, settings.targetLanguage));
-        if (response.ok && response.result) {
+        if (response.ok && isRenderableSurfaceResult(response.result)) {
           renderer.render(item.surface.element, item.surface.naturalSize, response.result);
         } else {
           const fallbackRendered = await submitScreenshotFallback(item);
@@ -117,7 +118,7 @@ async function bootstrap(): Promise<void> {
         element: item.surface.element,
       });
       const retry = await client.submit(createSurfaceTask(screenshotSurface, item.priority, settings.targetLanguage));
-      if (retry.ok && retry.result) {
+      if (retry.ok && isRenderableSurfaceResult(retry.result)) {
         renderer.render(item.surface.element, screenshotSurface.naturalSize, retry.result);
         return true;
       }
@@ -178,9 +179,11 @@ async function bootstrap(): Promise<void> {
         element: document.body,
       });
       const response = await client.submit(createSurfaceTask(surface, "p0", settings.targetLanguage));
-      if (response.ok && response.result) {
+      if (response.ok && isRenderableSurfaceResult(response.result)) {
         renderer.render(createManualOverlayAnchor(rect), surface.naturalSize, response.result);
         setPanelStatus("UMT: manual region translated", "done");
+      } else if (response.ok && response.result?.status === "empty") {
+        setPanelStatus("UMT: manual region has no readable text", "done");
       } else {
         setPanelStatus("UMT: manual region failed", "error");
       }

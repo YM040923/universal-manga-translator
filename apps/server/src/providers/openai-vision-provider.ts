@@ -55,7 +55,7 @@ function buildVisionPrompt(targetLanguage: string): string {
     `Find every visible speech/narration/SFX text region in the image and translate it to ${targetLanguage}.`,
     "Return strict JSON only, with this shape:",
     "{\"regions\":[{\"id\":string,\"box\":{\"x\":number,\"y\":number,\"width\":number,\"height\":number},\"sourceText\":string,\"translatedText\":string,\"confidence\":number,\"orientation\":\"horizontal\"|\"vertical\"|\"unknown\",\"kind\":\"dialogue\"|\"narration\"|\"sfx\"|\"unknown\"}]}",
-    "Coordinates must be in original image pixels, not normalized values.",
+    "Coordinates must be in provided image pixels, using the exact pixel coordinate space of the image attached in this request.",
     "If there is no readable text, Return {\"regions\":[]}.",
     "Never return placeholder regions. Never return empty sourceText or empty translatedText.",
   ].join("\n");

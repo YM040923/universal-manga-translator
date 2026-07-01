@@ -98,7 +98,8 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
       }
 
       eventBus.publish({ type: "job.processing", surfaceId: task.surfaceId });
-      const regions = await provider.process({ task, imageBuffer: normalized.buffer, imageHash, width: normalized.width, height: normalized.height });
+      const providerRegions = await provider.process({ task, imageBuffer: normalized.buffer, imageHash, width: normalized.width, height: normalized.height });
+      const regions = mapProviderRegionsToOriginalImage(providerRegions, task.naturalSize, { width: normalized.width, height: normalized.height });
       const rawResult: SurfaceResult = {
         surfaceId: task.surfaceId,
         imageHash,
@@ -137,4 +138,20 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
 
 function applyStoredOverrides(result: SurfaceResult, targetLanguage: string, manualOverrideStore?: ManualOverrideStore): SurfaceResult {
   return manualOverrideStore ? applyManualOverrides(result, manualOverrideStore.listForImage(result.imageHash, targetLanguage)) : result;
+}
+
+function mapProviderRegionsToOriginalImage<T extends { box: { x: number; y: number; width: number; height: number } }>(regions: T[], originalSize: { width: number; height: number }, providerSize: { width: number; height: number }): T[] {
+  const scaleX = originalSize.width / providerSize.width;
+  const scaleY = originalSize.height / providerSize.height;
+  if (!Number.isFinite(scaleX) || !Number.isFinite(scaleY) || scaleX <= 0 || scaleY <= 0) return regions;
+  if (Math.abs(scaleX - 1) < 0.0001 && Math.abs(scaleY - 1) < 0.0001) return regions;
+  return regions.map((region) => ({
+    ...region,
+    box: {
+      x: Math.round(region.box.x * scaleX),
+      y: Math.round(region.box.y * scaleY),
+      width: Math.round(region.box.width * scaleX),
+      height: Math.round(region.box.height * scaleY),
+    },
+  }));
 }
