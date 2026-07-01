@@ -209,3 +209,18 @@ test("submit maps provider boxes from normalized provider image back to original
   assert.deepEqual(response.json().result.regions[0].box, { x: 200, y: 100, width: 400, height: 200 });
   await app.close();
 });
+
+test("diagnostics API returns recent safe records", async () => {
+  const records: unknown[] = [{ surfaceId: "s1", status: "empty" }];
+  const app = await buildServer({
+    provider: "mock",
+    targetLanguage: "zh-CN",
+    diagnosticsReader: () => records as Array<Record<string, unknown>>,
+  });
+
+  const response = await app.inject({ method: "GET", url: "/v1/diagnostics/recent?limit=5" });
+
+  assert.equal(response.statusCode, 200);
+  assert.deepEqual(response.json(), { ok: true, records });
+  await app.close();
+});

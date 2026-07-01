@@ -19,6 +19,7 @@ test("settings page renders backend provider defaults and performance sections",
   assert.match(text, /\u6027\u80fd/u);
   assert.match(text, /API key \u5bc6\u94a5/u);
   assert.match(text, /OpenAI \u517c\u5bb9 Base URL/u);
+  assert.match(text, /\.\/scripts\/start-backend\.ps1/);
   assert.match(text, /\u5f53\u524d\u9875\u9762\u7f13\u5b58/u);
   assert.doesNotMatch(text, /Backend connection|Provider \/ model|Translation defaults|Performance \/ cache|Save settings|Not checked/);
   assert.doesNotMatch(text, /\\u[0-9a-fA-F]{4}/);
@@ -90,12 +91,14 @@ function deps(options: {
   configStatus?: OptionsPageDeps["configStatus"];
   cacheStats?: OptionsPageDeps["cacheStats"];
   clearCache?: OptionsPageDeps["clearCache"];
+  diagnostics?: OptionsPageDeps["diagnostics"];
 } = {}): OptionsPageDeps {
   const result: OptionsPageDeps = { storage: options.storage ?? fakeStorage(DEFAULT_SETTINGS) };
   if (options.checkBackend) result.checkBackend = options.checkBackend;
   if (options.configStatus) result.configStatus = options.configStatus;
   if (options.cacheStats) result.cacheStats = options.cacheStats;
   if (options.clearCache) result.clearCache = options.clearCache;
+  if (options.diagnostics) result.diagnostics = options.diagnostics;
   return result;
 }
 
@@ -159,4 +162,18 @@ test("settings page shows cache stats and clears backend cache", async () => {
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.equal(cleared, true);
   assert.match(document.querySelector<HTMLElement>("[data-cache-status]")?.textContent ?? "", /已清理 3/);
+});
+
+test("settings page shows recent diagnostics", async () => {
+  setupDom();
+  await mountOptionsPage(document.querySelector<HTMLElement>("#app")!, deps({
+    diagnostics: async () => ({ ok: true, records: [{ surfaceId: "s1", status: "empty", finalRegionCount: 0 }] }),
+  }));
+
+  document.querySelector<HTMLButtonElement>("[data-action='diagnostics']")!.click();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  const text = document.querySelector<HTMLElement>("[data-diagnostics-status]")?.textContent ?? "";
+  assert.match(text, /s1/);
+  assert.match(text, /empty/);
 });

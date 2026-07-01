@@ -27,6 +27,7 @@ export interface BuildServerOptions {
   openAIModel?: string;
   openAIApiKeyConfigured?: boolean;
   diagnosticsWriter?: DiagnosticsWriter;
+  diagnosticsReader?: (limit: number) => Array<Record<string, unknown>>;
 }
 
 export async function buildServer(options: BuildServerOptions): Promise<FastifyInstance> {
@@ -82,6 +83,11 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
     const memory = memoryCache.size;
     memoryCache.clear();
     return { ok: true, deleted: surfaceCache ? persistent : memory };
+  });
+
+  app.get<{ Querystring: { limit?: string } }>("/v1/diagnostics/recent", async (request) => {
+    const limit = Number(request.query.limit ?? 20);
+    return { ok: true, records: options.diagnosticsReader?.(Number.isFinite(limit) ? limit : 20) ?? [] };
   });
 
   const processSurface = async (task: SurfaceTask, force = false) => {

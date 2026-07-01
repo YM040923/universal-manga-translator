@@ -1,4 +1,4 @@
-﻿import { appendFileSync, mkdirSync } from "node:fs";
+﻿import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
 import type { JobStatus, Size } from "@umt/shared";
 
@@ -53,4 +53,17 @@ function sanitizeNote(value: string | undefined): string | undefined {
     .replace(/data:image\/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=]+/g, "[redacted-image]")
     .replace(/base64/gi, "[redacted-base64]")
     .slice(0, 300);
+}
+
+export function readRecentDiagnostics(path: string, limit = 20): Array<Record<string, unknown>> {
+  if (!existsSync(path)) return [];
+  const lines = readFileSync(path, "utf8").split(/\r?\n/).filter(Boolean);
+  return lines.slice(-Math.max(1, Math.min(100, Math.trunc(limit)))).reverse().flatMap((line) => {
+    try {
+      const parsed = JSON.parse(line) as Record<string, unknown>;
+      return [parsed];
+    } catch {
+      return [];
+    }
+  });
 }

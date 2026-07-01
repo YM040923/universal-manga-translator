@@ -25,6 +25,8 @@ export class SurfaceSubmitTracker {
   }
 }
 
+export interface DiagnosticsResponse { ok: true; records: Array<Record<string, unknown>>; }
+
 export class BackendClient {
   constructor(private readonly baseUrl = "http://127.0.0.1:47831") {}
 
@@ -87,6 +89,12 @@ export class BackendClient {
   async clearCache(): Promise<ApiResponse<ClearCacheResponse>> {
     const response = await fetch(`${this.baseUrl}/v1/cache/clear`, { method: "POST" });
     return (await response.json()) as ApiResponse<ClearCacheResponse>;
+  }
+
+  async recentDiagnostics(limit = 10): Promise<ApiResponse<DiagnosticsResponse>> {
+    const safeLimit = Math.max(1, Math.min(100, Math.trunc(limit)));
+    const response = await fetch(`${this.baseUrl}/v1/diagnostics/recent?limit=${safeLimit}`, { cache: "no-store" });
+    return (await response.json()) as ApiResponse<DiagnosticsResponse>;
   }
 
   async saveManualOverride(override: ManualOverridePayload): Promise<ApiResponse<SaveManualOverrideResponse>> {

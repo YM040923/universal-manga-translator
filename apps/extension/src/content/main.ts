@@ -6,6 +6,7 @@ import { DebugOverlayRenderer } from "./debug-overlay-renderer";
 import { detectImageSurfaces } from "./detector/surface-detector";
 import { isUmtContentCommand } from "./messages";
 import { OverlayRenderer } from "./overlay/overlay-renderer";
+import { createRectOverlayAnchor } from "./overlay/rect-anchor";
 import { FloatingPanel, type FloatingPanelState } from "./panel/floating-panel";
 import { AutoScheduler } from "./scheduler/auto-scheduler";
 import { ManualSelectionController } from "./selection/manual-selection";
@@ -75,9 +76,8 @@ async function bootstrap(): Promise<void> {
           renderer.render(item.surface.element, item.surface.naturalSize, response.result);
           debugRenderer.markResult(item.surface.element, item.surface.naturalSize, response.result);
         } else {
-          debugRenderer.markSurface(item.surface.surfaceId, item.surface.element, "empty", "trying screenshot fallback");
-          debugRenderer.markSurface(item.surface.surfaceId, item.surface.element, "failed", "trying screenshot fallback");
-        const fallbackRendered = await submitScreenshotFallback(item);
+          debugRenderer.markSurface(item.surface.surfaceId, item.surface.element, response.ok ? "empty" : "failed", "trying screenshot fallback");
+          const fallbackRendered = await submitScreenshotFallback(item);
           if (!fallbackRendered) {
             statusCounter.recordFailedResponse(item.surface.surfaceId);
             setCountersStatus();
@@ -137,8 +137,9 @@ async function bootstrap(): Promise<void> {
     debugRenderer.markSurface(item.surface.surfaceId, item.surface.element, "fallback", `${upscale}x screenshot`);
     const retry = await client.submit(createSurfaceTask(screenshotSurface, item.priority, settings.targetLanguage));
     if (retry.ok && isRenderableSurfaceResult(retry.result)) {
-      renderer.render(item.surface.element, screenshotSurface.naturalSize, retry.result);
-      debugRenderer.markResult(item.surface.element, screenshotSurface.naturalSize, retry.result);
+      const anchor = createRectOverlayAnchor(screenshotSurface.rect);
+      renderer.render(anchor, screenshotSurface.naturalSize, retry.result);
+      debugRenderer.markResult(anchor, screenshotSurface.naturalSize, retry.result);
       return true;
     }
     if (retry.ok && retry.result?.status === "empty") debugRenderer.markSurface(item.surface.surfaceId, item.surface.element, "empty", `${upscale}x fallback empty`);
@@ -199,7 +200,7 @@ async function bootstrap(): Promise<void> {
       });
       const response = await client.submit(createSurfaceTask(surface, "p0", settings.targetLanguage));
       if (response.ok && isRenderableSurfaceResult(response.result)) {
-        renderer.render(createManualOverlayAnchor(rect), surface.naturalSize, response.result);
+        renderer.render(createRectOverlayAnchor(rect), surface.naturalSize, response.result);
         setPanelStatus("UMT: manual region translated", "done");
       } else if (response.ok && response.result?.status === "empty") {
         setPanelStatus("UMT: manual region has no readable text", "done");
@@ -295,22 +296,6 @@ async function bootstrap(): Promise<void> {
     if (message.command === "retranslate") void retranslateSelectedSurfaces();
     return false;
   });
-}
-
-function createManualOverlayAnchor(rect: { x: number; y: number; width: number; height: number }): HTMLElement {
-  const anchor = document.createElement("div");
-  anchor.getBoundingClientRect = () => ({
-    x: rect.x,
-    y: rect.y,
-    width: rect.width,
-    height: rect.height,
-    top: rect.y,
-    left: rect.x,
-    right: rect.x + rect.width,
-    bottom: rect.y + rect.height,
-    toJSON: () => ({}),
-  } as DOMRect);
-  return anchor;
 }
 
 function settingsStatus(settings: ExtensionSettings, autoTranslate: boolean): string {

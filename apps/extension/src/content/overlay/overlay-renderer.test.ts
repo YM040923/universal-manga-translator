@@ -29,6 +29,19 @@ test("refreshAll repositions overlays after surface layout changes", () => {
   assert.equal(after.style.top, "120px");
 });
 
+
+test("render restores overlay visibility after the page was cleared", () => {
+  const { img } = setupDomWithImage({ x: 10, y: 20, width: 500, height: 1000 });
+  const renderer = new OverlayRenderer();
+
+  renderer.setVisible(false);
+  renderer.render(img, { width: 1000, height: 2000 }, fakeResult("s1"));
+
+  const root = document.querySelector<HTMLElement>("[data-umt-overlay-root='true']")!;
+  assert.equal(root.style.display, "block");
+  assert.equal(document.querySelector("[data-umt-region-id='r1']")?.textContent, "hello translated");
+});
+
 test("stores manual edits by image hash and region id", () => {
   saveManualEdit("hash", "zh-CN", "r1", "edited text");
   assert.equal(loadManualEdit("hash", "zh-CN", "r1"), "edited text");

@@ -52,6 +52,7 @@ export class OverlayRenderer {
   }
 
   render(element: HTMLElement, naturalSize: Size, result: SurfaceResult): void {
+    this.setVisible(true);
     this.rendered.set(result.surfaceId, { element, naturalSize, result });
     this.renderSurface(element, naturalSize, result);
   }

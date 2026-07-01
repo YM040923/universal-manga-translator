@@ -75,3 +75,17 @@ test("BackendClient calls cache management and task control endpoints", async ()
   assert.equal(calls[1]?.init.method, "POST");
   assert.deepEqual(JSON.parse(String(calls[2]?.init.body)), { surfaceId: "s1" });
 });
+
+test("BackendClient reads recent diagnostics", async () => {
+  const calls: string[] = [];
+  globalThis.fetch = (async (url: string | URL | Request) => {
+    calls.push(String(url));
+    return new Response(JSON.stringify({ ok: true, records: [{ surfaceId: "s1", status: "empty" }] }), { status: 200 });
+  }) as typeof fetch;
+
+  const response = await new BackendClient("http://127.0.0.1:47831").recentDiagnostics(5);
+
+  assert.equal(calls[0], "http://127.0.0.1:47831/v1/diagnostics/recent?limit=5");
+  assert.equal(response.ok, true);
+  assert.equal(response.ok && response.records[0]?.surfaceId, "s1");
+});
