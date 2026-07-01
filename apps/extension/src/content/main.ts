@@ -4,6 +4,7 @@ import { detectImageSurfaces } from "./detector/surface-detector";
 import { OverlayRenderer } from "./overlay/overlay-renderer";
 import { FloatingPanel } from "./panel/floating-panel";
 import { AutoScheduler } from "./scheduler/auto-scheduler";
+import { PageChangeObserver } from "./scheduler/page-change-observer";
 import { prioritizeSurfaces } from "./scheduler/viewport-scheduler";
 import { TranslationStatusCounter } from "./status/job-status-counter";
 import { loadSettings, type ExtensionSettings } from "../settings/settings";
@@ -81,6 +82,13 @@ async function bootstrap(): Promise<void> {
   });
 
   panel.mount();
+  const pageChangeObserver = new PageChangeObserver(document, {
+    onChange: (reason) => {
+      renderer.refreshAll();
+      if (settings.autoTranslate) autoScheduler.requestRun(reason);
+    },
+  });
+  pageChangeObserver.start();
   try {
     client.connectEvents((event) => {
       statusCounter.recordEvent(event);
