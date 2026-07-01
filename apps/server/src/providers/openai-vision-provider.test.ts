@@ -1,4 +1,4 @@
-﻿import test from "node:test";
+import test from "node:test";
 import assert from "node:assert/strict";
 import { OpenAIVisionProvider } from "./openai-vision-provider.js";
 
@@ -42,7 +42,7 @@ test("parses JSON regions from an OpenAI-compatible response", async () => {
 });
 
 test("extracts fenced JSON from model response", () => {
-  const parsed = OpenAIVisionProvider.parseRegionsFromContent("```json\n{\"regions\":[{\"id\":\"r1\",\"box\":{\"x\":0,\"y\":0,\"width\":1,\"height\":1},\"sourceText\":\"a\",\"translatedText\":\"b\",\"confidence\":1,\"orientation\":\"horizontal\",\"kind\":\"dialogue\"}]}\n```");
+  const parsed = OpenAIVisionProvider.parseRegionsFromContent("```json\n{\"regions\":[{\"id\":\"r1\",\"box\":{\"x\":0,\"y\":0,\"width\":10,\"height\":12},\"sourceText\":\"a\",\"translatedText\":\"b\",\"confidence\":1,\"orientation\":\"horizontal\",\"kind\":\"dialogue\"}]}\n```");
   assert.equal(parsed[0]?.translatedText, "b");
 });
 
@@ -80,6 +80,55 @@ test("can send nonstandard image field payload for compatible gateways", async (
     });
     assert.equal(body.messages[0].content[1].type, "image");
     assert.match(body.messages[0].content[1].image, /^data:image\/jpeg;base64,/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("filters placeholder regions with empty text and 1x1 boxes", () => {
+  const parsed = OpenAIVisionProvider.parseRegionsFromContent(JSON.stringify({ regions: [{
+    id: "r1",
+    box: { x: 0, y: 0, width: 1, height: 1 },
+    sourceText: "",
+    translatedText: "",
+    confidence: 0.9,
+    orientation: "horizontal",
+    kind: "dialogue",
+  }] }));
+  assert.deepEqual(parsed, []);
+});
+
+test("provider prompt avoids empty placeholder region examples", async () => {
+  const originalFetch = globalThis.fetch;
+  let prompt = "";
+  globalThis.fetch = async (_url, init) => {
+    const body = JSON.parse(String(init?.body));
+    prompt = body.messages[0].content[0].text;
+    return new Response(JSON.stringify({ choices: [{ message: { content: "{\"regions\":[]}" } }] }), { status: 200, headers: { "content-type": "application/json" } });
+  };
+  try {
+    const provider = new OpenAIVisionProvider({ baseUrl: "https://api.example.test/v1", apiKey: "key", model: "vision", targetLanguage: "zh-CN" });
+    await provider.process({
+      task: {
+        surfaceId: "s1",
+        pageUrl: "https://example.test",
+        domain: "example.test",
+        viewportPriority: "p0",
+        surfaceRect: { x: 0, y: 0, width: 10, height: 10 },
+        naturalSize: { width: 10, height: 10 },
+        renderSize: { width: 10, height: 10 },
+        readingDirection: "auto",
+        sourceLanguage: "auto",
+        targetLanguage: "zh-CN",
+      },
+      imageBuffer: Buffer.from("abc"),
+      imageHash: "hash",
+      width: 10,
+      height: 10,
+    });
+    assert.equal(prompt.includes('"sourceText":""'), false);
+    assert.equal(prompt.includes('"translatedText":""'), false);
+    assert.match(prompt, /Return \{\"regions\":\[\]\}/);
   } finally {
     globalThis.fetch = originalFetch;
   }

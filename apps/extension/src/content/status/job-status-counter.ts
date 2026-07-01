@@ -4,12 +4,14 @@ export interface TranslationStatusSnapshot {
   queued: number;
   processing: number;
   done: number;
+  empty: number;
   failed: number;
 }
 
 export class TranslationStatusCounter {
   private queued = 0;
   private done = 0;
+  private empty = 0;
   private failed = 0;
   private readonly queuedSurfaces = new Set<string>();
   private readonly processingSurfaces = new Set<string>();
@@ -18,7 +20,7 @@ export class TranslationStatusCounter {
   recordEvent(event: ServerEvent): TranslationStatusSnapshot {
     if (event.type === "job.queued") this.recordQueued(event.surfaceId);
     if (event.type === "job.processing") this.recordProcessing(event.surfaceId);
-    if (event.type === "job.completed" || event.type === "job.cached") this.recordDone(event.surfaceId);
+    if (event.type === "job.completed" || event.type === "job.cached") this.recordTerminalResult(event.surfaceId, event.result.status);
     if (event.type === "job.failed") this.recordFailed(event.surfaceId);
     return this.snapshot();
   }
@@ -29,12 +31,12 @@ export class TranslationStatusCounter {
   }
 
   snapshot(): TranslationStatusSnapshot {
-    return { queued: this.queued, processing: this.processingSurfaces.size, done: this.done, failed: this.failed };
+    return { queued: this.queued, processing: this.processingSurfaces.size, done: this.done, empty: this.empty, failed: this.failed };
   }
 
   format(): string {
     const snapshot = this.snapshot();
-    return `UMT: queued ${snapshot.queued} | processing ${snapshot.processing} | done ${snapshot.done} | failed ${snapshot.failed}`;
+    return `UMT: queued ${snapshot.queued} | processing ${snapshot.processing} | done ${snapshot.done} | empty ${snapshot.empty} | failed ${snapshot.failed}`;
   }
 
   private recordQueued(surfaceId: string): void {
@@ -48,11 +50,12 @@ export class TranslationStatusCounter {
     this.processingSurfaces.add(surfaceId);
   }
 
-  private recordDone(surfaceId: string): void {
+  private recordTerminalResult(surfaceId: string, status: "cached" | "completed" | "empty"): void {
     if (this.terminalSurfaces.has(surfaceId)) return;
     this.terminalSurfaces.add(surfaceId);
     this.processingSurfaces.delete(surfaceId);
-    this.done += 1;
+    if (status === "empty") this.empty += 1;
+    else this.done += 1;
   }
 
   private recordFailed(surfaceId: string): void {

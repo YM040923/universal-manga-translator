@@ -1,6 +1,6 @@
-﻿import type { OverlayRegion, TextRegion } from "@umt/shared";
+import type { OverlayRegion, TextRegion } from "@umt/shared";
 
-export const LAYOUT_VERSION = 2;
+export const LAYOUT_VERSION = 3;
 
 export function layoutRegions(regions: TextRegion[]): OverlayRegion[] {
   return regions.map((region) => ({

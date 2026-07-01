@@ -1,4 +1,4 @@
-﻿import type { TextRegion } from "@umt/shared";
+import type { TextRegion } from "@umt/shared";
 import type { ProviderInput, VisionProvider } from "./provider.js";
 
 export interface OpenAIVisionProviderOptions {
@@ -21,7 +21,7 @@ export class OpenAIVisionProvider implements VisionProvider {
     const candidate = fenced ?? content.slice(content.indexOf("{"), content.lastIndexOf("}") + 1);
     if (!candidate || candidate.trim().length === 0) return [];
     const parsed = JSON.parse(candidate) as { regions?: TextRegion[] };
-    return Array.isArray(parsed.regions) ? parsed.regions : [];
+    return Array.isArray(parsed.regions) ? parsed.regions.filter(isUsefulRegion) : [];
   }
 
   async process(input: ProviderInput): Promise<TextRegion[]> {
@@ -35,7 +35,7 @@ export class OpenAIVisionProvider implements VisionProvider {
         messages: [{
           role: "user",
           content: [
-            { type: "text", text: `Detect manga text regions and translate them to ${this.options.targetLanguage}. Return only JSON: {"regions":[{"id":"r1","box":{"x":0,"y":0,"width":1,"height":1},"sourceText":"","translatedText":"","confidence":0.9,"orientation":"horizontal","kind":"dialogue"}]}` },
+            { type: "text", text: buildVisionPrompt(this.options.targetLanguage) },
             this.options.imageInputFormat === "image-field"
               ? { type: "image", image: imageUrl }
               : { type: "image_url", image_url: { url: imageUrl } },
@@ -47,4 +47,22 @@ export class OpenAIVisionProvider implements VisionProvider {
     const payload = (await response.json()) as { choices?: Array<{ message?: { content?: string } }> };
     return OpenAIVisionProvider.parseRegionsFromContent(payload.choices?.[0]?.message?.content ?? "{\"regions\":[]}");
   }
+}
+
+function buildVisionPrompt(targetLanguage: string): string {
+  return [
+    "You are a manga OCR and translation engine.",
+    `Find every visible speech/narration/SFX text region in the image and translate it to ${targetLanguage}.`,
+    "Return strict JSON only, with this shape:",
+    "{\"regions\":[{\"id\":string,\"box\":{\"x\":number,\"y\":number,\"width\":number,\"height\":number},\"sourceText\":string,\"translatedText\":string,\"confidence\":number,\"orientation\":\"horizontal\"|\"vertical\"|\"unknown\",\"kind\":\"dialogue\"|\"narration\"|\"sfx\"|\"unknown\"}]}",
+    "Coordinates must be in original image pixels, not normalized values.",
+    "If there is no readable text, Return {\"regions\":[]}.",
+    "Never return placeholder regions. Never return empty sourceText or empty translatedText.",
+  ].join("\n");
+}
+
+function isUsefulRegion(region: TextRegion): boolean {
+  const hasText = typeof region.sourceText === "string" && region.sourceText.trim().length > 0 && typeof region.translatedText === "string" && region.translatedText.trim().length > 0;
+  const hasBox = region.box && region.box.width > 1 && region.box.height > 1;
+  return hasText && hasBox;
 }

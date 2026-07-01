@@ -10,10 +10,19 @@ test("TranslationStatusCounter counts completed and failed jobs once per surface
   counter.recordEvent({ type: "job.failed", surfaceId: "s2", result: { surfaceId: "s2", status: "failed", recoverable: true, error: "provider failed" } });
   counter.recordFailedResponse("s2");
 
-  assert.deepEqual(counter.snapshot(), { queued: 1, processing: 0, done: 1, failed: 1 });
-  assert.equal(counter.format(), "UMT: queued 1 | processing 0 | done 1 | failed 1");
+  assert.deepEqual(counter.snapshot(), { queued: 1, processing: 0, done: 1, empty: 0, failed: 1 });
+  assert.equal(counter.format(), "UMT: queued 1 | processing 0 | done 1 | empty 0 | failed 1");
 });
 
+test("TranslationStatusCounter tracks empty results separately from done", () => {
+  const counter = new TranslationStatusCounter();
+  counter.recordEvent({ type: "job.queued", surfaceId: "s1" });
+  counter.recordEvent({ type: "job.processing", surfaceId: "s1" });
+  counter.recordEvent({ type: "job.completed", surfaceId: "s1", result: { ...fakeResult("s1"), status: "empty", regions: [] } });
+
+  assert.deepEqual(counter.snapshot(), { queued: 1, processing: 0, done: 0, empty: 1, failed: 0 });
+  assert.equal(counter.format(), "UMT: queued 1 | processing 0 | done 0 | empty 1 | failed 0");
+});
 function fakeResult(surfaceId: string) {
   return {
     surfaceId,
