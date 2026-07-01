@@ -43,7 +43,7 @@ Phase 6 adds persistent extension settings, an options page, configured backend 
 Phase 7 adds backend-persistent manual translation overrides in SQLite. Clicking an overlay still updates text immediately in the page, and the edit is also saved through `POST /v1/overrides`; future submit/cache responses for the same image hash, target language, and region id apply the saved text. Verified on 2026-07-01 with `pnpm test`, `pnpm build`, `pnpm test:e2e`, and `pnpm exec playwright test tests/integration/extension-loaded.spec.ts`.
 ## Daily Use
 
-From PowerShell in `F:\meihua\universal-manga-translator`:
+From **PowerShell** in `F:\meihua\universal-manga-translator`:
 
 ```powershell
 pnpm install
@@ -65,6 +65,17 @@ For a full local confidence check run:
 ```
 
 Use the floating panel `Settings` button to change backend URL, target language, or auto-translate behavior.
+If you are using **cmd.exe** instead of PowerShell, switch drives with `/d` first:
+
+```cmd
+cd /d F:\meihua\universal-manga-translator
+pnpm install
+pnpm doctor
+powershell -ExecutionPolicy Bypass -File .\scripts\build-extension.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\start-backend.ps1
+```
+
+In cmd, plain `cd F:\...` does not change the active drive from `C:` to `F:`.
 
 ## Phase 8 Verification
 
