@@ -38,3 +38,6 @@ Open the extension options page from the floating panel `Settings` button or fro
 ## Phase 6 Verification
 
 Phase 6 adds persistent extension settings, an options page, configured backend URL/target language, an auto-translate toggle, a floating-panel Settings button, and a build regression check that prevents Chrome content scripts from containing static module imports. Verified on 2026-07-01 with `pnpm test`, `pnpm build`, `pnpm test:e2e`, and `pnpm exec playwright test tests/integration/extension-loaded.spec.ts`.
+## Phase 7 Verification
+
+Phase 7 adds backend-persistent manual translation overrides in SQLite. Clicking an overlay still updates text immediately in the page, and the edit is also saved through `POST /v1/overrides`; future submit/cache responses for the same image hash, target language, and region id apply the saved text. Verified on 2026-07-01 with `pnpm test`, `pnpm build`, `pnpm test:e2e`, and `pnpm exec playwright test tests/integration/extension-loaded.spec.ts`.
