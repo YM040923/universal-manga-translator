@@ -11,6 +11,7 @@ import { normalizeForProvider } from "../image/normalize.js";
 import { LAYOUT_VERSION, layoutRegions } from "../layout/layout.js";
 import { MockProvider } from "../providers/mock-provider.js";
 import type { VisionProvider } from "../providers/provider.js";
+import { NullDiagnosticsWriter, type DiagnosticsWriter } from "./diagnostics.js";
 import { EventBus } from "./events.js";
 
 export interface BuildServerOptions {
@@ -25,6 +26,7 @@ export interface BuildServerOptions {
   openAICompatibleBaseUrl?: string;
   openAIModel?: string;
   openAIApiKeyConfigured?: boolean;
+  diagnosticsWriter?: DiagnosticsWriter;
 }
 
 export async function buildServer(options: BuildServerOptions): Promise<FastifyInstance> {
@@ -34,6 +36,7 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
   const memoryCache = new Map<string, SurfaceResult>();
   const surfaceCache = options.surfaceCache;
   const manualOverrideStore = options.manualOverrideStore;
+  const diagnostics = options.diagnosticsWriter ?? new NullDiagnosticsWriter();
 
   await app.register(cors, { origin: true });
   await app.register(websocket);
@@ -85,7 +88,7 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
     const started = Date.now();
     eventBus.publish({ type: "job.queued", surfaceId: task.surfaceId });
     try {
-      const { buffer: imageBuffer } = await readTaskImage(task);
+      const { buffer: imageBuffer, source: inputSource } = await readTaskImage(task);
       const imageHash = sha256Hex(imageBuffer);
       const normalized = await normalizeForProvider(imageBuffer, { maxLongEdge: options.maxImageLongEdge ?? 1600, jpegQuality: Math.round((options.jpegQuality ?? 0.75) * 100) });
       const cacheKey = buildCacheKey({ imageHash, targetLanguage: task.targetLanguage, providerProfile: provider.profile, layoutVersion: LAYOUT_VERSION });
@@ -93,6 +96,7 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
       if (cached && !force) {
         const cachedForSurface: SurfaceResult = { ...cached, surfaceId: task.surfaceId, status: "cached" };
         const result = applyStoredOverrides(cachedForSurface, task.targetLanguage, manualOverrideStore);
+        diagnostics.record({ surfaceId: task.surfaceId, status: "cached", providerProfile: provider.profile, inputSource, originalSize: task.naturalSize, providerSize: task.naturalSize, rawRegionCount: cached.regions.length, finalRegionCount: result.regions.length, elapsedMs: Date.now() - started, note: "cache hit" });
         eventBus.publish({ type: "job.cached", surfaceId: task.surfaceId, result });
         return { ok: true, surfaceId: task.surfaceId, status: "cached", result };
       }
@@ -112,10 +116,12 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
       memoryCache.set(cacheKey, rawResult);
       surfaceCache?.save(cacheKey, rawResult);
       const result = applyStoredOverrides(rawResult, task.targetLanguage, manualOverrideStore);
+      diagnostics.record({ surfaceId: task.surfaceId, status: result.status, providerProfile: provider.profile, inputSource, originalSize: task.naturalSize, providerSize: { width: normalized.width, height: normalized.height }, rawRegionCount: providerRegions.length, finalRegionCount: result.regions.length, elapsedMs: rawResult.elapsedMs });
       eventBus.publish({ type: "job.completed", surfaceId: task.surfaceId, result });
       return { ok: true, surfaceId: task.surfaceId, status: result.status, result };
     } catch (error) {
       const failed = { surfaceId: task.surfaceId, status: "failed" as const, recoverable: true, error: error instanceof Error ? error.message : String(error) };
+      diagnostics.record({ surfaceId: task.surfaceId, status: "failed", providerProfile: provider.profile, inputSource: task.imageData ? "imageData" : "imageUrl", originalSize: task.naturalSize, providerSize: task.naturalSize, rawRegionCount: 0, finalRegionCount: 0, elapsedMs: Date.now() - started, note: failed.error });
       eventBus.publish({ type: "job.failed", surfaceId: task.surfaceId, result: failed });
       return { ok: false, error: failed.error, result: failed };
     }

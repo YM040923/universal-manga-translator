@@ -2,6 +2,7 @@
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildServer } from "./api/server.js";
+import { FileDiagnosticsWriter } from "./api/diagnostics.js";
 import { EventBus } from "./api/events.js";
 import { SurfaceCache } from "./cache/surface-cache.js";
 import { ManualOverrideStore } from "./cache/manual-overrides.js";
@@ -21,6 +22,7 @@ const visionProvider = config.provider === "openai-compatible"
   ? new OpenAIVisionProvider({ baseUrl: config.openaiBaseUrl, apiKey: config.openaiApiKey, model: config.openaiModel, targetLanguage: config.targetLanguage, imageInputFormat: config.openaiImageInputFormat })
   : new MockProvider();
 const eventBus = new EventBus();
+const diagnosticsWriter = new FileDiagnosticsWriter(resolve(dataDir, "diagnostics.log"));
 const app = await buildServer({
   provider: config.provider,
   targetLanguage: config.targetLanguage,
@@ -28,6 +30,7 @@ const app = await buildServer({
   surfaceCache,
   manualOverrideStore,
   eventBus,
+  diagnosticsWriter,
   maxImageLongEdge: config.maxImageLongEdge,
   jpegQuality: config.jpegQuality,
   openAICompatibleBaseUrl: config.openaiBaseUrl,
