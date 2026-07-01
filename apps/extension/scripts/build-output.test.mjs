@@ -25,3 +25,7 @@ test("content script build is a classic script without static module imports", (
   assert.equal(/(^|[;\n\r])\s*import\s*(?:\{|[\w*])/m.test(content), false);
   assert.equal(/import\(/.test(content), false);
 });
+test("manifest grants all urls host permission for visible tab capture", () => {
+  const manifest = JSON.parse(readFileSync(resolve(dist, "manifest.json"), "utf8"));
+  assert.equal(manifest.host_permissions.includes("<all_urls>"), true);
+});
