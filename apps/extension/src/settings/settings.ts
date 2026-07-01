@@ -1,4 +1,4 @@
-﻿export type ImageRange = "viewport" | "fullPage";
+export type ImageRange = "viewport" | "fullPage";
 export type SiteScope = "origin" | "similarPath";
 
 export interface SiteSettings {
@@ -19,6 +19,12 @@ export interface ExtensionSettings {
   backendUrl: string;
   targetLanguage: string;
   translationModel: string;
+  providerProfile: string;
+  openAICompatibleBaseUrl: string;
+  requestTimeoutMs: number;
+  maxConcurrentSubmissions: number;
+  maxFullPageSurfaces: number;
+  retryCount: number;
   autoTranslateDefault: boolean;
   imageRange: ImageRange;
   pretranslateNextPage: boolean;
@@ -41,6 +47,12 @@ export const DEFAULT_SETTINGS: ExtensionSettings = {
   backendUrl: "http://127.0.0.1:47831",
   targetLanguage: "zh-CN",
   translationModel: "mock",
+  providerProfile: "mock",
+  openAICompatibleBaseUrl: "",
+  requestTimeoutMs: 60000,
+  maxConcurrentSubmissions: 2,
+  maxFullPageSurfaces: 80,
+  retryCount: 1,
   autoTranslateDefault: true,
   imageRange: "viewport",
   pretranslateNextPage: false,
@@ -53,6 +65,12 @@ export function normalizeSettings(input: LegacyExtensionSettings = {}): Extensio
     backendUrl: normalizeBackendUrl(input.backendUrl),
     targetLanguage: normalizeNonEmptyString(input.targetLanguage, DEFAULT_SETTINGS.targetLanguage),
     translationModel: normalizeNonEmptyString(input.translationModel, DEFAULT_SETTINGS.translationModel),
+    providerProfile: normalizeNonEmptyString(input.providerProfile, DEFAULT_SETTINGS.providerProfile),
+    openAICompatibleBaseUrl: normalizeOptionalHttpUrl(input.openAICompatibleBaseUrl),
+    requestTimeoutMs: normalizeInteger(input.requestTimeoutMs, 5000, 180000, DEFAULT_SETTINGS.requestTimeoutMs),
+    maxConcurrentSubmissions: normalizeInteger(input.maxConcurrentSubmissions, 1, 8, DEFAULT_SETTINGS.maxConcurrentSubmissions),
+    maxFullPageSurfaces: normalizeInteger(input.maxFullPageSurfaces, 1, 300, DEFAULT_SETTINGS.maxFullPageSurfaces),
+    retryCount: normalizeInteger(input.retryCount, 0, 5, DEFAULT_SETTINGS.retryCount),
     autoTranslateDefault: typeof input.autoTranslateDefault === "boolean"
       ? input.autoTranslateDefault
       : typeof input.autoTranslate === "boolean"
@@ -119,15 +137,21 @@ export function deriveSimilarPathPrefix(pathname: string): string {
 
 function normalizeBackendUrl(value: unknown): string {
   if (typeof value !== "string") return DEFAULT_SETTINGS.backendUrl;
+  const normalized = normalizeOptionalHttpUrl(value);
+  return normalized || DEFAULT_SETTINGS.backendUrl;
+}
+
+function normalizeOptionalHttpUrl(value: unknown): string {
+  if (typeof value !== "string" || !value.trim()) return "";
   try {
     const url = new URL(value.trim());
-    if (url.protocol !== "http:" && url.protocol !== "https:") return DEFAULT_SETTINGS.backendUrl;
+    if (url.protocol !== "http:" && url.protocol !== "https:") return "";
     url.pathname = url.pathname.replace(/\/$/, "");
     url.search = "";
     url.hash = "";
     return url.toString().replace(/\/$/, "");
   } catch {
-    return DEFAULT_SETTINGS.backendUrl;
+    return "";
   }
 }
 
@@ -135,6 +159,14 @@ function normalizeNonEmptyString(value: unknown, fallback: string): string {
   if (typeof value !== "string") return fallback;
   const trimmed = value.trim();
   return trimmed.length ? trimmed : fallback;
+}
+
+function normalizeInteger(value: unknown, min: number, max: number, fallback: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+  const integer = Math.trunc(value);
+  if (integer < min) return fallback;
+  if (integer > max) return max;
+  return integer;
 }
 
 function normalizeSiteSettings(value: unknown): Record<string, SiteSettings> {
@@ -171,5 +203,3 @@ function normalizePathPrefix(value: unknown): string {
   const withSlash = withoutQuery.startsWith("/") ? withoutQuery : `/${withoutQuery}`;
   return withSlash.replace(/\/+$/, "") || "/";
 }
-
-
