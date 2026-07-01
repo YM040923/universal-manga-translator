@@ -15,6 +15,7 @@ import { prioritizeSurfaces, selectSurfacesForMode, type PrioritizedSurface } fr
 import { TranslationStatusCounter } from "./status/job-status-counter";
 import { isRenderableSurfaceResult } from "./translation-result";
 import { getEffectiveSiteSettings, loadSettings, type ExtensionSettings } from "../settings/settings";
+import { appendRuntimeLog } from "../settings/runtime-log";
 
 void bootstrap();
 
@@ -40,6 +41,18 @@ async function bootstrap(): Promise<void> {
     panel.setStatus(text, state);
   }
 
+  function logInfo(message: string, detail?: string): void {
+    void appendRuntimeLog({ level: "info", source: "content", message, ...(detail ? { detail } : {}) });
+  }
+
+  function logWarn(message: string, detail?: string): void {
+    void appendRuntimeLog({ level: "warn", source: "content", message, ...(detail ? { detail } : {}) });
+  }
+
+  function logError(message: string, error: unknown): void {
+    void appendRuntimeLog({ level: "error", source: "content", message, detail: formatShortError(error) });
+  }
+
   function setCountersStatus(): void {
     panel.setStatus(statusCounter.format(), "done");
   }
@@ -60,6 +73,7 @@ async function bootstrap(): Promise<void> {
   function selectedSurfaces(): PrioritizedSurface[] {
     const prioritized = prioritizeSurfaces(detectImageSurfaces(document), viewportRect());
     const selected = selectSurfacesForMode(prioritized, { imageRange: settings.imageRange, maxFullPageSurfaces: settings.maxFullPageSurfaces, pretranslateNextPage: settings.pretranslateNextPage });
+    logInfo("surfaces selected", `detected=${prioritized.length}, selected=${selected.length}, range=${settings.imageRange}, pretranslate=${settings.pretranslateNextPage}`);
     for (const item of selected) debugRenderer.markSurface(item.surface.surfaceId, item.surface.element, "detected", `${item.priority} ${item.surface.kind}`);
     return selected;
   }
@@ -68,18 +82,22 @@ async function bootstrap(): Promise<void> {
     const fresh = selectedSurfaces().filter((item) => submitTracker.shouldSubmit(item.surface.surfaceId));
     if (!fresh.length) {
       setPanelStatus("UMT: no new surfaces", "done");
+      logWarn("no new surfaces to submit");
       return;
     }
     setPanelStatus(`UMT: submitting ${fresh.length}`, "busy");
     await runWithConcurrency(fresh, settings.maxConcurrentSubmissions, async (item) => {
       submitTracker.markSubmitted(item.surface.surfaceId);
+      logInfo("submit surface", `${item.surface.surfaceId} | ${item.surface.kind} | ${Math.round(item.surface.naturalSize.width)}x${Math.round(item.surface.naturalSize.height)} | ${item.priority}`);
       debugRenderer.markSurface(item.surface.surfaceId, item.surface.element, "submitting", `${item.priority} ${item.surface.kind}`);
       try {
         const response = await client.submit(createSurfaceTask(item.surface, item.priority, settings.targetLanguage));
         if (response.ok && isRenderableSurfaceResult(response.result)) {
+          logInfo("render result", `${item.surface.surfaceId} | status=${response.result.status} | regions=${response.result.regions.length}`);
           renderer.render(item.surface.element, item.surface.naturalSize, response.result);
           debugRenderer.markResult(item.surface.element, item.surface.naturalSize, response.result);
         } else {
+          logWarn("direct submit not renderable", `${item.surface.surfaceId} | ok=${response.ok} | status=${response.ok ? response.result?.status : response.error}`);
           debugRenderer.markSurface(item.surface.surfaceId, item.surface.element, response.ok ? "empty" : "failed", "trying screenshot fallback");
           const fallbackRendered = await submitScreenshotFallback(item);
           if (!fallbackRendered) {
@@ -87,7 +105,8 @@ async function bootstrap(): Promise<void> {
             setCountersStatus();
           }
         }
-      } catch {
+      } catch (error) {
+        logError("direct submit failed", error);
         const fallbackRendered = await submitScreenshotFallback(item);
         if (!fallbackRendered) {
           statusCounter.recordFailedResponse(item.surface.surfaceId);
@@ -123,7 +142,8 @@ async function bootstrap(): Promise<void> {
       const screenshotSize = await readImageSize(screenshotDataUrl);
       return await submitScreenshotFallbackAttempt(item, screenshotDataUrl, screenshotSize, 1)
         || await submitScreenshotFallbackAttempt(item, screenshotDataUrl, screenshotSize, 2);
-    } catch {
+    } catch (error) {
+      logError("screenshot fallback failed", error);
       return false;
     }
   }
@@ -139,19 +159,25 @@ async function bootstrap(): Promise<void> {
       upscale,
     });
     debugRenderer.markSurface(item.surface.surfaceId, item.surface.element, "fallback", `${upscale}x screenshot`);
+    logInfo("submit screenshot fallback", `${item.surface.surfaceId} | upscale=${upscale} | crop=${Math.round(screenshotSurface.naturalSize.width)}x${Math.round(screenshotSurface.naturalSize.height)}`);
     const retry = await client.submit(createSurfaceTask(screenshotSurface, item.priority, settings.targetLanguage));
     if (retry.ok && isRenderableSurfaceResult(retry.result)) {
+      logInfo("render screenshot fallback", `${item.surface.surfaceId} | regions=${retry.result.regions.length}`);
       const anchor = createRectOverlayAnchor(screenshotSurface.rect);
       renderer.render(anchor, screenshotSurface.naturalSize, retry.result);
       debugRenderer.markResult(anchor, screenshotSurface.naturalSize, retry.result);
       return true;
     }
-    if (retry.ok && retry.result?.status === "empty") debugRenderer.markSurface(item.surface.surfaceId, item.surface.element, "empty", `${upscale}x fallback empty`);
+    if (retry.ok && retry.result?.status === "empty") {
+      logWarn("screenshot fallback empty", `${item.surface.surfaceId} | upscale=${upscale}`);
+      debugRenderer.markSurface(item.surface.surfaceId, item.surface.element, "empty", `${upscale}x fallback empty`);
+    }
     return false;
   }
   function scan(): void {
     const prioritized = prioritizeSurfaces(detectImageSurfaces(document), viewportRect());
     setPanelStatus(`UMT: found ${prioritized.length} manga surfaces`);
+    logInfo("scan page", `found=${prioritized.length}`);
   }
 
   function togglePause(): void {
@@ -202,16 +228,20 @@ async function bootstrap(): Promise<void> {
         surfaceId: `manual:${Date.now()}:${Math.round(rect.x)}:${Math.round(rect.y)}`,
         element: document.body,
       });
+      logInfo("submit manual region", `${Math.round(rect.width)}x${Math.round(rect.height)}`);
       const response = await client.submit(createSurfaceTask(surface, "p0", settings.targetLanguage));
       if (response.ok && isRenderableSurfaceResult(response.result)) {
         renderer.render(createRectOverlayAnchor(rect), surface.naturalSize, response.result);
+        logInfo("render manual region", `regions=${response.result.regions.length}`);
         setPanelStatus("UMT: manual region translated", "done");
       } else if (response.ok && response.result?.status === "empty") {
+        logWarn("manual region empty");
         setPanelStatus("UMT: manual region has no readable text", "done");
       } else {
         setPanelStatus("UMT: manual region failed", "error");
       }
     } catch (error) {
+      logError("manual region failed", error);
       setPanelStatus(`UMT: screenshot failed: ${formatShortError(error)}`, "error");
     }
   }
@@ -234,6 +264,7 @@ async function bootstrap(): Promise<void> {
     const previousTimeoutMs = settings.requestTimeoutMs;
     const previousRetryCount = settings.retryCount;
     settings = await loadSettings();
+    logInfo("settings reloaded", `backend=${settings.backendUrl}, target=${settings.targetLanguage}, debug=${settings.debugOverlayEnabled}`);
     debugRenderer.setEnabled(settings.debugOverlayEnabled);
     if (settings.backendUrl !== previousBackendUrl || settings.requestTimeoutMs !== previousTimeoutMs || settings.retryCount !== previousRetryCount) client = createClient(settings);
     if (settings.targetLanguage !== previousTargetLanguage || settings.backendUrl !== previousBackendUrl) renderer = createRenderer(settings, client);
@@ -249,6 +280,7 @@ async function bootstrap(): Promise<void> {
   });
 
   panel.mount();
+  logInfo("content script started", `${location.hostname} | backend=${settings.backendUrl} | target=${settings.targetLanguage}`);
   updatePanelForSettings();
 
   const pageChangeObserver = new PageChangeObserver(document, {
@@ -265,12 +297,14 @@ async function bootstrap(): Promise<void> {
       statusCounter.recordEvent(event);
       setCountersStatus();
     });
-  } catch {
+  } catch (error) {
+    logError("event stream unavailable", error);
     setPanelStatus("UMT: event stream unavailable", "error");
   }
 
   void client.health().then((ok) => {
     setPanelStatus(ok ? settingsStatus(settings, shouldAutoTranslate()) : "UMT: backend offline", ok ? "idle" : "offline");
+    logInfo("backend health", ok ? "connected" : "offline");
     if (ok && shouldAutoTranslate()) autoScheduler.requestRun("load");
   });
 

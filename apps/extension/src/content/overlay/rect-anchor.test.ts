@@ -6,6 +6,9 @@ import { createRectOverlayAnchor } from "./rect-anchor.js";
 test("createRectOverlayAnchor exposes a stable viewport rect for screenshot overlays", () => {
   const dom = new JSDOM("<body></body>");
   globalThis.document = dom.window.document;
+  globalThis.window = dom.window as unknown as Window & typeof globalThis;
+  Object.defineProperty(window, "scrollX", { value: 0, configurable: true });
+  Object.defineProperty(window, "scrollY", { value: 0, configurable: true });
   const anchor = createRectOverlayAnchor({ x: 12, y: 34, width: 200, height: 300 });
   const rect = anchor.getBoundingClientRect();
 
@@ -17,4 +20,21 @@ test("createRectOverlayAnchor exposes a stable viewport rect for screenshot over
   assert.equal(rect.bottom, 334);
   assert.equal(rect.width, 200);
   assert.equal(rect.height, 300);
+});
+
+test("createRectOverlayAnchor stays attached to document content when the page scrolls", () => {
+  const dom = new JSDOM("<body></body>");
+  globalThis.document = dom.window.document;
+  globalThis.window = dom.window as unknown as Window & typeof globalThis;
+  Object.defineProperty(window, "scrollX", { value: 0, configurable: true });
+  Object.defineProperty(window, "scrollY", { value: 100, configurable: true });
+
+  const anchor = createRectOverlayAnchor({ x: 20, y: 50, width: 120, height: 80 });
+  assert.equal(anchor.getBoundingClientRect().top, 50);
+
+  Object.defineProperty(window, "scrollY", { value: 160, configurable: true });
+  const afterScroll = anchor.getBoundingClientRect();
+
+  assert.equal(afterScroll.top, -10);
+  assert.equal(afterScroll.bottom, 70);
 });

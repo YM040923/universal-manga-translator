@@ -36,7 +36,7 @@ export class OpenAIVisionProvider implements VisionProvider {
         messages: [{
           role: "user",
           content: [
-            { type: "text", text: buildVisionPrompt(this.options.targetLanguage) },
+            { type: "text", text: buildVisionPrompt(input.task.targetLanguage || this.options.targetLanguage) },
             this.options.imageInputFormat === "image-field"
               ? { type: "image", image: imageUrl }
               : { type: "image_url", image_url: { url: imageUrl } },

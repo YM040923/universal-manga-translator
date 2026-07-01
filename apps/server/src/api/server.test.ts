@@ -285,3 +285,22 @@ test("diagnostics note marks all provider boxes filtered", async () => {
   assert.equal(records.at(-1)?.filteredRegionCount, 1);
   await app.close();
 });
+
+test("self test endpoint verifies provider submit flow", async () => {
+  const app = await buildServer({
+    provider: "mock",
+    targetLanguage: "zh-CN",
+    visionProvider: { profile: "mock", process: async () => [{ id: "r1", box: { x: 10, y: 10, width: 100, height: 50 }, sourceText: "Hello", translatedText: "你好", confidence: 1, orientation: "horizontal", kind: "dialogue" }] },
+  });
+
+  const response = await app.inject({ method: "POST", url: "/v1/self-test" });
+
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.json().ok, true);
+  assert.equal(response.json().provider, "mock");
+  assert.equal(response.json().providerProfile, "mock");
+  assert.equal(response.json().sample.status, "completed");
+  assert.equal(response.json().sample.regionCount, 1);
+  assert.deepEqual(response.json().steps.map((step: any) => step.name), ["backend", "provider", "sample-submit", "regions"]);
+  await app.close();
+});

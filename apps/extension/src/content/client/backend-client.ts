@@ -1,5 +1,14 @@
-import type { ApiResponse, CacheStatsResponse, CancelSurfaceRequest, CancelSurfaceResponse, ClearCacheResponse, ConfigStatusResponse, ManualOverridePayload, SaveManualOverrideRequest, SaveManualOverrideResponse, ServerEvent, SubmitSurfaceRequest, SubmitSurfaceResponse } from "@umt/shared/protocol";
+﻿import type { ApiResponse, CacheStatsResponse, CancelSurfaceRequest, CancelSurfaceResponse, ClearCacheResponse, ConfigStatusResponse, ManualOverridePayload, SaveManualOverrideRequest, SaveManualOverrideResponse, ServerEvent, SubmitSurfaceRequest, SubmitSurfaceResponse } from "@umt/shared/protocol";
 import type { SurfaceTask } from "@umt/shared/types";
+
+export interface SelfTestResponse {
+  ok: true;
+  provider: string;
+  providerProfile: string;
+  targetLanguage: string;
+  steps: Array<{ name: string; ok: boolean; detail: string }>;
+  sample: { status: string; regionCount: number; elapsedMs: number };
+}
 
 export function createEventUrl(baseUrl: string): string {
   const url = new URL(baseUrl);
@@ -57,6 +66,11 @@ export class BackendClient {
   async configStatus(): Promise<ApiResponse<ConfigStatusResponse>> {
     const response = await fetch(`${this.baseUrl}/v1/config/status`, { cache: "no-store" });
     return (await response.json()) as ApiResponse<ConfigStatusResponse>;
+  }
+
+  async selfTest(): Promise<ApiResponse<SelfTestResponse>> {
+    const response = await fetch(`${this.baseUrl}/v1/self-test`, { method: "POST", cache: "no-store" });
+    return (await response.json()) as ApiResponse<SelfTestResponse>;
   }
 
   async submit(task: SurfaceTask): Promise<ApiResponse<SubmitSurfaceResponse>> {

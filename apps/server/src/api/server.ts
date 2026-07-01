@@ -14,6 +14,7 @@ import { MockProvider } from "../providers/mock-provider.js";
 import type { VisionProvider } from "../providers/provider.js";
 import { NullDiagnosticsWriter, type DiagnosticsWriter } from "./diagnostics.js";
 import { EventBus } from "./events.js";
+import { createSelfTestTask, type SelfTestReport, type SelfTestStep } from "./self-test.js";
 
 export interface BuildServerOptions {
   provider: string;
@@ -134,6 +135,33 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
       return { ok: false, error: failed.error, result: failed };
     }
   };
+
+  app.post("/v1/self-test", async () => {
+    const steps: SelfTestStep[] = [
+      { name: "backend", ok: true, detail: "HTTP server is reachable" },
+      { name: "provider", ok: true, detail: provider.profile },
+    ];
+    const submitted = await processSurface(createSelfTestTask(options.targetLanguage), true);
+    const result = submitted.result;
+    const completedResult = result && result.status !== "failed" ? result : undefined;
+    const regionCount = completedResult?.regions.length ?? 0;
+    const submitDetail = submitted.ok ? String(submitted.status) : "error" in submitted ? submitted.error : "unknown error";
+    steps.push({ name: "sample-submit", ok: submitted.ok, detail: submitDetail });
+    steps.push({ name: "regions", ok: regionCount > 0, detail: `${regionCount} regions` });
+    const report: SelfTestReport = {
+      ok: true,
+      provider: options.provider,
+      providerProfile: provider.profile,
+      targetLanguage: options.targetLanguage,
+      steps,
+      sample: {
+        status: result?.status ?? "failed",
+        regionCount,
+        elapsedMs: completedResult?.elapsedMs ?? 0,
+      },
+    };
+    return report;
+  });
 
   app.post<{ Body: { task: SurfaceTask } }>("/v1/surfaces/submit", async (request) => {
     return processSurface(request.body.task);

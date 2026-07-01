@@ -191,3 +191,40 @@ test("parseRegionsFromContent returns empty regions for unparseable model chatte
 
   assert.deepEqual(parsed, []);
 });
+
+test("provider prompt uses per-task target language from submitted surface", async () => {
+  const originalFetch = globalThis.fetch;
+  let prompt = "";
+  globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body)) as { messages: Array<{ content: Array<{ type: string; text?: string }> }> };
+    prompt = body.messages[0]?.content.find((part) => part.type === "text")?.text ?? "";
+    return new Response(JSON.stringify({ choices: [{ message: { content: '{"regions":[]}' } }] }), { status: 200, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+
+  try {
+    const provider = new OpenAIVisionProvider({ baseUrl: "https://api.example.test/v1", apiKey: "test", model: "vision", targetLanguage: "zh-CN" });
+    await provider.process({
+      task: {
+        surfaceId: "s1",
+        pageUrl: "https://example.test",
+        domain: "example.test",
+        viewportPriority: "p0",
+        surfaceRect: { x: 0, y: 0, width: 10, height: 10 },
+        naturalSize: { width: 10, height: 10 },
+        renderSize: { width: 10, height: 10 },
+        readingDirection: "auto",
+        sourceLanguage: "auto",
+        targetLanguage: "en",
+      },
+      imageBuffer: Buffer.from("fake"),
+      imageHash: "hash",
+      width: 100,
+      height: 100,
+    });
+
+    assert.match(prompt, /translate it to en/);
+    assert.doesNotMatch(prompt, /translate it to zh-CN/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

@@ -38,5 +38,5 @@ function installDom(dom: JSDOM): void {
 }
 
 async function tick(): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, 5));
+  await new Promise((resolve) => setTimeout(resolve, 30));
 }

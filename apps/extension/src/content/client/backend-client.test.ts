@@ -132,3 +132,25 @@ function fakeTask() {
     targetLanguage: "zh-CN",
   };
 }
+
+
+test("BackendClient runs backend self test", async () => {
+  const calls: Array<{ url: string; init: RequestInit | undefined }> = [];
+  globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+    calls.push({ url: String(url), init });
+    return new Response(JSON.stringify({
+      ok: true,
+      provider: "mock",
+      providerProfile: "mock",
+      targetLanguage: "zh-CN",
+      steps: [{ name: "backend", ok: true, detail: "ok" }],
+      sample: { status: "completed", regionCount: 1, elapsedMs: 12 },
+    }), { status: 200, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+
+  const response = await new BackendClient("http://127.0.0.1:47831").selfTest();
+
+  assert.equal(calls[0]?.url, "http://127.0.0.1:47831/v1/self-test");
+  assert.equal(calls[0]?.init?.method, "POST");
+  assert.equal(response.ok && response.sample.regionCount, 1);
+});

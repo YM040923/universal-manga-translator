@@ -1,4 +1,4 @@
-import test from "node:test";
+﻿import test from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
 import { mountOptionsPage, type OptionsPageDeps } from "./main.js";
@@ -10,17 +10,21 @@ test("settings page renders backend provider defaults and performance sections",
 
   assert.equal(document.querySelector("[data-section='backend']") !== null, true);
   assert.equal(document.querySelector("[data-section='provider']") !== null, true);
+  assert.equal(document.querySelector("[data-section='self-test']") !== null, true);
   assert.equal(document.querySelector("[data-section='defaults']") !== null, true);
   assert.equal(document.querySelector("[data-section='performance']") !== null, true);
+  assert.equal(document.querySelector("[data-section='runtime-logs']") !== null, true);
   const text = document.body.textContent ?? "";
   assert.match(text, /\u540e\u7aef\u8fde\u63a5/u);
   assert.match(text, /\u63d0\u4f9b\u5546/u);
+  assert.match(text, /\u7aef\u5230\u7aef\u81ea\u68c0/u);
   assert.match(text, /\u7ffb\u8bd1\u9ed8\u8ba4\u503c/u);
   assert.match(text, /\u6027\u80fd/u);
-  assert.match(text, /API key \u5bc6\u94a5/u);
-  assert.match(text, /OpenAI \u517c\u5bb9 Base URL/u);
+  assert.match(text, /API key/u);
+  assert.match(text, /Base URL/u);
   assert.match(text, /\.\/scripts\/start-backend\.ps1/);
-  assert.match(text, /\u5f53\u524d\u9875\u9762\u7f13\u5b58/u);
+  assert.match(text, /\u540e\u7aef\u6301\u4e45\u7f13\u5b58/u);
+  assert.match(text, /\u524d\u7aef\u8fd0\u884c\u65e5\u5fd7/u);
   assert.doesNotMatch(text, /Backend connection|Provider \/ model|Translation defaults|Performance \/ cache|Save settings|Not checked/);
   assert.doesNotMatch(text, /\\u[0-9a-fA-F]{4}/);
 });
@@ -49,7 +53,7 @@ test("settings page saves advanced fields while preserving site settings", async
   setValue("retryCount", "3");
 
   document.querySelector<HTMLButtonElement>("button[type='submit']")!.click();
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  await waitAsync();
 
   assert.equal(storage.saved.backendUrl, "http://127.0.0.1:5000");
   assert.equal(storage.saved.providerProfile, "openai-compatible");
@@ -73,9 +77,117 @@ test("settings page checks backend health", async () => {
   await mountOptionsPage(document.querySelector<HTMLElement>("#app")!, deps({ checkBackend: async () => true }));
 
   document.querySelector<HTMLButtonElement>("[data-action='check-backend']")!.click();
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  await waitAsync();
 
   assert.equal(document.querySelector<HTMLElement>("[data-backend-health]")?.textContent, "\u5df2\u8fde\u63a5");
+});
+
+test("settings page displays backend provider status without secrets", async () => {
+  setupDom();
+  await mountOptionsPage(document.querySelector<HTMLElement>("#app")!, deps({
+    configStatus: async () => ({
+      ok: true,
+      provider: "openai-compatible",
+      targetLanguage: "zh-CN",
+      providerProfile: "openai-compatible:gpt-4.1-mini",
+      openAICompatible: { baseUrl: "https://api.openai.com/v1", model: "gpt-4.1-mini", apiKeyConfigured: true },
+    }),
+  }));
+
+  document.querySelector<HTMLButtonElement>("[data-action='check-provider']")!.click();
+  await waitAsync();
+
+  const status = document.querySelector<HTMLElement>("[data-provider-status]")?.textContent ?? "";
+  assert.match(status, /openai-compatible/);
+  assert.match(status, /gpt-4\.1-mini/);
+  assert.match(status, /API key \u5df2\u914d\u7f6e/u);
+  assert.doesNotMatch(status, /sk-/);
+});
+
+test("settings page shows cache stats and clears backend cache", async () => {
+  setupDom();
+  let cleared = false;
+  await mountOptionsPage(document.querySelector<HTMLElement>("#app")!, deps({
+    cacheStats: async () => ({ ok: true, stats: { entries: 3, bytes: 2048, updatedAt: 123 } }),
+    clearCache: async () => { cleared = true; return { ok: true, deleted: 3 }; },
+  }));
+
+  document.querySelector<HTMLButtonElement>("[data-action='cache-stats']")!.click();
+  await waitAsync();
+  assert.match(document.querySelector<HTMLElement>("[data-cache-status]")?.textContent ?? "", /3/);
+  assert.match(document.querySelector<HTMLElement>("[data-cache-status]")?.textContent ?? "", /2 KB/);
+
+  document.querySelector<HTMLButtonElement>("[data-action='clear-cache']")!.click();
+  await waitAsync();
+  assert.equal(cleared, true);
+  assert.match(document.querySelector<HTMLElement>("[data-cache-status]")?.textContent ?? "", /\u5df2\u6e05\u7406 3/u);
+});
+
+test("settings page shows recent diagnostics", async () => {
+  setupDom();
+  await mountOptionsPage(document.querySelector<HTMLElement>("#app")!, deps({
+    diagnostics: async () => ({ ok: true, records: [{ surfaceId: "s1", status: "empty", finalRegionCount: 0 }] }),
+  }));
+
+  document.querySelector<HTMLButtonElement>("[data-action='diagnostics']")!.click();
+  await waitAsync();
+
+  const text = document.querySelector<HTMLElement>("[data-diagnostics-status]")?.textContent ?? "";
+  assert.match(text, /s1/);
+  assert.match(text, /empty/);
+});
+
+test("settings page shows filtered diagnostics details", async () => {
+  setupDom();
+  await mountOptionsPage(document.querySelector<HTMLElement>("#app")!, deps({
+    diagnostics: async () => ({ ok: true, records: [{ surfaceId: "s2", status: "empty", finalRegionCount: 0, filteredRegionCount: 2, note: "filtered invalid or out-of-bounds boxes" }] }),
+  }));
+
+  document.querySelector<HTMLButtonElement>("[data-action='diagnostics']")!.click();
+  await waitAsync();
+
+  const text = document.querySelector<HTMLElement>("[data-diagnostics-status]")?.textContent ?? "";
+  assert.match(text, /filtered 2/);
+  assert.match(text, /out-of-bounds/);
+});
+
+test("settings page runs end-to-end self test", async () => {
+  setupDom();
+  await mountOptionsPage(document.querySelector<HTMLElement>("#app")!, deps({
+    selfTest: async () => ({
+      ok: true,
+      provider: "openai-compatible",
+      providerProfile: "openai-compatible:gpt-5.4-mini",
+      targetLanguage: "zh-CN",
+      steps: [
+        { name: "backend", ok: true, detail: "HTTP server is reachable" },
+        { name: "regions", ok: true, detail: "1 regions" },
+      ],
+      sample: { status: "completed", regionCount: 1, elapsedMs: 123 },
+    }),
+  }));
+
+  document.querySelector<HTMLButtonElement>("[data-action='self-test']")!.click();
+  await waitAsync();
+
+  const text = document.querySelector<HTMLElement>("[data-self-test-status]")?.textContent ?? "";
+  assert.match(text, /openai-compatible/);
+  assert.match(text, /completed \| 1 regions/);
+  assert.match(text, /backend/);
+});
+
+test("settings page refreshes and clears frontend runtime logs", async () => {
+  setupDom();
+  const logStorage = fakeLogStorage([{ ts: 1, level: "info", source: "content", message: "detected 2 surfaces" }]);
+  await mountOptionsPage(document.querySelector<HTMLElement>("#app")!, deps({ logStorage }));
+
+  document.querySelector<HTMLButtonElement>("[data-action='refresh-logs']")!.click();
+  await waitAsync();
+  assert.match(document.querySelector<HTMLElement>("[data-runtime-log-status]")?.textContent ?? "", /detected 2 surfaces/);
+
+  document.querySelector<HTMLButtonElement>("[data-action='clear-logs']")!.click();
+  await waitAsync();
+  assert.match(document.querySelector<HTMLElement>("[data-runtime-log-status]")?.textContent ?? "", /\u6682\u65e0\u8fd0\u884c\u65e5\u5fd7/u);
 });
 
 function setupDom(): void {
@@ -89,6 +201,8 @@ function deps(options: {
   storage?: SettingsStorageArea;
   checkBackend?: (backendUrl: string) => Promise<boolean>;
   configStatus?: OptionsPageDeps["configStatus"];
+  selfTest?: OptionsPageDeps["selfTest"];
+  logStorage?: OptionsPageDeps["logStorage"];
   cacheStats?: OptionsPageDeps["cacheStats"];
   clearCache?: OptionsPageDeps["clearCache"];
   diagnostics?: OptionsPageDeps["diagnostics"];
@@ -96,6 +210,8 @@ function deps(options: {
   const result: OptionsPageDeps = { storage: options.storage ?? fakeStorage(DEFAULT_SETTINGS) };
   if (options.checkBackend) result.checkBackend = options.checkBackend;
   if (options.configStatus) result.configStatus = options.configStatus;
+  if (options.selfTest) result.selfTest = options.selfTest;
+  if (options.logStorage) result.logStorage = options.logStorage;
   if (options.cacheStats) result.cacheStats = options.cacheStats;
   if (options.clearCache) result.clearCache = options.clearCache;
   if (options.diagnostics) result.diagnostics = options.diagnostics;
@@ -114,81 +230,18 @@ function setChecked(name: string, checked: boolean): void {
 function fakeStorage(initial: ExtensionSettings): SettingsStorageArea & { saved: ExtensionSettings } {
   return {
     saved: structuredClone(initial),
-    async get() {
-      return this.saved as unknown as Record<string, unknown>;
-    },
-    async set(value: Record<string, unknown>) {
-      this.saved = { ...this.saved, ...value } as ExtensionSettings;
-    },
+    async get() { return this.saved as unknown as Record<string, unknown>; },
+    async set(value: Record<string, unknown>) { this.saved = { ...this.saved, ...value } as ExtensionSettings; },
   };
 }
 
-test("settings page displays backend provider status without secrets", async () => {
-  setupDom();
-  await mountOptionsPage(document.querySelector<HTMLElement>("#app")!, deps({
-    configStatus: async () => ({
-      ok: true,
-      provider: "openai-compatible",
-      targetLanguage: "zh-CN",
-      providerProfile: "openai-compatible:gpt-4.1-mini",
-      openAICompatible: { baseUrl: "https://api.openai.com/v1", model: "gpt-4.1-mini", apiKeyConfigured: true },
-    }),
-  }));
+function fakeLogStorage(logs: unknown[]): OptionsPageDeps["logStorage"] {
+  return {
+    async get() { return { runtimeLogs: logs }; },
+    async set(value: Record<string, unknown>) { logs = value.runtimeLogs as unknown[]; },
+  };
+}
 
-  document.querySelector<HTMLButtonElement>("[data-action='check-provider']")!.click();
+async function waitAsync(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 0));
-
-  const status = document.querySelector<HTMLElement>("[data-provider-status]")?.textContent ?? "";
-  assert.match(status, /openai-compatible/);
-  assert.match(status, /gpt-4\.1-mini/);
-  assert.match(status, /API key 已配置/);
-  assert.doesNotMatch(status, /sk-/);
-});
-
-test("settings page shows cache stats and clears backend cache", async () => {
-  setupDom();
-  let cleared = false;
-  await mountOptionsPage(document.querySelector<HTMLElement>("#app")!, deps({
-    cacheStats: async () => ({ ok: true, stats: { entries: 3, bytes: 2048, updatedAt: 123 } }),
-    clearCache: async () => { cleared = true; return { ok: true, deleted: 3 }; },
-  }));
-
-  document.querySelector<HTMLButtonElement>("[data-action='cache-stats']")!.click();
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  assert.match(document.querySelector<HTMLElement>("[data-cache-status]")?.textContent ?? "", /3/);
-  assert.match(document.querySelector<HTMLElement>("[data-cache-status]")?.textContent ?? "", /2 KB/);
-
-  document.querySelector<HTMLButtonElement>("[data-action='clear-cache']")!.click();
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  assert.equal(cleared, true);
-  assert.match(document.querySelector<HTMLElement>("[data-cache-status]")?.textContent ?? "", /已清理 3/);
-});
-
-test("settings page shows recent diagnostics", async () => {
-  setupDom();
-  await mountOptionsPage(document.querySelector<HTMLElement>("#app")!, deps({
-    diagnostics: async () => ({ ok: true, records: [{ surfaceId: "s1", status: "empty", finalRegionCount: 0 }] }),
-  }));
-
-  document.querySelector<HTMLButtonElement>("[data-action='diagnostics']")!.click();
-  await new Promise((resolve) => setTimeout(resolve, 0));
-
-  const text = document.querySelector<HTMLElement>("[data-diagnostics-status]")?.textContent ?? "";
-  assert.match(text, /s1/);
-  assert.match(text, /empty/);
-});
-
-
-test("settings page shows filtered diagnostics details", async () => {
-  setupDom();
-  await mountOptionsPage(document.querySelector<HTMLElement>("#app")!, deps({
-    diagnostics: async () => ({ ok: true, records: [{ surfaceId: "s2", status: "empty", finalRegionCount: 0, filteredRegionCount: 2, note: "filtered invalid or out-of-bounds boxes" }] }),
-  }));
-
-  document.querySelector<HTMLButtonElement>("[data-action='diagnostics']")!.click();
-  await new Promise((resolve) => setTimeout(resolve, 0));
-
-  const text = document.querySelector<HTMLElement>("[data-diagnostics-status]")?.textContent ?? "";
-  assert.match(text, /filtered 2/);
-  assert.match(text, /out-of-bounds/);
-});
+}
