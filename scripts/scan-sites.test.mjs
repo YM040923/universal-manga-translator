@@ -1,0 +1,23 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { scoreCandidate, summarizeCandidates } from "./scan-sites.mjs";
+
+test("scoreCandidate gives high score to large vertical manga-like images", () => {
+  const candidate = { kind: "image", width: 800, height: 1200, url: "https://example.test/chapter/page-001.jpg" };
+  assert.equal(scoreCandidate(candidate) >= 6, true);
+});
+
+test("scoreCandidate gives low score to tiny icons", () => {
+  const candidate = { kind: "image", width: 32, height: 32, url: "https://example.test/icon.png" };
+  assert.equal(scoreCandidate(candidate) < 6, true);
+});
+
+test("summarizeCandidates counts likely surfaces by kind", () => {
+  const summary = summarizeCandidates([
+    { kind: "image", width: 800, height: 1200, url: "/page.jpg" },
+    { kind: "background", width: 760, height: 1180, url: "/bg-page.jpg" },
+    { kind: "image", width: 32, height: 32, url: "/icon.png" },
+  ]);
+  assert.deepEqual(summary.byKind, { image: 1, background: 1 });
+  assert.equal(summary.likelySurfaceCount, 2);
+});

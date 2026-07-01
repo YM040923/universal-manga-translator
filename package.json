@@ -10,7 +10,8 @@
                     "dev:server":  "pnpm --filter @umt/server dev",
                     "dev:extension":  "pnpm --filter @umt/extension dev",
                     "test:e2e":  "playwright test tests/integration",
-                    "doctor":  "node scripts/doctor.mjs"
+                    "doctor":  "node scripts/doctor.mjs",
+                    "scan:sites":  "node scripts/scan-sites.mjs"
                 },
     "devDependencies":  {
                             "@playwright/test":  "^1.45.0",
