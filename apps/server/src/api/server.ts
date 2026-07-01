@@ -1,8 +1,10 @@
 import cors from "@fastify/cors";
 import websocket from "@fastify/websocket";
 import Fastify, { type FastifyInstance } from "fastify";
-import type { SurfaceResult, SurfaceTask } from "@umt/shared";
+import type { SaveManualOverrideRequest, SurfaceResult, SurfaceTask } from "@umt/shared";
 import { buildCacheKey, sha256Hex } from "@umt/shared/hashing";
+import type { ManualOverrideStore } from "../cache/manual-overrides.js";
+import { applyManualOverrides } from "../cache/manual-overrides.js";
 import type { SurfaceCache } from "../cache/surface-cache.js";
 import { readTaskImage } from "../image/image-input.js";
 import { normalizeForProvider } from "../image/normalize.js";
@@ -16,6 +18,7 @@ export interface BuildServerOptions {
   targetLanguage: string;
   visionProvider?: VisionProvider;
   surfaceCache?: SurfaceCache;
+  manualOverrideStore?: ManualOverrideStore;
   eventBus?: EventBus;
   maxImageLongEdge?: number;
   jpegQuality?: number;
@@ -27,6 +30,7 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
   const eventBus = options.eventBus ?? new EventBus();
   const memoryCache = new Map<string, SurfaceResult>();
   const surfaceCache = options.surfaceCache;
+  const manualOverrideStore = options.manualOverrideStore;
 
   await app.register(cors, { origin: true });
   await app.register(websocket);
@@ -37,6 +41,18 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
   });
 
   app.get("/health", async () => ({ ok: true, provider: options.provider, targetLanguage: options.targetLanguage }));
+
+  app.post<{ Body: SaveManualOverrideRequest }>("/v1/overrides", async (request) => {
+    const override = request.body;
+    manualOverrideStore?.save(override);
+    return { ok: true, override };
+  });
+
+  app.get<{ Querystring: { imageHash?: string; targetLanguage?: string } }>("/v1/overrides", async (request) => {
+    const imageHash = request.query.imageHash ?? "";
+    const targetLanguage = request.query.targetLanguage ?? options.targetLanguage;
+    return { ok: true, overrides: manualOverrideStore?.listForImage(imageHash, targetLanguage) ?? [] };
+  });
 
   app.post<{ Body: { task: SurfaceTask } }>("/v1/surfaces/submit", async (request) => {
     const started = Date.now();
@@ -50,13 +66,14 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
       const cached = surfaceCache?.get(cacheKey) ?? memoryCache.get(cacheKey);
       if (cached) {
         const cachedForSurface: SurfaceResult = { ...cached, surfaceId: task.surfaceId, status: "cached" };
-        eventBus.publish({ type: "job.cached", surfaceId: task.surfaceId, result: cachedForSurface });
-        return { ok: true, surfaceId: task.surfaceId, status: "cached", result: cachedForSurface };
+        const result = applyStoredOverrides(cachedForSurface, task.targetLanguage, manualOverrideStore);
+        eventBus.publish({ type: "job.cached", surfaceId: task.surfaceId, result });
+        return { ok: true, surfaceId: task.surfaceId, status: "cached", result };
       }
 
       eventBus.publish({ type: "job.processing", surfaceId: task.surfaceId });
       const regions = await provider.process({ task, imageBuffer: normalized.buffer, imageHash, width: normalized.width, height: normalized.height });
-      const result: SurfaceResult = {
+      const rawResult: SurfaceResult = {
         surfaceId: task.surfaceId,
         imageHash,
         status: regions.length ? "completed" : "empty",
@@ -65,8 +82,9 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
         layoutVersion: LAYOUT_VERSION,
         elapsedMs: Date.now() - started,
       };
-      memoryCache.set(cacheKey, result);
-      surfaceCache?.save(cacheKey, result);
+      memoryCache.set(cacheKey, rawResult);
+      surfaceCache?.save(cacheKey, rawResult);
+      const result = applyStoredOverrides(rawResult, task.targetLanguage, manualOverrideStore);
       eventBus.publish({ type: "job.completed", surfaceId: task.surfaceId, result });
       return { ok: true, surfaceId: task.surfaceId, status: result.status, result };
     } catch (error) {
@@ -79,3 +97,6 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
   return app;
 }
 
+function applyStoredOverrides(result: SurfaceResult, targetLanguage: string, manualOverrideStore?: ManualOverrideStore): SurfaceResult {
+  return manualOverrideStore ? applyManualOverrides(result, manualOverrideStore.listForImage(result.imageHash, targetLanguage)) : result;
+}

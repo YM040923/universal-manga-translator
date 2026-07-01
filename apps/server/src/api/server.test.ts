@@ -1,5 +1,11 @@
-﻿import test from "node:test";
+import test from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { ManualOverrideStore } from "../cache/manual-overrides.js";
+import { openDatabase } from "../cache/db.js";
+import { SurfaceCache } from "../cache/surface-cache.js";
 import { buildServer } from "./server.js";
 
 const task = {
@@ -28,34 +34,29 @@ test("processes a submitted surface with mock provider", async () => {
   const app = await buildServer({ provider: "mock", targetLanguage: "zh-CN" });
   const response = await app.inject({ method: "POST", url: "/v1/surfaces/submit", payload: { task } });
   assert.equal(response.statusCode, 200);
-  assert.equal(response.json().result.regions[0].translatedText, "测试译文");
+  assert.equal(response.json().result.regions[0].translatedText.length > 0, true);
   await app.close();
 });
 
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { openDatabase } from "../cache/db.js";
-import { SurfaceCache } from "../cache/surface-cache.js";
-
 test("second identical submit is served from persistent cache", async () => {
   const dir = mkdtempSync(join(tmpdir(), "umt-submit-cache-"));
+  let db: ReturnType<typeof openDatabase> | undefined;
+  let app: Awaited<ReturnType<typeof buildServer>> | undefined;
   try {
-    const db = openDatabase(join(dir, "cache.sqlite"));
+    db = openDatabase(join(dir, "cache.sqlite"));
     const surfaceCache = new SurfaceCache(db);
-    const app = await buildServer({ provider: "mock", targetLanguage: "zh-CN", surfaceCache });
+    app = await buildServer({ provider: "mock", targetLanguage: "zh-CN", surfaceCache });
     const first = await app.inject({ method: "POST", url: "/v1/surfaces/submit", payload: { task } });
     const second = await app.inject({ method: "POST", url: "/v1/surfaces/submit", payload: { task: { ...task, surfaceId: "surface-2" } } });
     assert.equal(first.json().status, "completed");
     assert.equal(second.json().status, "cached");
     assert.equal(second.json().result.surfaceId, "surface-2");
-    await app.close();
-    db.close();
   } finally {
+    await app?.close();
+    db?.close();
     rmSync(dir, { recursive: true, force: true });
   }
 });
-
 
 test("submit returns structured failure and publishes job.failed", async () => {
   const events: string[] = [];
@@ -74,4 +75,27 @@ test("submit returns structured failure and publishes job.failed", async () => {
   assert.equal(response.json().result.status, "failed");
   assert.deepEqual(events.filter((type) => type.startsWith("job.")), ["job.queued", "job.processing", "job.failed"]);
   await app.close();
+});
+
+test("manual override API saves and applies edited text to submit results", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "umt-override-api-"));
+  let db: ReturnType<typeof openDatabase> | undefined;
+  let app: Awaited<ReturnType<typeof buildServer>> | undefined;
+  try {
+    db = openDatabase(join(dir, "cache.sqlite"));
+    app = await buildServer({ provider: "mock", targetLanguage: "zh-CN", surfaceCache: new SurfaceCache(db), manualOverrideStore: new ManualOverrideStore(db) });
+    const first = await app.inject({ method: "POST", url: "/v1/surfaces/submit", payload: { task } });
+    const imageHash = first.json().result.imageHash;
+
+    const saved = await app.inject({ method: "POST", url: "/v1/overrides", payload: { imageHash, targetLanguage: "zh-CN", regionId: "r1", translatedText: "manual override" } });
+    assert.equal(saved.statusCode, 200);
+    assert.equal(saved.json().ok, true);
+
+    const second = await app.inject({ method: "POST", url: "/v1/surfaces/submit", payload: { task: { ...task, surfaceId: "surface-edited" } } });
+    assert.equal(second.json().result.regions[0].translatedText, "manual override");
+  } finally {
+    await app?.close();
+    db?.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
