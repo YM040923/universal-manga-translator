@@ -1,4 +1,4 @@
-import test from "node:test";
+﻿import test from "node:test";
 import assert from "node:assert/strict";
 import { scoreCandidate, summarizeCandidates } from "./scan-sites.mjs";
 
@@ -24,4 +24,18 @@ test("summarizeCandidates counts likely surfaces by kind", () => {
 test("scoreCandidate rejects tiny webtoon sprite backgrounds", () => {
   const candidate = { kind: "background", width: 6, height: 10, url: "https://webtoons-static.pstatic.net/image/static/pc/sprite/sp_webtoon.png" };
   assert.equal(scoreCandidate(candidate) < 6, true);
+});
+
+test("summarizeCandidates includes capture capability hints", () => {
+  const summary = summarizeCandidates([
+    { kind: "image", width: 800, height: 1200, url: "https://cdn.example.test/page.jpg" },
+    { kind: "canvas", width: 800, height: 1200, url: "" },
+    { kind: "background", width: 800, height: 1200, url: "blob:https://reader.example/1" },
+  ]);
+  assert.deepEqual(summary.captureHints, {
+    directImageCandidates: 1,
+    screenshotFallbackCandidates: 2,
+    canvasCandidates: 1,
+    backgroundCandidates: 1,
+  });
 });

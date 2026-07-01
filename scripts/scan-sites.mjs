@@ -21,7 +21,13 @@ export function summarizeCandidates(candidates) {
   const likely = candidates.filter((candidate) => scoreCandidate(candidate) >= 6);
   const byKind = {};
   for (const candidate of likely) byKind[candidate.kind] = (byKind[candidate.kind] || 0) + 1;
-  return { candidateCount: candidates.length, likelySurfaceCount: likely.length, byKind, likely };
+  const captureHints = {
+    directImageCandidates: likely.filter((candidate) => candidate.kind === "image" && /^https?:/i.test(String(candidate.url || ""))).length,
+    screenshotFallbackCandidates: likely.filter((candidate) => candidate.kind !== "image" || !/^https?:/i.test(String(candidate.url || ""))).length,
+    canvasCandidates: likely.filter((candidate) => candidate.kind === "canvas").length,
+    backgroundCandidates: likely.filter((candidate) => candidate.kind === "background").length,
+  };
+  return { candidateCount: candidates.length, likelySurfaceCount: likely.length, byKind, captureHints, likely };
 }
 
 export async function scanUrl(url, options = {}) {

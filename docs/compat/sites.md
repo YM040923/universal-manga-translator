@@ -48,3 +48,13 @@ Results as of 2026-07-01:
 - Add scan URLs for actual episode/chapter reader pages rather than title/list pages.
 - Capture screenshots in scanner output for visual inspection.
 - Add per-site include/exclude overrides once real false positives are confirmed.
+## Capture Capability Notes
+
+As of Phase 15, scanner summaries include `captureHints`:
+
+- `directImageCandidates`: likely surfaces that can usually be submitted by URL.
+- `screenshotFallbackCandidates`: likely surfaces that may need visible-tab screenshot crop fallback, including canvas, blob, or non-http background sources.
+- `canvasCandidates`: likely canvas readers.
+- `backgroundCandidates`: likely CSS background readers.
+
+This matches the extension's current fallback model: try normal surface submission first, then use visible-tab screenshot crops when direct input fails or when the user manually selects a region.
