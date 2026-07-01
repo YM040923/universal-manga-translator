@@ -3,9 +3,9 @@
     "version":  "0.1.0",
     "type":  "module",
     "scripts":  {
-                    "build":  "vite build \u0026\u0026 node scripts/copy-static.mjs",
-                    "dev":  "vite build --watch",
-                    "test":  "pnpm build:test \u0026\u0026 node --test dist-test/**/*.test.js",
+                    "build":  "vite build -c vite.content.config.ts \u0026\u0026 vite build -c vite.app.config.ts \u0026\u0026 node scripts/copy-static.mjs",
+                    "dev":  "vite build -c vite.content.config.ts --watch",
+                    "test":  "pnpm build:test \u0026\u0026 node --test dist-test/**/*.test.js \u0026\u0026 pnpm build \u0026\u0026 node --test scripts/*.test.mjs",
                     "build:test":  "tsc -p tsconfig.test.json",
                     "typecheck":  "tsc -p tsconfig.json --noEmit"
                 },
