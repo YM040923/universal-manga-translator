@@ -41,3 +41,31 @@ Phase 6 adds persistent extension settings, an options page, configured backend 
 ## Phase 7 Verification
 
 Phase 7 adds backend-persistent manual translation overrides in SQLite. Clicking an overlay still updates text immediately in the page, and the edit is also saved through `POST /v1/overrides`; future submit/cache responses for the same image hash, target language, and region id apply the saved text. Verified on 2026-07-01 with `pnpm test`, `pnpm build`, `pnpm test:e2e`, and `pnpm exec playwright test tests/integration/extension-loaded.spec.ts`.
+## Daily Use
+
+From PowerShell in `F:\meihua\universal-manga-translator`:
+
+```powershell
+pnpm install
+pnpm doctor
+.\scripts\build-extension.ps1
+.\scripts\start-backend.ps1
+```
+
+Then open Chrome `chrome://extensions`, enable Developer mode, choose "Load unpacked", and select:
+
+```text
+F:\meihua\universal-manga-translator\apps\extension\dist
+```
+
+For a full local confidence check run:
+
+```powershell
+.\scripts\check.ps1
+```
+
+Use the floating panel `Settings` button to change backend URL, target language, or auto-translate behavior.
+
+## Phase 8 Verification
+
+Phase 8 adds `pnpm doctor`, root script tests, and Windows helper scripts for building the unpacked extension, starting the backend, and running a full local check. Verified on 2026-07-01 with `pnpm doctor`, `pnpm test`, `pnpm build`, `pnpm test:e2e`, `pnpm exec playwright test tests/integration/extension-loaded.spec.ts`, `scripts/build-extension.ps1`, and `scripts/check.ps1`.
