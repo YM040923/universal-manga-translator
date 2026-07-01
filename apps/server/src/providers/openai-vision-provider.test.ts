@@ -50,3 +50,37 @@ test("extracts JSON object from prefix and suffix text", () => {
   const parsed = OpenAIVisionProvider.parseRegionsFromContent("Here is the result {\"regions\":[]} thanks");
   assert.deepEqual(parsed, []);
 });
+
+test("can send nonstandard image field payload for compatible gateways", async () => {
+  const originalFetch = globalThis.fetch;
+  let body: any;
+  globalThis.fetch = async (_url, init) => {
+    body = JSON.parse(String(init?.body));
+    return new Response(JSON.stringify({ choices: [{ message: { content: "{\"regions\":[]}" } }] }), { status: 200, headers: { "content-type": "application/json" } });
+  };
+  try {
+    const provider = new OpenAIVisionProvider({ baseUrl: "https://api.example.test/v1", apiKey: "key", model: "vision", targetLanguage: "zh-CN", imageInputFormat: "image-field" });
+    await provider.process({
+      task: {
+        surfaceId: "s1",
+        pageUrl: "https://example.test",
+        domain: "example.test",
+        viewportPriority: "p0",
+        surfaceRect: { x: 0, y: 0, width: 10, height: 10 },
+        naturalSize: { width: 10, height: 10 },
+        renderSize: { width: 10, height: 10 },
+        readingDirection: "auto",
+        sourceLanguage: "auto",
+        targetLanguage: "zh-CN",
+      },
+      imageBuffer: Buffer.from("abc"),
+      imageHash: "hash",
+      width: 10,
+      height: 10,
+    });
+    assert.equal(body.messages[0].content[1].type, "image");
+    assert.match(body.messages[0].content[1].image, /^data:image\/jpeg;base64,/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

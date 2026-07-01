@@ -18,7 +18,7 @@ const db = openDatabase(resolve(dataDir, "cache.sqlite"));
 const surfaceCache = new SurfaceCache(db);
 const manualOverrideStore = new ManualOverrideStore(db);
 const visionProvider = config.provider === "openai-compatible"
-  ? new OpenAIVisionProvider({ baseUrl: config.openaiBaseUrl, apiKey: config.openaiApiKey, model: config.openaiModel, targetLanguage: config.targetLanguage })
+  ? new OpenAIVisionProvider({ baseUrl: config.openaiBaseUrl, apiKey: config.openaiApiKey, model: config.openaiModel, targetLanguage: config.targetLanguage, imageInputFormat: config.openaiImageInputFormat })
   : new MockProvider();
 const eventBus = new EventBus();
 const app = await buildServer({

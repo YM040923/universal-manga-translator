@@ -6,6 +6,7 @@ export interface OpenAIVisionProviderOptions {
   apiKey: string;
   model: string;
   targetLanguage: string;
+  imageInputFormat?: "image-url" | "image-field";
 }
 
 export class OpenAIVisionProvider implements VisionProvider {
@@ -24,6 +25,7 @@ export class OpenAIVisionProvider implements VisionProvider {
   }
 
   async process(input: ProviderInput): Promise<TextRegion[]> {
+    const imageUrl = `data:image/jpeg;base64,${input.imageBuffer.toString("base64")}`;
     const response = await fetch(`${this.options.baseUrl.replace(/\/$/, "")}/chat/completions`, {
       method: "POST",
       headers: { authorization: `Bearer ${this.options.apiKey}`, "content-type": "application/json" },
@@ -34,7 +36,9 @@ export class OpenAIVisionProvider implements VisionProvider {
           role: "user",
           content: [
             { type: "text", text: `Detect manga text regions and translate them to ${this.options.targetLanguage}. Return only JSON: {"regions":[{"id":"r1","box":{"x":0,"y":0,"width":1,"height":1},"sourceText":"","translatedText":"","confidence":0.9,"orientation":"horizontal","kind":"dialogue"}]}` },
-            { type: "image_url", image_url: { url: `data:image/jpeg;base64,${input.imageBuffer.toString("base64")}` } },
+            this.options.imageInputFormat === "image-field"
+              ? { type: "image", image: imageUrl }
+              : { type: "image_url", image_url: { url: imageUrl } },
           ],
         }],
       }),
