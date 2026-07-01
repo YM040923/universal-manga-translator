@@ -1,4 +1,4 @@
-﻿import type { Rect, Size } from "@umt/shared/types";
+import type { Rect, Size } from "@umt/shared/types";
 import type { DetectedSurface } from "../detector/surface-detector.js";
 
 export interface ScreenshotCropRect {
@@ -6,6 +6,7 @@ export interface ScreenshotCropRect {
   y: number;
   width: number;
   height: number;
+  upscale?: number;
 }
 
 export type ScreenshotCropper = (screenshotDataUrl: string, crop: ScreenshotCropRect) => Promise<string>;
@@ -18,6 +19,7 @@ export interface CreateScreenshotSurfaceInput {
   surfaceId: string;
   element: HTMLElement;
   cropper?: ScreenshotCropper;
+  upscale?: number;
 }
 
 export function clampCropRectToImage(viewportRect: Rect, viewportSize: Size, screenshotSize: Size): ScreenshotCropRect {
@@ -35,7 +37,9 @@ export function clampCropRectToImage(viewportRect: Rect, viewportSize: Size, scr
 }
 
 export async function createScreenshotSurface(input: CreateScreenshotSurfaceInput): Promise<DetectedSurface> {
-  const crop = clampCropRectToImage(input.viewportRect, input.viewportSize, input.screenshotSize);
+  const baseCrop = clampCropRectToImage(input.viewportRect, input.viewportSize, input.screenshotSize);
+  const upscale = normalizeUpscale(input.upscale);
+  const crop = upscale > 1 ? { ...baseCrop, upscale } : baseCrop;
   const cropper = input.cropper ?? cropScreenshotDataUrl;
   const imageData = await cropper(input.screenshotDataUrl, crop);
   return {
@@ -44,7 +48,7 @@ export async function createScreenshotSurface(input: CreateScreenshotSurfaceInpu
     element: input.element,
     imageData,
     rect: input.viewportRect,
-    naturalSize: { width: crop.width, height: crop.height },
+    naturalSize: { width: crop.width * (crop.upscale ?? 1), height: crop.height * (crop.upscale ?? 1) },
     score: 999,
   };
 }
@@ -57,11 +61,14 @@ export async function readImageSize(dataUrl: string): Promise<Size> {
 export async function cropScreenshotDataUrl(screenshotDataUrl: string, crop: ScreenshotCropRect): Promise<string> {
   const image = await loadImage(screenshotDataUrl);
   const canvas = document.createElement("canvas");
-  canvas.width = crop.width;
-  canvas.height = crop.height;
+  const upscale = normalizeUpscale(crop.upscale);
+  canvas.width = crop.width * upscale;
+  canvas.height = crop.height * upscale;
   const context = canvas.getContext("2d");
   if (!context) throw new Error("Canvas 2D context is unavailable");
-  context.drawImage(image, crop.x, crop.y, crop.width, crop.height, 0, 0, crop.width, crop.height);
+  context.imageSmoothingEnabled = true;
+  context.imageSmoothingQuality = "high";
+  context.drawImage(image, crop.x, crop.y, crop.width, crop.height, 0, 0, canvas.width, canvas.height);
   return canvas.toDataURL("image/png");
 }
 
@@ -72,4 +79,8 @@ function loadImage(dataUrl: string): Promise<HTMLImageElement> {
     image.onerror = () => reject(new Error("Failed to load screenshot image"));
     image.src = dataUrl;
   });
+}
+
+function normalizeUpscale(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 1 ? Math.min(4, Math.max(1, Math.round(value))) : 1;
 }

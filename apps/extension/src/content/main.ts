@@ -117,23 +117,31 @@ async function bootstrap(): Promise<void> {
     try {
       const screenshotDataUrl = await requestVisibleTabScreenshot();
       const screenshotSize = await readImageSize(screenshotDataUrl);
-      const screenshotSurface = await createScreenshotSurface({
-        screenshotDataUrl,
-        viewportRect: item.surface.rect,
-        viewportSize: { width: window.innerWidth, height: window.innerHeight },
-        screenshotSize,
-        surfaceId: `screenshot:${item.surface.surfaceId}`,
-        element: item.surface.element,
-      });
-      const retry = await client.submit(createSurfaceTask(screenshotSurface, item.priority, settings.targetLanguage));
-      if (retry.ok && isRenderableSurfaceResult(retry.result)) {
-        renderer.render(item.surface.element, screenshotSurface.naturalSize, retry.result);
-        debugRenderer.markResult(item.surface.element, screenshotSurface.naturalSize, retry.result);
-        return true;
-      }
+      return await submitScreenshotFallbackAttempt(item, screenshotDataUrl, screenshotSize, 1)
+        || await submitScreenshotFallbackAttempt(item, screenshotDataUrl, screenshotSize, 2);
     } catch {
       return false;
     }
+  }
+
+  async function submitScreenshotFallbackAttempt(item: PrioritizedSurface, screenshotDataUrl: string, screenshotSize: { width: number; height: number }, upscale: 1 | 2): Promise<boolean> {
+    const screenshotSurface = await createScreenshotSurface({
+      screenshotDataUrl,
+      viewportRect: item.surface.rect,
+      viewportSize: { width: window.innerWidth, height: window.innerHeight },
+      screenshotSize,
+      surfaceId: `${upscale === 1 ? "screenshot" : "screenshot2x"}:${item.surface.surfaceId}`,
+      element: item.surface.element,
+      upscale,
+    });
+    debugRenderer.markSurface(item.surface.surfaceId, item.surface.element, "fallback", `${upscale}x screenshot`);
+    const retry = await client.submit(createSurfaceTask(screenshotSurface, item.priority, settings.targetLanguage));
+    if (retry.ok && isRenderableSurfaceResult(retry.result)) {
+      renderer.render(item.surface.element, screenshotSurface.naturalSize, retry.result);
+      debugRenderer.markResult(item.surface.element, screenshotSurface.naturalSize, retry.result);
+      return true;
+    }
+    if (retry.ok && retry.result?.status === "empty") debugRenderer.markSurface(item.surface.surfaceId, item.surface.element, "empty", `${upscale}x fallback empty`);
     return false;
   }
   function scan(): void {
