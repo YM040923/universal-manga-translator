@@ -1,4 +1,4 @@
-import { mkdirSync } from "node:fs";
+﻿import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildServer } from "./api/server.js";
@@ -6,12 +6,12 @@ import { EventBus } from "./api/events.js";
 import { SurfaceCache } from "./cache/surface-cache.js";
 import { ManualOverrideStore } from "./cache/manual-overrides.js";
 import { openDatabase } from "./cache/db.js";
-import { loadConfig } from "./config/env.js";
+import { loadConfigFromEnvFile } from "./config/env.js";
 import { MockProvider } from "./providers/mock-provider.js";
 import { OpenAIVisionProvider } from "./providers/openai-vision-provider.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const config = loadConfig();
+const config = loadConfigFromEnvFile(resolve(__dirname, "../../../.env"));
 const dataDir = resolve(__dirname, "../data");
 mkdirSync(dataDir, { recursive: true });
 const db = openDatabase(resolve(dataDir, "cache.sqlite"));
@@ -36,5 +36,6 @@ const app = await buildServer({
 });
 await app.listen({ host: "127.0.0.1", port: config.port });
 console.log(`Universal Manga Translator backend listening on http://127.0.0.1:${config.port}`);
+
 
 

@@ -1,4 +1,6 @@
-﻿export interface ServerConfig {
+﻿import { existsSync, readFileSync } from "node:fs";
+
+export interface ServerConfig {
   port: number;
   provider: string;
   targetLanguage: string;
@@ -22,4 +24,21 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     maxImageLongEdge: Number(env.MAX_IMAGE_LONG_EDGE ?? 1600),
     jpegQuality: Number(env.JPEG_QUALITY ?? 0.75),
   };
+}
+
+export function loadConfigFromEnvFile(path: string, env: NodeJS.ProcessEnv = process.env): ServerConfig {
+  const fileEnv = existsSync(path) ? parseEnvText(readFileSync(path, "utf8")) : {};
+  return loadConfig({ ...fileEnv, ...env });
+}
+
+export function parseEnvText(text: string): Record<string, string> {
+  const result: Record<string, string> = {};
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) continue;
+    const index = line.indexOf("=");
+    if (index === -1) continue;
+    result[line.slice(0, index).trim()] = line.slice(index + 1).trim();
+  }
+  return result;
 }
