@@ -1,4 +1,4 @@
-import test from "node:test";
+﻿import test from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
 import { mountPopupPage, type PopupDeps } from "./main.js";
@@ -109,3 +109,14 @@ function fakeStorage(initial: ExtensionSettings): SettingsStorageArea & { curren
     async set(value) { this.current = { ...this.current, ...value } as ExtensionSettings; },
   };
 }
+test("popup sends manual selection command to active tab", async () => {
+  const dom = setupDom();
+  const sent: unknown[] = [];
+  const root = dom.window.document.querySelector<HTMLElement>("#app")!;
+
+  await mountPopupPage(root, deps({ sentMessages: sent }));
+  root.querySelector<HTMLButtonElement>("[data-action='select-region']")!.click();
+  await Promise.resolve();
+
+  assert.deepEqual(sent, [{ tabId: 123, message: { source: "umt-popup", command: "selectRegion" } }]);
+});

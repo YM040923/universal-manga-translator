@@ -7,6 +7,7 @@ import { isUmtContentCommand } from "./messages";
 import { OverlayRenderer } from "./overlay/overlay-renderer";
 import { FloatingPanel, type FloatingPanelState } from "./panel/floating-panel";
 import { AutoScheduler } from "./scheduler/auto-scheduler";
+import { ManualSelectionController } from "./selection/manual-selection";
 import { PageChangeObserver } from "./scheduler/page-change-observer";
 import { prioritizeSurfaces, type PrioritizedSurface } from "./scheduler/viewport-scheduler";
 import { TranslationStatusCounter } from "./status/job-status-counter";
@@ -136,6 +137,39 @@ async function bootstrap(): Promise<void> {
     setPanelStatus("UMT: page cleared", "idle");
   }
 
+  function startManualSelection(): void {
+    setPanelStatus("UMT: select region", "busy");
+    const controller = new ManualSelectionController({
+      onSelect: (rect) => void translateManualRect(rect),
+      onCancel: () => setPanelStatus("UMT: selection cancelled", "idle"),
+    });
+    controller.start();
+  }
+
+  async function translateManualRect(rect: { x: number; y: number; width: number; height: number }): Promise<void> {
+    try {
+      const screenshotDataUrl = await requestVisibleTabScreenshot();
+      const screenshotSize = await readImageSize(screenshotDataUrl);
+      const surface = await createScreenshotSurface({
+        screenshotDataUrl,
+        viewportRect: rect,
+        viewportSize: { width: window.innerWidth, height: window.innerHeight },
+        screenshotSize,
+        surfaceId: `manual:${Date.now()}:${Math.round(rect.x)}:${Math.round(rect.y)}`,
+        element: document.body,
+      });
+      const response = await client.submit(createSurfaceTask(surface, "p0", settings.targetLanguage));
+      if (response.ok && response.result) {
+        renderer.render(createManualOverlayAnchor(rect), surface.naturalSize, response.result);
+        setPanelStatus("UMT: manual region translated", "done");
+      } else {
+        setPanelStatus("UMT: manual region failed", "error");
+      }
+    } catch {
+      setPanelStatus("UMT: screenshot unavailable", "error");
+    }
+  }
+
   function updatePanelForSettings(): void {
     panel.setEnabled(settings.floatingButtonEnabled);
     const effective = site();
@@ -162,6 +196,7 @@ async function bootstrap(): Promise<void> {
 
   const panel = new FloatingPanel({
     onTranslateCurrent: () => void translateSelectedSurfaces(),
+    onSelectRegion: startManualSelection,
   });
 
   panel.mount();
@@ -211,8 +246,25 @@ async function bootstrap(): Promise<void> {
     if (message.command === "refresh") refreshPage();
     if (message.command === "togglePause") togglePause();
     if (message.command === "clearPage") clearCurrentPage();
+    if (message.command === "selectRegion") startManualSelection();
     return false;
   });
+}
+
+function createManualOverlayAnchor(rect: { x: number; y: number; width: number; height: number }): HTMLElement {
+  const anchor = document.createElement("div");
+  anchor.getBoundingClientRect = () => ({
+    x: rect.x,
+    y: rect.y,
+    width: rect.width,
+    height: rect.height,
+    top: rect.y,
+    left: rect.x,
+    right: rect.x + rect.width,
+    bottom: rect.y + rect.height,
+    toJSON: () => ({}),
+  } as DOMRect);
+  return anchor;
 }
 
 function settingsStatus(settings: ExtensionSettings, autoTranslate: boolean): string {

@@ -2,6 +2,7 @@ export type FloatingPanelState = "idle" | "busy" | "done" | "paused" | "offline"
 
 export interface FloatingPanelActions {
   onTranslateCurrent: () => void;
+  onSelectRegion?: () => void;
 }
 
 export class FloatingPanel {
@@ -31,6 +32,16 @@ export class FloatingPanel {
 
     this.button.append(icon, this.status);
     this.root.append(this.button);
+    if (actions.onSelectRegion) {
+      const selectButton = document.createElement("button");
+      selectButton.dataset.umtSelectButton = "true";
+      selectButton.type = "button";
+      selectButton.textContent = "框选";
+      selectButton.title = "框选区域翻译";
+      selectButton.style.cssText = "margin-top:7px;display:block;width:100%;border:1px solid rgba(255,122,26,.35);border-radius:999px;background:#fff7ed;color:#c2410c;padding:7px 10px;box-shadow:0 6px 18px rgba(255,96,20,.14);cursor:pointer;font-weight:800;";
+      selectButton.addEventListener("click", actions.onSelectRegion);
+      this.root.append(selectButton);
+    }
   }
 
   mount(): void {

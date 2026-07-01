@@ -1,4 +1,4 @@
-import test from "node:test";
+﻿import test from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
 import { FloatingPanel } from "./floating-panel.js";
@@ -35,3 +35,14 @@ function setupDom(): void {
   globalThis.document = dom.window.document;
   globalThis.HTMLElement = dom.window.HTMLElement;
 }
+test("FloatingPanel can expose manual selection action", () => {
+  setupDom();
+  let selected = false;
+  const panel = new FloatingPanel({ onTranslateCurrent: () => undefined, onSelectRegion: () => { selected = true; } });
+  panel.mount();
+
+  const button = document.querySelector<HTMLButtonElement>("[data-umt-select-button]")!;
+  assert.equal(button.textContent?.includes("框选"), true);
+  button.click();
+  assert.equal(selected, true);
+});
