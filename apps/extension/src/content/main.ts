@@ -1,4 +1,4 @@
-import { BackendClient, SurfaceSubmitTracker } from "./client/backend-client";
+﻿import { BackendClient, SurfaceSubmitTracker } from "./client/backend-client";
 import { createSurfaceTask } from "./capture/surface-capture";
 import { detectImageSurfaces } from "./detector/surface-detector";
 import { OverlayRenderer } from "./overlay/overlay-renderer";
@@ -85,7 +85,7 @@ async function bootstrap(): Promise<void> {
   const pageChangeObserver = new PageChangeObserver(document, {
     onChange: (reason) => {
       renderer.refreshAll();
-      if (settings.autoTranslate) autoScheduler.requestRun(reason);
+      if (settings.autoTranslateDefault) autoScheduler.requestRun(reason);
     },
   });
   pageChangeObserver.start();
@@ -99,18 +99,18 @@ async function bootstrap(): Promise<void> {
   }
   void client.health().then((ok) => {
     panel.setStatus(ok ? settingsStatus(settings) : "UMT: backend offline");
-    if (ok && settings.autoTranslate) autoScheduler.requestRun("load");
+    if (ok && settings.autoTranslateDefault) autoScheduler.requestRun("load");
   });
   window.addEventListener("scroll", () => {
     renderer.refreshAll();
-    if (settings.autoTranslate) autoScheduler.requestRun("scroll");
+    if (settings.autoTranslateDefault) autoScheduler.requestRun("scroll");
   }, { passive: true });
   window.addEventListener("resize", () => {
     renderer.refreshAll();
-    if (settings.autoTranslate) autoScheduler.requestRun("resize");
+    if (settings.autoTranslateDefault) autoScheduler.requestRun("resize");
   });
 }
 
 function settingsStatus(settings: ExtensionSettings): string {
-  return settings.autoTranslate ? `UMT: backend connected | ${settings.targetLanguage}` : `UMT: backend connected | auto off | ${settings.targetLanguage}`;
+  return settings.autoTranslateDefault ? `UMT: backend connected | ${settings.targetLanguage}` : `UMT: backend connected | auto off | ${settings.targetLanguage}`;
 }

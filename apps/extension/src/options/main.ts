@@ -1,4 +1,4 @@
-import { loadSettings, saveSettings, type SettingsStorageArea } from "../settings/settings.js";
+﻿import { loadSettings, saveSettings, type SettingsStorageArea } from "../settings/settings.js";
 
 export interface OptionsPageDeps {
   storage?: SettingsStorageArea;
@@ -25,10 +25,10 @@ export async function mountOptionsPage(root: HTMLElement, deps: OptionsPageDeps 
   const status = root.querySelector<HTMLElement>("[data-options-status]")!;
   backendUrl.value = settings.backendUrl;
   targetLanguage.value = settings.targetLanguage;
-  autoTranslate.checked = settings.autoTranslate;
+  autoTranslate.checked = settings.autoTranslateDefault;
   form.addEventListener("submit", (event) => {
     event.preventDefault();
-    void saveSettings({ backendUrl: backendUrl.value, targetLanguage: targetLanguage.value, autoTranslate: autoTranslate.checked }, deps.storage).then(() => {
+    void saveSettings({ backendUrl: backendUrl.value, targetLanguage: targetLanguage.value, autoTranslateDefault: autoTranslate.checked }, deps.storage).then(() => {
       status.textContent = "Saved";
     }).catch((error) => {
       status.textContent = `Save failed: ${error instanceof Error ? error.message : String(error)}`;
