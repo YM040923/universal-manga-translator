@@ -29,6 +29,10 @@ export class SurfaceSubmitTracker {
     this.submitted.add(surfaceId);
   }
 
+  release(surfaceId: string): void {
+    this.submitted.delete(surfaceId);
+  }
+
   clear(): void {
     this.submitted.clear();
   }

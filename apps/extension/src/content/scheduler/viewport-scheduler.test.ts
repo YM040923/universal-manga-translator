@@ -35,3 +35,11 @@ test("selects only visible surfaces unless pretranslation is enabled", () => {
   assert.deepEqual(selectSurfacesForMode(prioritized, { imageRange: "viewport", maxFullPageSurfaces: 80, pretranslateNextPage: false }).map((item) => item.surface.surfaceId), ["visible"]);
   assert.deepEqual(selectSurfacesForMode(prioritized, { imageRange: "viewport", maxFullPageSurfaces: 80, pretranslateNextPage: true }).map((item) => item.surface.surfaceId), ["visible", "near"]);
 });
+
+
+test("marks near-prefetch surfaces as not eligible for screenshot fallback", () => {
+  const prioritized = prioritizeSurfaces([surface("visible", 100), surface("near", 900)], { x: 0, y: 0, width: 1000, height: 800 });
+
+  assert.equal(prioritized.find((item) => item.surface.surfaceId === "visible")?.screenshotFallbackEligible, true);
+  assert.equal(prioritized.find((item) => item.surface.surfaceId === "near")?.screenshotFallbackEligible, false);
+});

@@ -69,3 +69,27 @@ test("createScreenshotSurface can request an upscaled crop for OCR fallback", as
   assert.deepEqual(calls[0], { x: 20, y: 40, width: 200, height: 160, upscale: 2 });
   assert.deepEqual(surface.naturalSize, { width: 400, height: 320 });
 });
+
+
+test("createScreenshotSurface rejects offscreen crops before producing empty image data", async () => {
+  const dom = new JSDOM("<body></body>");
+  globalThis.document = dom.window.document;
+  let cropperCalled = false;
+
+  await assert.rejects(
+    createScreenshotSurface({
+      screenshotDataUrl: "data:image/png;base64,full",
+      viewportRect: { x: 0, y: 700, width: 300, height: 200 },
+      viewportSize: { width: 500, height: 600 },
+      screenshotSize: { width: 1000, height: 1200 },
+      surfaceId: "offscreen:1",
+      element: document.body,
+      cropper: async () => {
+        cropperCalled = true;
+        return "data:image/png;base64,";
+      },
+    }),
+    /outside the visible screenshot/i,
+  );
+  assert.equal(cropperCalled, false);
+});

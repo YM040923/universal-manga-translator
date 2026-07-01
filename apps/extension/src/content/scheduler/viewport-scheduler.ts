@@ -7,6 +7,7 @@ export interface PrioritizedSurface {
   priority: Priority;
   distance: number;
   visibleRatio: number;
+  screenshotFallbackEligible: boolean;
 }
 
 export interface SurfaceSelectionOptions {
@@ -20,7 +21,7 @@ export function prioritizeSurfaces(surfaces: DetectedSurface[], viewport: Rect):
     const ratio = visibleRatio(surface.rect, viewport);
     const distance = surface.rect.y - (viewport.y + viewport.height);
     const priority: Priority = ratio > 0.05 ? "p0" : distance >= -viewport.height && distance <= viewport.height * 2 ? "p1" : "p2";
-    return { surface, priority, distance, visibleRatio: ratio };
+    return { surface, priority, distance, visibleRatio: ratio, screenshotFallbackEligible: ratio > 0.05 };
   }).sort(comparePrioritizedSurfaces);
 }
 

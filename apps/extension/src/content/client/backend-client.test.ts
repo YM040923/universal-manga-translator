@@ -154,3 +154,14 @@ test("BackendClient runs backend self test", async () => {
   assert.equal(calls[0]?.init?.method, "POST");
   assert.equal(response.ok && response.sample.regionCount, 1);
 });
+
+
+test("SurfaceSubmitTracker can release a surface for later retry", () => {
+  const tracker = new SurfaceSubmitTracker();
+  tracker.markSubmitted("s1");
+  assert.equal(tracker.shouldSubmit("s1"), false);
+
+  tracker.release("s1");
+
+  assert.equal(tracker.shouldSubmit("s1"), true);
+});

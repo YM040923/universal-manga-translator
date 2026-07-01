@@ -38,6 +38,7 @@ export function clampCropRectToImage(viewportRect: Rect, viewportSize: Size, scr
 
 export async function createScreenshotSurface(input: CreateScreenshotSurfaceInput): Promise<DetectedSurface> {
   const baseCrop = clampCropRectToImage(input.viewportRect, input.viewportSize, input.screenshotSize);
+  if (baseCrop.width < 2 || baseCrop.height < 2) throw new Error("Screenshot crop is outside the visible screenshot");
   const upscale = normalizeUpscale(input.upscale);
   const crop = upscale > 1 ? { ...baseCrop, upscale } : baseCrop;
   const cropper = input.cropper ?? cropScreenshotDataUrl;
@@ -62,6 +63,7 @@ export async function cropScreenshotDataUrl(screenshotDataUrl: string, crop: Scr
   const image = await loadImage(screenshotDataUrl);
   const canvas = document.createElement("canvas");
   const upscale = normalizeUpscale(crop.upscale);
+  if (crop.width < 2 || crop.height < 2) throw new Error("Screenshot crop is outside the visible screenshot");
   canvas.width = crop.width * upscale;
   canvas.height = crop.height * upscale;
   const context = canvas.getContext("2d");

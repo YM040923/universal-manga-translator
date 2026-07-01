@@ -100,7 +100,7 @@ async function bootstrap(): Promise<void> {
           logWarn("direct submit not renderable", `${item.surface.surfaceId} | ok=${response.ok} | status=${response.ok ? response.result?.status : response.error}`);
           debugRenderer.markSurface(item.surface.surfaceId, item.surface.element, response.ok ? "empty" : "failed", "trying screenshot fallback");
           const fallbackRendered = await submitScreenshotFallback(item);
-          if (!fallbackRendered) {
+          if (!fallbackRendered && item.screenshotFallbackEligible) {
             statusCounter.recordFailedResponse(item.surface.surfaceId);
             setCountersStatus();
           }
@@ -108,7 +108,7 @@ async function bootstrap(): Promise<void> {
       } catch (error) {
         logError("direct submit failed", error);
         const fallbackRendered = await submitScreenshotFallback(item);
-        if (!fallbackRendered) {
+        if (!fallbackRendered && item.screenshotFallbackEligible) {
           statusCounter.recordFailedResponse(item.surface.surfaceId);
           setCountersStatus();
         }
@@ -137,6 +137,11 @@ async function bootstrap(): Promise<void> {
 
 
   async function submitScreenshotFallback(item: PrioritizedSurface): Promise<boolean> {
+    if (!item.screenshotFallbackEligible) {
+      submitTracker.release(item.surface.surfaceId);
+      logWarn("screenshot fallback deferred until visible", `${item.surface.surfaceId} | priority=${item.priority}`);
+      return false;
+    }
     try {
       const screenshotDataUrl = await requestVisibleTabScreenshot();
       const screenshotSize = await readImageSize(screenshotDataUrl);
