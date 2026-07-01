@@ -1,4 +1,4 @@
-import test from "node:test";
+﻿import test from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
 import type { ManualOverridePayload } from "@umt/shared/protocol";
@@ -76,3 +76,30 @@ function fakeResult(surfaceId: string): SurfaceResult {
     }],
   };
 }
+
+test("OverlayRenderer applies vertical writing mode from layout style", () => {
+  document.body.innerHTML = `<img id="page" />`;
+  const img = document.querySelector<HTMLImageElement>("#page")!;
+  Object.defineProperty(img, "getBoundingClientRect", { value: () => ({ x: 0, y: 0, width: 100, height: 100 }) });
+  const renderer = new OverlayRenderer();
+  renderer.render(img, { width: 100, height: 100 }, {
+    surfaceId: "vertical-surface",
+    imageHash: "hash",
+    status: "completed",
+    providerProfile: "mock",
+    layoutVersion: 2,
+    elapsedMs: 1,
+    regions: [{
+      id: "r1",
+      box: { x: 0, y: 0, width: 50, height: 80 },
+      sourceText: "縦",
+      translatedText: "竖排",
+      confidence: 1,
+      orientation: "vertical",
+      kind: "dialogue",
+      style: { fontSize: 16, writingMode: "vertical-rl", align: "center", background: "white", color: "black" },
+    }],
+  });
+
+  assert.equal((document.querySelector("[data-umt-surface-id='vertical-surface']") as HTMLElement).style.writingMode, "vertical-rl");
+});

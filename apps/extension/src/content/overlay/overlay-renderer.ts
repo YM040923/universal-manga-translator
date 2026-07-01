@@ -77,6 +77,7 @@ export class OverlayRenderer {
         `width:${box.width}px`,
         `min-height:${box.height}px`,
         `font:${region.style.fontSize}px/1.25 system-ui,sans-serif`,
+        `writing-mode:${region.style.writingMode}`,
         `background:${region.style.background}`,
         `color:${region.style.color}`,
         `text-align:${region.style.align}`,
@@ -87,6 +88,8 @@ export class OverlayRenderer {
         "padding:4px",
         "border-radius:6px",
         "white-space:pre-wrap",
+        "overflow-wrap:anywhere",
+        "overflow:hidden",
         "pointer-events:auto",
       ].join(";");
       node.addEventListener("click", () => {
