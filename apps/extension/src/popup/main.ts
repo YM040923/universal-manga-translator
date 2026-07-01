@@ -1,4 +1,4 @@
-﻿import {
+import {
   getEffectiveSiteSettings,
   loadSettings,
   saveSettings,
@@ -140,7 +140,7 @@ function markup(settings: ExtensionSettings, site: ReturnType<typeof getEffectiv
     <section class="umt-popup" data-density="compact">
       <header class="header">
         <div><div class="brand">${TEXT.brand}</div><div class="subtitle">Universal Manga Translator</div></div>
-        <div class="header-actions"><span class="health ${backendOnline ? "ok" : "bad"}">${backendOnline ? TEXT.backendOk : TEXT.backendBad}</span><button data-action="options" title="${TEXT.settings}">鈿?/button></div>
+        <div class="header-actions"><span class="health ${backendOnline ? "ok" : "bad"}">${backendOnline ? TEXT.backendOk : TEXT.backendBad}</span><button data-action="options" title="${TEXT.settings}">&#9881;</button></div>
       </header>
       <section class="card site-card">
         <div class="row strong"><span>${TEXT.auto} <b class="pill">${siteStatus}</b></span><label class="switch"><input data-field="site-auto" data-site-control type="checkbox" ${site.autoTranslate ? "checked" : ""}><span></span></label></div>

@@ -34,7 +34,10 @@ test("popup settings button opens options page", async () => {
   const root = dom.window.document.querySelector<HTMLElement>("#app")!;
 
   await mountPopupPage(root, deps({ openOptionsPage: () => { opened = true; } }));
-  root.querySelector<HTMLButtonElement>("[data-action='options']")!.click();
+  const button = root.querySelector<HTMLButtonElement>("[data-action='options']")!;
+  assert.equal(button.textContent, "\u2699");
+  assert.equal(button.title, "\u8bbe\u7f6e");
+  button.click();
 
   assert.equal(opened, true);
 });

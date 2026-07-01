@@ -1,4 +1,4 @@
-﻿import test from "node:test";
+import test from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
 import { mountOptionsPage, type OptionsPageDeps } from "./main.js";
@@ -12,7 +12,16 @@ test("settings page renders backend provider defaults and performance sections",
   assert.equal(document.querySelector("[data-section='provider']") !== null, true);
   assert.equal(document.querySelector("[data-section='defaults']") !== null, true);
   assert.equal(document.querySelector("[data-section='performance']") !== null, true);
-  assert.match(document.body.textContent ?? "", /API key/);
+  const text = document.body.textContent ?? "";
+  assert.match(text, /\u540e\u7aef\u8fde\u63a5/u);
+  assert.match(text, /\u63d0\u4f9b\u5546/u);
+  assert.match(text, /\u7ffb\u8bd1\u9ed8\u8ba4\u503c/u);
+  assert.match(text, /\u6027\u80fd/u);
+  assert.match(text, /API key \u5bc6\u94a5/u);
+  assert.match(text, /OpenAI \u517c\u5bb9 Base URL/u);
+  assert.match(text, /\u5f53\u524d\u9875\u9762\u7f13\u5b58/u);
+  assert.doesNotMatch(text, /Backend connection|Provider \/ model|Translation defaults|Performance \/ cache|Save settings|Not checked/);
+  assert.doesNotMatch(text, /\\u[0-9a-fA-F]{4}/);
 });
 
 test("settings page saves advanced fields while preserving site settings", async () => {
@@ -63,7 +72,7 @@ test("settings page checks backend health", async () => {
   document.querySelector<HTMLButtonElement>("[data-action='check-backend']")!.click();
   await new Promise((resolve) => setTimeout(resolve, 0));
 
-  assert.equal(document.querySelector<HTMLElement>("[data-backend-health]")?.textContent, "Connected");
+  assert.equal(document.querySelector<HTMLElement>("[data-backend-health]")?.textContent, "\u5df2\u8fde\u63a5");
 });
 
 function setupDom(): void {
