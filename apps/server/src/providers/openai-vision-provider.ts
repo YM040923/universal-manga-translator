@@ -16,6 +16,22 @@ export class OpenAIVisionProvider implements VisionProvider {
     this.profile = `openai-compatible:${options.model}`;
   }
 
+  async listModels(): Promise<string[]> {
+    try {
+      const response = await fetch(`${this.options.baseUrl.replace(/\/$/, "")}/models`, {
+        headers: { authorization: `Bearer ${this.options.apiKey}` },
+      });
+      if (!response.ok) return [this.options.model];
+      const payload = (await response.json()) as { data?: Array<{ id?: unknown }>; models?: unknown[] };
+      const ids = (Array.isArray(payload.data) ? payload.data : Array.isArray(payload.models) ? payload.models : [])
+        .map((item) => typeof item === "string" ? item : typeof item === "object" && item && "id" in item ? (item as { id?: unknown }).id : undefined)
+        .filter((id): id is string => typeof id === "string" && id.trim().length > 0);
+      return ids.length ? Array.from(new Set(ids)) : [this.options.model];
+    } catch {
+      return [this.options.model];
+    }
+  }
+
   static parseRegionsFromContent(content: string): TextRegion[] {
     const candidate = extractJsonCandidate(content);
     if (!candidate) return [];
@@ -90,6 +106,9 @@ function buildVisionPrompt(targetLanguage: string): string {
     "Return strict JSON only, with this shape:",
     "{\"regions\":[{\"id\":string,\"box\":{\"x\":number,\"y\":number,\"width\":number,\"height\":number},\"sourceText\":string,\"translatedText\":string,\"confidence\":number,\"orientation\":\"horizontal\"|\"vertical\"|\"unknown\",\"kind\":\"dialogue\"|\"narration\"|\"sfx\"|\"unknown\"}]}",
     "Coordinates must be in provided image pixels, using the exact pixel coordinate space of the image attached in this request.",
+    "Use tight bounding boxes around the actual text glyphs/lines only.",
+    "Do not use the whole speech bubble, panel, character, or page as the box.",
+    "For large speech bubbles, box only the text area, not the blank bubble area.",
     "If there is no readable text, Return {\"regions\":[]}.",
     "Never return placeholder regions. Never return empty sourceText or empty translatedText.",
   ].join("\n");
@@ -98,5 +117,17 @@ function buildVisionPrompt(targetLanguage: string): string {
 function isUsefulRegion(region: TextRegion): boolean {
   const hasText = typeof region.sourceText === "string" && region.sourceText.trim().length > 0 && typeof region.translatedText === "string" && region.translatedText.trim().length > 0;
   const hasBox = region.box && region.box.width > 1 && region.box.height > 1;
-  return hasText && hasBox;
+  const confidence = typeof region.confidence === "number" && Number.isFinite(region.confidence) ? region.confidence : 0;
+  return hasText && hasBox && confidence >= 0.2 && !looksLikeProviderPlaceholder(region.sourceText) && !looksLikeProviderPlaceholder(region.translatedText);
+}
+
+function looksLikeProviderPlaceholder(text: string): boolean {
+  const normalized = text.toLowerCase();
+  return normalized.includes("image unavailable")
+    || normalized.includes("cannot perform")
+    || normalized.includes("cannot access")
+    || normalized.includes("unable to ocr")
+    || normalized.includes("无法进行图像")
+    || normalized.includes("无法识别图像")
+    || normalized.includes("不能识别图像");
 }

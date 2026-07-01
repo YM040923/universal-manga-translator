@@ -54,7 +54,7 @@ test("manual edit callback receives override payload", () => {
   const renderer = new OverlayRenderer({ targetLanguage: "zh-CN", onManualEdit: (override) => { saved = override; } });
   renderer.render(img, { width: 1000, height: 2000 }, fakeResult("s1"));
 
-  document.querySelector<HTMLElement>("[data-umt-region-id='r1']")!.click();
+  document.querySelector<HTMLElement>("[data-umt-text-chip='true']")!.click();
 
   assert.deepEqual(saved, { imageHash: "hash", targetLanguage: "zh-CN", regionId: "r1", translatedText: "manual edit" });
 });
@@ -91,13 +91,11 @@ function fakeResult(surfaceId: string): SurfaceResult {
 }
 
 test("OverlayRenderer applies vertical writing mode from layout style", () => {
-  document.body.innerHTML = `<img id="page" />`;
-  const img = document.querySelector<HTMLImageElement>("#page")!;
-  Object.defineProperty(img, "getBoundingClientRect", { value: () => ({ x: 0, y: 0, width: 100, height: 100 }) });
+  const { img } = setupDomWithImage({ x: 0, y: 0, width: 100, height: 100 });
   const renderer = new OverlayRenderer();
   renderer.render(img, { width: 100, height: 100 }, {
     surfaceId: "vertical-surface",
-    imageHash: "hash",
+    imageHash: "vertical-hash",
     status: "completed",
     providerProfile: "mock",
     layoutVersion: 2,
@@ -114,7 +112,7 @@ test("OverlayRenderer applies vertical writing mode from layout style", () => {
     }],
   });
 
-  assert.equal((document.querySelector("[data-umt-surface-id='vertical-surface']") as HTMLElement).style.writingMode, "vertical-rl");
+  assert.equal((document.querySelector("[data-umt-text-chip='true']") as HTMLElement).style.writingMode, "vertical-rl");
 });
 
 
@@ -134,4 +132,23 @@ test("clamps overlay boxes to the rendered surface and skips unusable boxes", ()
   assert.equal(keep.style.top, "30px");
   assert.equal(keep.style.width, "30px");
   assert.equal(document.querySelector("[data-umt-region-id='skip']"), null);
+});
+
+
+test("renders adaptive text chip inside large provider box instead of a full white slab", () => {
+  const { img } = setupDomWithImage({ x: 0, y: 0, width: 500, height: 500 });
+  const renderer = new OverlayRenderer();
+  const result = fakeResult("adaptive-chip");
+  result.imageHash = "adaptive-hash";
+  result.regions = [{ ...result.regions[0]!, translatedText: "?", box: { x: 0, y: 0, width: 500, height: 300 } }];
+
+  renderer.render(img, { width: 500, height: 500 }, result);
+
+  const wrapper = document.querySelector<HTMLElement>("[data-umt-region-id='r1']")!;
+  const chip = wrapper.querySelector<HTMLElement>("[data-umt-text-chip='true']")!;
+  assert.equal(wrapper.style.background, "transparent");
+  assert.equal(wrapper.style.minHeight, "");
+  assert.equal(chip.textContent, "?");
+  assert.equal(chip.style.width, "fit-content");
+  assert.equal(chip.style.maxWidth, "100%");
 });

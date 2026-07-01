@@ -72,37 +72,53 @@ export class OverlayRenderer {
       const node = document.createElement("div");
       node.dataset.umtSurfaceId = result.surfaceId;
       node.dataset.umtRegionId = region.id;
-      node.textContent = loadManualEdit(result.imageHash, this.targetLanguage, region.id) ?? region.translatedText;
+      const chip = document.createElement("span");
+      chip.dataset.umtTextChip = "true";
+      chip.textContent = loadManualEdit(result.imageHash, this.targetLanguage, region.id) ?? region.translatedText;
       node.style.cssText = [
         "position:absolute",
         `left:${box.x}px`,
         `top:${box.y}px`,
         `width:${box.width}px`,
-        `min-height:${box.height}px`,
+        `height:${box.height}px`,
+        "background:transparent",
+        "display:flex",
+        "align-items:center",
+        "justify-content:center",
+        "box-sizing:border-box",
+        "padding:2px",
+        "overflow:visible",
+        "pointer-events:none",
+      ].join(";");
+      chip.style.cssText = [
+        "display:inline-flex",
+        "align-items:center",
+        "justify-content:center",
+        "box-sizing:border-box",
+        "width:fit-content",
+        "max-width:100%",
+        "max-height:100%",
+        "padding:3px 6px",
+        "border-radius:6px",
         `font:${region.style.fontSize}px/1.25 system-ui,sans-serif`,
         `writing-mode:${region.style.writingMode}`,
         `background:${region.style.background}`,
         `color:${region.style.color}`,
         `text-align:${region.style.align}`,
-        "display:flex",
-        "align-items:center",
-        "justify-content:center",
-        "box-sizing:border-box",
-        "padding:4px",
-        "border-radius:6px",
         "white-space:pre-wrap",
         "overflow-wrap:anywhere",
         "overflow:hidden",
         "pointer-events:auto",
       ].join(";");
-      node.addEventListener("click", () => {
-        const next = window.prompt("Edit translation", node.textContent ?? "");
+      chip.addEventListener("click", () => {
+        const next = window.prompt("Edit translation", chip.textContent ?? "");
         if (next !== null) {
-          node.textContent = next;
+          chip.textContent = next;
           saveManualEdit(result.imageHash, this.targetLanguage, region.id, next);
           this.onManualEdit?.({ imageHash: result.imageHash, targetLanguage: this.targetLanguage, regionId: region.id, translatedText: next });
         }
       });
+      node.append(chip);
       this.root.append(node);
     }
   }

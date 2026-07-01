@@ -2,7 +2,7 @@
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildServer } from "./api/server.js";
-import { FileDiagnosticsWriter, readRecentDiagnostics } from "./api/diagnostics.js";
+import { clearDiagnostics, FileDiagnosticsWriter, readRecentDiagnostics } from "./api/diagnostics.js";
 import { EventBus } from "./api/events.js";
 import { SurfaceCache } from "./cache/surface-cache.js";
 import { ManualOverrideStore } from "./cache/manual-overrides.js";
@@ -33,10 +33,12 @@ const app = await buildServer({
   eventBus,
   diagnosticsWriter,
   diagnosticsReader: (limit) => readRecentDiagnostics(diagnosticsPath, limit),
+  diagnosticsClearer: () => clearDiagnostics(diagnosticsPath),
   maxImageLongEdge: config.maxImageLongEdge,
   jpegQuality: config.jpegQuality,
   openAICompatibleBaseUrl: config.openaiBaseUrl,
   openAIModel: config.openaiModel,
+  openAIImageInputFormat: config.openaiImageInputFormat,
   openAIApiKeyConfigured: config.openaiApiKey.length > 0,
 });
 await app.listen({ host: "127.0.0.1", port: config.port });

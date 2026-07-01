@@ -10,5 +10,6 @@ export interface ProviderInput {
 
 export interface VisionProvider {
   readonly profile: string;
+  listModels?(): Promise<string[]>;
   process(input: ProviderInput): Promise<TextRegion[]>;
 }

@@ -76,6 +76,26 @@ test("BackendClient calls cache management and task control endpoints", async ()
   assert.deepEqual(JSON.parse(String(calls[2]?.init.body)), { surfaceId: "s1" });
 });
 
+test("BackendClient reads backend model list and clears diagnostics", async () => {
+  const calls: Array<{ url: string; init: RequestInit | undefined }> = [];
+  globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+    calls.push({ url: String(url), init });
+    if (String(url).endsWith("/v1/models")) return new Response(JSON.stringify({ ok: true, models: ["gpt-5.4-mini"], currentModel: "gpt-5.4-mini" }), { status: 200 });
+    if (String(url).endsWith("/v1/diagnostics/clear")) return new Response(JSON.stringify({ ok: true, deleted: 10 }), { status: 200 });
+    return new Response(JSON.stringify({ ok: false, error: "unexpected" }), { status: 404 });
+  }) as typeof fetch;
+  const client = new BackendClient("http://127.0.0.1:47831");
+
+  const models = await client.models();
+  const cleared = await client.clearDiagnostics();
+
+  assert.equal(calls[0]?.url, "http://127.0.0.1:47831/v1/models");
+  assert.equal(calls[1]?.url, "http://127.0.0.1:47831/v1/diagnostics/clear");
+  assert.equal(calls[1]?.init?.method, "POST");
+  assert.equal(models.ok && models.currentModel, "gpt-5.4-mini");
+  assert.equal(cleared.ok && cleared.deleted, 10);
+});
+
 test("BackendClient reads recent diagnostics", async () => {
   const calls: string[] = [];
   globalThis.fetch = (async (url: string | URL | Request) => {
@@ -165,3 +185,4 @@ test("SurfaceSubmitTracker can release a surface for later retry", () => {
 
   assert.equal(tracker.shouldSubmit("s1"), true);
 });
+

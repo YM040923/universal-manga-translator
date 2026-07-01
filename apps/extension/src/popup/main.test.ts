@@ -17,6 +17,31 @@ test("popup renders active site settings and backend status", async () => {
   assert.equal(root.querySelector<HTMLSelectElement>("[data-field='target-language']")?.value, "zh-CN");
 });
 
+
+
+test("popup displays backend provider model from config status instead of default mock", async () => {
+  const dom = setupDom();
+  const root = dom.window.document.querySelector<HTMLElement>("#app")!;
+
+  await mountPopupPage(root, deps({
+    backendOnline: true,
+    configStatus: async () => ({
+      ok: true,
+      provider: "openai-compatible",
+      targetLanguage: "zh-CN",
+      providerProfile: "openai-compatible:gpt-5.4-mini",
+      openAICompatible: { baseUrl: "https://cf.ai-pixel.online/v1", model: "gpt-5.4-mini", apiKeyConfigured: true, imageInputFormat: "image-field" },
+      image: { maxLongEdge: 1600, jpegQuality: 0.75 },
+      configWritable: false,
+    }),
+  }));
+
+  const text = root.textContent ?? "";
+  assert.match(text, /后端模型/);
+  assert.match(text, /gpt-5\.4-mini/);
+  assert.doesNotMatch(text, /Mock \/ local test/);
+});
+
 test("popup uses compact density and omits long scope hint", async () => {
   const dom = setupDom();
   const root = dom.window.document.querySelector<HTMLElement>("#app")!;
@@ -91,12 +116,13 @@ function setupDom(): JSDOM {
   return dom;
 }
 
-function deps(options: { storage?: SettingsStorageArea; backendOnline?: boolean; tabUrl?: string; sentMessages?: unknown[]; openOptionsPage?: () => void } = {}): PopupDeps {
+function deps(options: { storage?: SettingsStorageArea; backendOnline?: boolean; tabUrl?: string; sentMessages?: unknown[]; openOptionsPage?: () => void; configStatus?: PopupDeps["configStatus"] } = {}): PopupDeps {
   const sent = options.sentMessages;
   return {
     storage: options.storage ?? fakeStorage(DEFAULT_SETTINGS),
     queryActiveTab: async () => ({ id: 123, url: options.tabUrl ?? "https://manga.example/series/a/1" }),
     checkBackend: async () => options.backendOnline ?? true,
+    ...(options.configStatus ? { configStatus: options.configStatus } : {}),
     sendMessageToTab: async (tabId, message) => { sent?.push({ tabId, message }); },
     openOptionsPage: options.openOptionsPage ?? (() => undefined),
   };

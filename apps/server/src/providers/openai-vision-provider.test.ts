@@ -228,3 +228,81 @@ test("provider prompt uses per-task target language from submitted surface", asy
     globalThis.fetch = originalFetch;
   }
 });
+
+test("filters provider refusal placeholder regions and very low confidence boxes", () => {
+  const parsed = OpenAIVisionProvider.parseRegionsFromContent(JSON.stringify({ regions: [{
+    id: "r1",
+    box: { x: 0, y: 0, width: 400, height: 400 },
+    sourceText: "[image unavailable to OCR in this interface]",
+    translatedText: "[当前接口无法进行图像OCR识别]",
+    confidence: 0.01,
+    orientation: "unknown",
+    kind: "unknown",
+  }, {
+    id: "r2",
+    box: { x: 10, y: 10, width: 80, height: 20 },
+    sourceText: "Hello",
+    translatedText: "你好",
+    confidence: 0.9,
+    orientation: "horizontal",
+    kind: "dialogue",
+  }] }));
+
+  assert.deepEqual(parsed.map((region) => region.id), ["r2"]);
+});
+
+test("provider prompt requires tight text bounding boxes instead of whole bubbles", async () => {
+  const originalFetch = globalThis.fetch;
+  let prompt = "";
+  globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body)) as { messages: Array<{ content: Array<{ type: string; text?: string }> }> };
+    prompt = body.messages[0]?.content.find((part) => part.type === "text")?.text ?? "";
+    return new Response(JSON.stringify({ choices: [{ message: { content: '{"regions":[]}' } }] }), { status: 200, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+
+  try {
+    const provider = new OpenAIVisionProvider({ baseUrl: "https://api.example.test/v1", apiKey: "test", model: "vision", targetLanguage: "zh-CN" });
+    await provider.process({
+      task: {
+        surfaceId: "s1",
+        pageUrl: "https://example.test",
+        domain: "example.test",
+        viewportPriority: "p0",
+        surfaceRect: { x: 0, y: 0, width: 10, height: 10 },
+        naturalSize: { width: 10, height: 10 },
+        renderSize: { width: 10, height: 10 },
+        readingDirection: "auto",
+        sourceLanguage: "auto",
+        targetLanguage: "zh-CN",
+      },
+      imageBuffer: Buffer.from("fake"),
+      imageHash: "hash",
+      width: 100,
+      height: 100,
+    });
+
+    assert.match(prompt, /tight bounding boxes/i);
+    assert.match(prompt, /actual text glyphs/i);
+    assert.match(prompt, /Do not use the whole speech bubble/i);
+    assert.match(prompt, /box only the text area/i);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("listModels reads compatible model ids and falls back to current model", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (url: string | URL | Request) => {
+    if (String(url).endsWith("/models")) {
+      return new Response(JSON.stringify({ data: [{ id: "gpt-5.4-mini" }, { id: "gpt-5.5" }] }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    return new Response(JSON.stringify({ choices: [{ message: { content: '{"regions":[]}' } }] }), { status: 200, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+
+  try {
+    const provider = new OpenAIVisionProvider({ baseUrl: "https://api.example.test/v1", apiKey: "test", model: "gpt-5.4-mini", targetLanguage: "zh-CN" });
+    assert.deepEqual(await provider.listModels(), ["gpt-5.4-mini", "gpt-5.5"]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

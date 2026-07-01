@@ -1,4 +1,4 @@
-﻿import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+﻿import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, truncateSync } from "node:fs";
 import { dirname } from "node:path";
 import type { JobStatus, Size } from "@umt/shared";
 
@@ -69,3 +69,11 @@ export function readRecentDiagnostics(path: string, limit = 20): Array<Record<st
     }
   });
 }
+
+export function clearDiagnostics(path: string): number {
+  if (!existsSync(path)) return 0;
+  const size = statSync(path).size;
+  truncateSync(path, 0);
+  return size;
+}
+

@@ -58,6 +58,43 @@ test("second identical submit is served from persistent cache", async () => {
   }
 });
 
+
+
+test("empty provider results are not reused as cache hits", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "umt-empty-cache-"));
+  let db: ReturnType<typeof openDatabase> | undefined;
+  let app: Awaited<ReturnType<typeof buildServer>> | undefined;
+  let calls = 0;
+  try {
+    db = openDatabase(join(dir, "cache.sqlite"));
+    app = await buildServer({
+      provider: "test",
+      targetLanguage: "zh-CN",
+      surfaceCache: new SurfaceCache(db),
+      visionProvider: {
+        profile: "empty-then-complete",
+        process: async () => {
+          calls += 1;
+          if (calls === 1) return [];
+          return [{ id: "r1", box: { x: 10, y: 10, width: 100, height: 50 }, sourceText: "hi", translatedText: "??", confidence: 1, orientation: "horizontal", kind: "dialogue" }];
+        },
+      },
+    });
+
+    const first = await app.inject({ method: "POST", url: "/v1/surfaces/submit", payload: { task } });
+    const second = await app.inject({ method: "POST", url: "/v1/surfaces/submit", payload: { task: { ...task, surfaceId: "surface-retry" } } });
+
+    assert.equal(first.json().status, "empty");
+    assert.equal(second.json().status, "completed");
+    assert.equal(second.json().result.regions.length, 1);
+    assert.equal(calls, 2);
+  } finally {
+    await app?.close();
+    db?.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("submit returns structured failure and publishes job.failed", async () => {
   const events: string[] = [];
   const { EventBus } = await import("./events.js");
@@ -106,6 +143,9 @@ test("config status exposes provider details without leaking API key", async () 
     visionProvider: { profile: "openai-compatible:gpt-4.1-mini", process: async () => [] },
     openAICompatibleBaseUrl: "https://api.openai.com/v1",
     openAIModel: "gpt-4.1-mini",
+    openAIImageInputFormat: "image-field",
+    maxImageLongEdge: 1600,
+    jpegQuality: 0.75,
     openAIApiKeyConfigured: true,
   });
 
@@ -121,9 +161,46 @@ test("config status exposes provider details without leaking API key", async () 
       baseUrl: "https://api.openai.com/v1",
       model: "gpt-4.1-mini",
       apiKeyConfigured: true,
+      imageInputFormat: "image-field",
     },
+    image: {
+      maxLongEdge: 1600,
+      jpegQuality: 0.75,
+    },
+    configWritable: false,
   });
   assert.equal(JSON.stringify(response.json()).includes("sk-"), false);
+  await app.close();
+});
+
+test("models endpoint exposes provider model list and current model", async () => {
+  const app = await buildServer({
+    provider: "openai-compatible",
+    targetLanguage: "zh-CN",
+    openAIModel: "gpt-5.4-mini",
+    visionProvider: { profile: "openai-compatible:gpt-5.4-mini", listModels: async () => ["gpt-5.4-mini", "gpt-5.5"], process: async () => [] },
+  });
+
+  const response = await app.inject({ method: "GET", url: "/v1/models" });
+
+  assert.equal(response.statusCode, 200);
+  assert.deepEqual(response.json(), { ok: true, models: ["gpt-5.4-mini", "gpt-5.5"], currentModel: "gpt-5.4-mini" });
+  await app.close();
+});
+
+test("clear diagnostics endpoint calls diagnostics clearer", async () => {
+  let called = false;
+  const app = await buildServer({
+    provider: "mock",
+    targetLanguage: "zh-CN",
+    diagnosticsClearer: () => { called = true; return 123; },
+  });
+
+  const response = await app.inject({ method: "POST", url: "/v1/diagnostics/clear" });
+
+  assert.equal(response.statusCode, 200);
+  assert.deepEqual(response.json(), { ok: true, deleted: 123 });
+  assert.equal(called, true);
   await app.close();
 });
 
@@ -207,6 +284,40 @@ test("submit maps provider boxes from normalized provider image back to original
   const response = await app.inject({ method: "POST", url: "/v1/surfaces/submit", payload: { task: largeTask } });
 
   assert.deepEqual(response.json().result.regions[0].box, { x: 200, y: 100, width: 400, height: 200 });
+  await app.close();
+});
+
+test("submit tiles very tall webtoon images instead of shrinking text unreadably", async () => {
+  const sharp = await import("sharp");
+  const tallImage = await sharp.default({ create: { width: 900, height: 4000, channels: 3, background: "white" } }).png().toBuffer();
+  const tallTask = {
+    ...task,
+    imageData: `data:image/png;base64,${tallImage.toString("base64")}`,
+    naturalSize: { width: 900, height: 4000 },
+    renderSize: { width: 450, height: 2000 },
+    surfaceRect: { x: 0, y: 0, width: 450, height: 2000 },
+  };
+  const seen: Array<{ width: number; height: number }> = [];
+  const app = await buildServer({
+    provider: "test",
+    targetLanguage: "zh-CN",
+    maxImageLongEdge: 1600,
+    visionProvider: {
+      profile: "tile-provider",
+      process: async (input) => {
+        seen.push({ width: input.width, height: input.height });
+        return [{ id: `r${seen.length}`, box: { x: 90, y: 100, width: 180, height: 80 }, sourceText: "hi", translatedText: "你好", confidence: 1, orientation: "horizontal", kind: "dialogue" }];
+      },
+    },
+  });
+
+  const response = await app.inject({ method: "POST", url: "/v1/surfaces/submit", payload: { task: tallTask } });
+
+  assert.equal(response.statusCode, 200);
+  assert.equal(seen.length > 1, true);
+  assert.equal(seen.every((size) => size.width >= 800), true);
+  assert.equal(response.json().result.regions.length, seen.length);
+  assert.equal(response.json().result.regions[1].box.y > response.json().result.regions[0].box.y, true);
   await app.close();
 });
 

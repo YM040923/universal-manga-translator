@@ -1,4 +1,4 @@
-﻿import type { ApiResponse, CacheStatsResponse, CancelSurfaceRequest, CancelSurfaceResponse, ClearCacheResponse, ConfigStatusResponse, ManualOverridePayload, SaveManualOverrideRequest, SaveManualOverrideResponse, ServerEvent, SubmitSurfaceRequest, SubmitSurfaceResponse } from "@umt/shared/protocol";
+﻿import type { ApiResponse, AvailableModelsResponse, CacheStatsResponse, CancelSurfaceRequest, CancelSurfaceResponse, ClearCacheResponse, ClearDiagnosticsResponse, ConfigStatusResponse, ManualOverridePayload, SaveManualOverrideRequest, SaveManualOverrideResponse, ServerEvent, SubmitSurfaceRequest, SubmitSurfaceResponse } from "@umt/shared/protocol";
 import type { SurfaceTask } from "@umt/shared/types";
 
 export interface SelfTestResponse {
@@ -72,6 +72,11 @@ export class BackendClient {
     return (await response.json()) as ApiResponse<ConfigStatusResponse>;
   }
 
+  async models(): Promise<ApiResponse<AvailableModelsResponse>> {
+    const response = await fetch(`${this.baseUrl}/v1/models`, { cache: "no-store" });
+    return (await response.json()) as ApiResponse<AvailableModelsResponse>;
+  }
+
   async selfTest(): Promise<ApiResponse<SelfTestResponse>> {
     const response = await fetch(`${this.baseUrl}/v1/self-test`, { method: "POST", cache: "no-store" });
     return (await response.json()) as ApiResponse<SelfTestResponse>;
@@ -110,6 +115,11 @@ export class BackendClient {
     return (await response.json()) as ApiResponse<DiagnosticsResponse>;
   }
 
+  async clearDiagnostics(): Promise<ApiResponse<ClearDiagnosticsResponse>> {
+    const response = await fetch(`${this.baseUrl}/v1/diagnostics/clear`, { method: "POST" });
+    return (await response.json()) as ApiResponse<ClearDiagnosticsResponse>;
+  }
+
   async saveManualOverride(override: ManualOverridePayload): Promise<ApiResponse<SaveManualOverrideResponse>> {
     return this.postJson<SaveManualOverrideResponse>("/v1/overrides", override satisfies SaveManualOverrideRequest);
   }
@@ -142,3 +152,5 @@ export class BackendClient {
     throw lastError instanceof Error ? lastError : new Error(String(lastError));
   }
 }
+
+
