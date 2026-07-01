@@ -19,3 +19,18 @@ test("SurfaceSubmitTracker prevents duplicate surface submissions", () => {
 test("BackendClient exposes events url", () => {
   assert.equal(new BackendClient("http://127.0.0.1:47831").eventsUrl(), "ws://127.0.0.1:47831/v1/events");
 });
+
+test("BackendClient saves manual override", async () => {
+  const calls: Array<{ url: string; init: RequestInit }> = [];
+  globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+    calls.push({ url: String(url), init: init ?? {} });
+    return new Response(JSON.stringify({ ok: true, override: JSON.parse(String(init?.body)) }), { status: 200, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+
+  const response = await new BackendClient("http://127.0.0.1:47831").saveManualOverride({ imageHash: "hash", targetLanguage: "zh-CN", regionId: "r1", translatedText: "manual edit" });
+
+  assert.equal(response.ok, true);
+  assert.equal(calls[0]?.url, "http://127.0.0.1:47831/v1/overrides");
+  assert.equal(calls[0]?.init.method, "POST");
+  assert.deepEqual(JSON.parse(String(calls[0]?.init.body)), { imageHash: "hash", targetLanguage: "zh-CN", regionId: "r1", translatedText: "manual edit" });
+});

@@ -1,5 +1,4 @@
-﻿import type { ServerEvent } from "@umt/shared/protocol";
-import type { ApiResponse, SubmitSurfaceRequest, SubmitSurfaceResponse } from "@umt/shared/protocol";
+import type { ApiResponse, ManualOverridePayload, SaveManualOverrideRequest, SaveManualOverrideResponse, ServerEvent, SubmitSurfaceRequest, SubmitSurfaceResponse } from "@umt/shared/protocol";
 import type { SurfaceTask } from "@umt/shared/types";
 
 export function createEventUrl(baseUrl: string): string {
@@ -55,5 +54,14 @@ export class BackendClient {
       body: JSON.stringify({ task } satisfies SubmitSurfaceRequest),
     });
     return (await response.json()) as ApiResponse<SubmitSurfaceResponse>;
+  }
+
+  async saveManualOverride(override: ManualOverridePayload): Promise<ApiResponse<SaveManualOverrideResponse>> {
+    const response = await fetch(`${this.baseUrl}/v1/overrides`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(override satisfies SaveManualOverrideRequest),
+    });
+    return (await response.json()) as ApiResponse<SaveManualOverrideResponse>;
   }
 }

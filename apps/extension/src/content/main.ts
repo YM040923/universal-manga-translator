@@ -13,7 +13,7 @@ void bootstrap();
 async function bootstrap(): Promise<void> {
   const settings = await loadSettings();
   const client = new BackendClient(settings.backendUrl);
-  const renderer = new OverlayRenderer();
+  const renderer = new OverlayRenderer({ targetLanguage: settings.targetLanguage, onManualEdit: (override) => void client.saveManualOverride(override) });
   const submitTracker = new SurfaceSubmitTracker();
   const statusCounter = new TranslationStatusCounter();
   let overlaysVisible = true;

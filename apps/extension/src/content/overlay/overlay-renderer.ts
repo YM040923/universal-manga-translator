@@ -1,4 +1,5 @@
 import { mapNaturalBoxToRenderedBox } from "@umt/shared/geometry";
+import type { ManualOverridePayload } from "@umt/shared/protocol";
 import type { Size, SurfaceResult } from "@umt/shared/types";
 
 const manualEdits = new Map<string, string>();
@@ -7,6 +8,11 @@ interface RenderState {
   element: HTMLElement;
   naturalSize: Size;
   result: SurfaceResult;
+}
+
+export interface OverlayRendererOptions {
+  targetLanguage?: string;
+  onManualEdit?: (override: ManualOverridePayload) => void;
 }
 
 function manualEditKey(imageHash: string, targetLanguage: string, regionId: string): string {
@@ -24,8 +30,12 @@ export function loadManualEdit(imageHash: string, targetLanguage: string, region
 export class OverlayRenderer {
   private readonly root: HTMLDivElement;
   private readonly rendered = new Map<string, RenderState>();
+  private readonly targetLanguage: string;
+  private readonly onManualEdit: ((override: ManualOverridePayload) => void) | undefined;
 
-  constructor() {
+  constructor(options: OverlayRendererOptions = {}) {
+    this.targetLanguage = options.targetLanguage ?? "zh-CN";
+    this.onManualEdit = options.onManualEdit;
     this.root = document.createElement("div");
     this.root.dataset.umtOverlayRoot = "true";
     this.root.style.cssText = "position:absolute;left:0;top:0;z-index:2147483646;pointer-events:none;";
@@ -59,7 +69,7 @@ export class OverlayRenderer {
       const node = document.createElement("div");
       node.dataset.umtSurfaceId = result.surfaceId;
       node.dataset.umtRegionId = region.id;
-      node.textContent = loadManualEdit(result.imageHash, "zh-CN", region.id) ?? region.translatedText;
+      node.textContent = loadManualEdit(result.imageHash, this.targetLanguage, region.id) ?? region.translatedText;
       node.style.cssText = [
         "position:absolute",
         `left:${box.x}px`,
@@ -80,10 +90,11 @@ export class OverlayRenderer {
         "pointer-events:auto",
       ].join(";");
       node.addEventListener("click", () => {
-        const next = window.prompt("修改译文", node.textContent ?? "");
+        const next = window.prompt("Edit translation", node.textContent ?? "");
         if (next !== null) {
           node.textContent = next;
-          saveManualEdit(result.imageHash, "zh-CN", region.id, next);
+          saveManualEdit(result.imageHash, this.targetLanguage, region.id, next);
+          this.onManualEdit?.({ imageHash: result.imageHash, targetLanguage: this.targetLanguage, regionId: region.id, translatedText: next });
         }
       });
       this.root.append(node);

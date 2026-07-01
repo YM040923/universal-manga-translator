@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
+import type { ManualOverridePayload } from "@umt/shared/protocol";
 import type { Rect, SurfaceResult } from "@umt/shared/types";
 import { loadManualEdit, OverlayRenderer, saveManualEdit } from "./overlay-renderer.js";
 
@@ -8,7 +9,7 @@ test("renders translated regions over a surface", () => {
   const { img } = setupDomWithImage({ x: 10, y: 20, width: 500, height: 1000 });
   const renderer = new OverlayRenderer();
   renderer.render(img, { width: 1000, height: 2000 }, fakeResult("s1"));
-  assert.equal(document.querySelector("[data-umt-region-id='r1']")?.textContent, "你好");
+  assert.equal(document.querySelector("[data-umt-region-id='r1']")?.textContent, "hello translated");
 });
 
 test("refreshAll repositions overlays after surface layout changes", () => {
@@ -29,8 +30,20 @@ test("refreshAll repositions overlays after surface layout changes", () => {
 });
 
 test("stores manual edits by image hash and region id", () => {
-  saveManualEdit("hash", "zh-CN", "r1", "改好的译文");
-  assert.equal(loadManualEdit("hash", "zh-CN", "r1"), "改好的译文");
+  saveManualEdit("hash", "zh-CN", "r1", "edited text");
+  assert.equal(loadManualEdit("hash", "zh-CN", "r1"), "edited text");
+});
+
+test("manual edit callback receives override payload", () => {
+  const { img } = setupDomWithImage({ x: 10, y: 20, width: 500, height: 1000 });
+  let saved: ManualOverridePayload | undefined;
+  window.prompt = () => "manual edit";
+  const renderer = new OverlayRenderer({ targetLanguage: "zh-CN", onManualEdit: (override) => { saved = override; } });
+  renderer.render(img, { width: 1000, height: 2000 }, fakeResult("s1"));
+
+  document.querySelector<HTMLElement>("[data-umt-region-id='r1']")!.click();
+
+  assert.deepEqual(saved, { imageHash: "hash", targetLanguage: "zh-CN", regionId: "r1", translatedText: "manual edit" });
 });
 
 function setupDomWithImage(rect: Rect | (() => Rect)) {
@@ -55,7 +68,7 @@ function fakeResult(surfaceId: string): SurfaceResult {
       id: "r1",
       box: { x: 100, y: 100, width: 200, height: 100 },
       sourceText: "Hello",
-      translatedText: "你好",
+      translatedText: "hello translated",
       confidence: 1,
       orientation: "horizontal",
       kind: "dialogue",
