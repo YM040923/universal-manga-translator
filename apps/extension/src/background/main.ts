@@ -1,3 +1,7 @@
-﻿chrome.runtime.onInstalled.addListener(() => {
+﻿import { registerCaptureVisibleTabHandler } from "./capture.js";
+
+chrome.runtime.onInstalled.addListener(() => {
   console.log("Universal Manga Translator installed");
 });
+
+registerCaptureVisibleTabHandler();
