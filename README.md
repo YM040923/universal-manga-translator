@@ -83,3 +83,18 @@ Phase 8 adds `pnpm doctor`, root script tests, and Windows helper scripts for bu
 ## Phase 9 Verification
 
 Phase 9 adds page-change observation for lazy-loaded and dynamically appended manga pages. The content script now reacts to DOM mutations, captured image load events, and resize observation by refreshing overlays and scheduling translation when auto-translate is enabled. Verified on 2026-07-01 with `pnpm doctor`, `pnpm test`, `pnpm build`, `pnpm test:e2e`, and `pnpm exec playwright test tests/integration/extension-loaded.spec.ts`; loaded-extension E2E includes a dynamically appended manga image fixture.
+
+## Completion Phase Notes
+
+The completion phase adds the remaining daily-use controls:
+
+- backend provider status at `/v1/config/status` without exposing API keys;
+- options-page provider checks and cache stats/clear controls;
+- visible-tab screenshot capture bridge for fallback crops;
+- manual drag-to-select region translation;
+- popup commands for manual selection and retranslation;
+- backend cache stats/clear, force retranslate, and cancellation acknowledgement endpoints;
+- OCR + translation provider pipeline interfaces for future non-vision-model providers;
+- improved vertical text and long-translation font fitting.
+
+For real AI use, keep API keys in the backend `.env`; the extension only talks to the local backend.
