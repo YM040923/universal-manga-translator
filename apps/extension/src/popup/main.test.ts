@@ -11,10 +11,32 @@ test("popup renders active site settings and backend status", async () => {
 
   await mountPopupPage(root, deps({ storage, backendOnline: true, tabUrl: "https://manga.example/series/a/1" }));
 
-  assert.match(root.textContent ?? "", /本站自动翻译/);
-  assert.match(root.textContent ?? "", /后端已连接/);
+  assert.match(root.textContent ?? "", /\u672c\u7ad9\u81ea\u52a8\u7ffb\u8bd1/u);
+  assert.match(root.textContent ?? "", /\u540e\u7aef\u5df2\u8fde\u63a5/u);
   assert.equal(root.querySelector<HTMLInputElement>("[data-field='site-auto']")?.checked, true);
   assert.equal(root.querySelector<HTMLSelectElement>("[data-field='target-language']")?.value, "zh-CN");
+});
+
+test("popup uses compact density and omits long scope hint", async () => {
+  const dom = setupDom();
+  const root = dom.window.document.querySelector<HTMLElement>("#app")!;
+
+  await mountPopupPage(root, deps({ tabUrl: "https://manga.example/series/a/1" }));
+
+  assert.equal(root.querySelector<HTMLElement>(".umt-popup")?.dataset.density, "compact");
+  assert.equal(root.querySelector(".hint"), null);
+  assert.equal(root.querySelector("[data-section='quick-toggles']") !== null, true);
+});
+
+test("popup settings button opens options page", async () => {
+  const dom = setupDom();
+  let opened = false;
+  const root = dom.window.document.querySelector<HTMLElement>("#app")!;
+
+  await mountPopupPage(root, deps({ openOptionsPage: () => { opened = true; } }));
+  root.querySelector<HTMLButtonElement>("[data-action='options']")!.click();
+
+  assert.equal(opened, true);
 });
 
 test("popup disables site card on unsupported tab", async () => {
@@ -23,7 +45,7 @@ test("popup disables site card on unsupported tab", async () => {
 
   await mountPopupPage(root, deps({ tabUrl: "chrome://extensions" }));
 
-  assert.match(root.textContent ?? "", /当前页面不支持/);
+  assert.match(root.textContent ?? "", /\u5f53\u524d\u9875\u9762\u4e0d\u652f\u6301/u);
   assert.equal(root.querySelector<HTMLInputElement>("[data-field='site-auto']")?.disabled, true);
 });
 
@@ -66,14 +88,14 @@ function setupDom(): JSDOM {
   return dom;
 }
 
-function deps(options: { storage?: SettingsStorageArea; backendOnline?: boolean; tabUrl?: string; sentMessages?: unknown[] } = {}): PopupDeps {
+function deps(options: { storage?: SettingsStorageArea; backendOnline?: boolean; tabUrl?: string; sentMessages?: unknown[]; openOptionsPage?: () => void } = {}): PopupDeps {
   const sent = options.sentMessages;
   return {
     storage: options.storage ?? fakeStorage(DEFAULT_SETTINGS),
     queryActiveTab: async () => ({ id: 123, url: options.tabUrl ?? "https://manga.example/series/a/1" }),
     checkBackend: async () => options.backendOnline ?? true,
     sendMessageToTab: async (tabId, message) => { sent?.push({ tabId, message }); },
-    openOptionsPage: () => undefined,
+    openOptionsPage: options.openOptionsPage ?? (() => undefined),
   };
 }
 
