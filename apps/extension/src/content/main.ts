@@ -11,7 +11,7 @@ import { FloatingPanel, type FloatingPanelState } from "./panel/floating-panel";
 import { AutoScheduler } from "./scheduler/auto-scheduler";
 import { ManualSelectionController } from "./selection/manual-selection";
 import { PageChangeObserver } from "./scheduler/page-change-observer";
-import { prioritizeSurfaces, type PrioritizedSurface } from "./scheduler/viewport-scheduler";
+import { prioritizeSurfaces, selectSurfacesForMode, type PrioritizedSurface } from "./scheduler/viewport-scheduler";
 import { TranslationStatusCounter } from "./status/job-status-counter";
 import { isRenderableSurfaceResult } from "./translation-result";
 import { getEffectiveSiteSettings, loadSettings, type ExtensionSettings } from "../settings/settings";
@@ -59,7 +59,7 @@ async function bootstrap(): Promise<void> {
 
   function selectedSurfaces(): PrioritizedSurface[] {
     const prioritized = prioritizeSurfaces(detectImageSurfaces(document), viewportRect());
-    const selected = settings.imageRange === "fullPage" ? prioritized.slice(0, settings.maxFullPageSurfaces) : prioritized.filter((item) => item.priority === "p0" || item.priority === "p1");
+    const selected = selectSurfacesForMode(prioritized, { imageRange: settings.imageRange, maxFullPageSurfaces: settings.maxFullPageSurfaces, pretranslateNextPage: settings.pretranslateNextPage });
     for (const item of selected) debugRenderer.markSurface(item.surface.surfaceId, item.surface.element, "detected", `${item.priority} ${item.surface.kind}`);
     return selected;
   }
