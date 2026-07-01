@@ -22,3 +22,22 @@ test("SurfaceCache persists and reloads results", () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("SurfaceCache reports stats and clears entries", () => {
+  const dir = mkdtempSync(join(tmpdir(), "umt-cache-stats-"));
+  try {
+    const db = openDatabase(join(dir, "cache.sqlite"));
+    const cache = new SurfaceCache(db);
+    const result: SurfaceResult = { surfaceId: "s1", imageHash: "h1", status: "completed", regions: [], providerProfile: "mock", layoutVersion: 1, elapsedMs: 10 };
+    cache.save("key1", result);
+    cache.save("key2", { ...result, surfaceId: "s2", imageHash: "h2" });
+
+    assert.equal(cache.stats().entries, 2);
+    assert.equal(cache.stats().bytes > 0, true);
+    assert.equal(cache.clear().deleted, 2);
+    assert.equal(cache.stats().entries, 0);
+    db.close();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

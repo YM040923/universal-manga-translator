@@ -126,3 +126,28 @@ test("config status exposes provider details without leaking API key", async () 
   assert.equal(JSON.stringify(response.json()).includes("sk-"), false);
   await app.close();
 });
+
+test("cache management API reports stats and clears cache", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "umt-cache-api-"));
+  let db: ReturnType<typeof openDatabase> | undefined;
+  let app: Awaited<ReturnType<typeof buildServer>> | undefined;
+  try {
+    db = openDatabase(join(dir, "cache.sqlite"));
+    app = await buildServer({ provider: "mock", targetLanguage: "zh-CN", surfaceCache: new SurfaceCache(db) });
+    await app.inject({ method: "POST", url: "/v1/surfaces/submit", payload: { task } });
+
+    const stats = await app.inject({ method: "GET", url: "/v1/cache/stats" });
+    assert.equal(stats.statusCode, 200);
+    assert.equal(stats.json().ok, true);
+    assert.equal(stats.json().stats.entries, 1);
+
+    const cleared = await app.inject({ method: "POST", url: "/v1/cache/clear" });
+    assert.equal(cleared.statusCode, 200);
+    assert.equal(cleared.json().ok, true);
+    assert.equal(cleared.json().deleted, 1);
+  } finally {
+    await app?.close();
+    db?.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

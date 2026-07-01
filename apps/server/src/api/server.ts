@@ -69,6 +69,18 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
     return { ok: true, overrides: manualOverrideStore?.listForImage(imageHash, targetLanguage) ?? [] };
   });
 
+  app.get("/v1/cache/stats", async () => {
+    const stats = surfaceCache?.stats() ?? { entries: memoryCache.size, bytes: 0, updatedAt: null };
+    return { ok: true, stats };
+  });
+
+  app.post("/v1/cache/clear", async () => {
+    const persistent = surfaceCache?.clear().deleted ?? 0;
+    const memory = memoryCache.size;
+    memoryCache.clear();
+    return { ok: true, deleted: surfaceCache ? persistent : memory };
+  });
+
   app.post<{ Body: { task: SurfaceTask } }>("/v1/surfaces/submit", async (request) => {
     const started = Date.now();
     const task = request.body.task;
