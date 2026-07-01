@@ -53,3 +53,35 @@ test("DebugOverlayRenderer renders returned AI region boxes", () => {
   assert.match(region.getAttribute("style") ?? "", /left:\s*50px/);
   assert.match(region.getAttribute("style") ?? "", /width:\s*150px/);
 });
+
+
+test("DebugOverlayRenderer skips unusable region boxes", () => {
+  const dom = new JSDOM("<body><img id='manga' /></body>", { pretendToBeVisual: true });
+  globalThis.document = dom.window.document;
+  globalThis.window = dom.window as unknown as Window & typeof globalThis;
+  const element = document.querySelector<HTMLElement>("#manga")!;
+  element.getBoundingClientRect = () => ({ x: 0, y: 0, width: 100, height: 100, top: 0, left: 0, right: 100, bottom: 100, toJSON: () => ({}) } as DOMRect);
+  const renderer = new DebugOverlayRenderer();
+  renderer.setEnabled(true);
+
+  renderer.markResult(element, { width: 100, height: 100 }, {
+    surfaceId: "debug-clamped",
+    imageHash: "hash",
+    status: "completed",
+    providerProfile: "test",
+    layoutVersion: 1,
+    elapsedMs: 1,
+    regions: [{
+      id: "bad",
+      box: { x: 200, y: 200, width: 5, height: 5 },
+      sourceText: "bad",
+      translatedText: "坏",
+      confidence: 1,
+      orientation: "horizontal",
+      kind: "dialogue",
+      style: { fontSize: 14, writingMode: "horizontal-tb", align: "center", background: "white", color: "black" },
+    }],
+  });
+
+  assert.equal(document.querySelector("[data-umt-debug-region-id='bad']"), null);
+});

@@ -1,4 +1,4 @@
-import { mapNaturalBoxToRenderedBox } from "@umt/shared/geometry";
+import { clampRectToBounds, mapNaturalBoxToRenderedBox } from "@umt/shared/geometry";
 import type { ManualOverridePayload } from "@umt/shared/protocol";
 import type { Size, SurfaceResult } from "@umt/shared/types";
 
@@ -66,7 +66,9 @@ export class OverlayRenderer {
     const rect = element.getBoundingClientRect();
     const renderedRect = { x: rect.x + window.scrollX, y: rect.y + window.scrollY, width: rect.width, height: rect.height };
     for (const region of result.regions) {
-      const box = mapNaturalBoxToRenderedBox(region.box, naturalSize, renderedRect);
+      const clampedNaturalBox = clampRectToBounds(region.box, naturalSize);
+      if (!clampedNaturalBox) continue;
+      const box = mapNaturalBoxToRenderedBox(clampedNaturalBox, naturalSize, renderedRect);
       const node = document.createElement("div");
       node.dataset.umtSurfaceId = result.surfaceId;
       node.dataset.umtRegionId = region.id;

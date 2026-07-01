@@ -11,6 +11,7 @@ export interface SubmitDiagnosticsRecord {
   providerSize: Size;
   rawRegionCount: number;
   finalRegionCount: number;
+  filteredRegionCount?: number;
   elapsedMs: number;
   note?: string;
 }
@@ -39,6 +40,7 @@ export class FileDiagnosticsWriter implements DiagnosticsWriter {
       providerSize: record.providerSize,
       rawRegionCount: record.rawRegionCount,
       finalRegionCount: record.finalRegionCount,
+      filteredRegionCount: record.filteredRegionCount,
       elapsedMs: record.elapsedMs,
       note: sanitizeNote(record.note),
     };

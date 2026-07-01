@@ -1,4 +1,4 @@
-import { mapNaturalBoxToRenderedBox } from "@umt/shared/geometry";
+import { clampRectToBounds, mapNaturalBoxToRenderedBox } from "@umt/shared/geometry";
 import type { Size, SurfaceResult } from "@umt/shared/types";
 
 export type DebugSurfaceState = "detected" | "submitting" | "completed" | "empty" | "failed" | "fallback";
@@ -52,7 +52,9 @@ export class DebugOverlayRenderer {
     this.markSurface(result.surfaceId, element, result.status === "completed" || result.status === "cached" ? "completed" : result.status, `${result.regions.length} regions`);
     const renderedRect = renderedElementRect(element);
     for (const region of result.regions) {
-      const box = mapNaturalBoxToRenderedBox(region.box, naturalSize, renderedRect);
+      const clampedNaturalBox = clampRectToBounds(region.box, naturalSize);
+      if (!clampedNaturalBox) continue;
+      const box = mapNaturalBoxToRenderedBox(clampedNaturalBox, naturalSize, renderedRect);
       const node = document.createElement("div");
       node.dataset.umtDebugSurfaceId = result.surfaceId;
       node.dataset.umtDebugRegionId = region.id;

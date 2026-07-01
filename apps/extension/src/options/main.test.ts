@@ -177,3 +177,18 @@ test("settings page shows recent diagnostics", async () => {
   assert.match(text, /s1/);
   assert.match(text, /empty/);
 });
+
+
+test("settings page shows filtered diagnostics details", async () => {
+  setupDom();
+  await mountOptionsPage(document.querySelector<HTMLElement>("#app")!, deps({
+    diagnostics: async () => ({ ok: true, records: [{ surfaceId: "s2", status: "empty", finalRegionCount: 0, filteredRegionCount: 2, note: "filtered invalid or out-of-bounds boxes" }] }),
+  }));
+
+  document.querySelector<HTMLButtonElement>("[data-action='diagnostics']")!.click();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  const text = document.querySelector<HTMLElement>("[data-diagnostics-status]")?.textContent ?? "";
+  assert.match(text, /filtered 2/);
+  assert.match(text, /out-of-bounds/);
+});

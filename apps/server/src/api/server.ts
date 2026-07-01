@@ -2,6 +2,7 @@ import cors from "@fastify/cors";
 import websocket from "@fastify/websocket";
 import Fastify, { type FastifyInstance } from "fastify";
 import type { SaveManualOverrideRequest, SurfaceResult, SurfaceTask } from "@umt/shared";
+import { clampRectToBounds } from "@umt/shared/geometry";
 import { buildCacheKey, sha256Hex } from "@umt/shared/hashing";
 import type { ManualOverrideStore } from "../cache/manual-overrides.js";
 import { applyManualOverrides } from "../cache/manual-overrides.js";
@@ -109,7 +110,8 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
 
       eventBus.publish({ type: "job.processing", surfaceId: task.surfaceId });
       const providerRegions = await provider.process({ task, imageBuffer: normalized.buffer, imageHash, width: normalized.width, height: normalized.height });
-      const regions = mapProviderRegionsToOriginalImage(providerRegions, task.naturalSize, { width: normalized.width, height: normalized.height });
+      const mappedRegions = mapProviderRegionsToOriginalImage(providerRegions, task.naturalSize, { width: normalized.width, height: normalized.height });
+      const regions = clampProviderRegionsToImage(mappedRegions, task.naturalSize);
       const rawResult: SurfaceResult = {
         surfaceId: task.surfaceId,
         imageHash,
@@ -122,7 +124,7 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
       memoryCache.set(cacheKey, rawResult);
       surfaceCache?.save(cacheKey, rawResult);
       const result = applyStoredOverrides(rawResult, task.targetLanguage, manualOverrideStore);
-      diagnostics.record({ surfaceId: task.surfaceId, status: result.status, providerProfile: provider.profile, inputSource, originalSize: task.naturalSize, providerSize: { width: normalized.width, height: normalized.height }, rawRegionCount: providerRegions.length, finalRegionCount: result.regions.length, elapsedMs: rawResult.elapsedMs });
+      diagnostics.record({ surfaceId: task.surfaceId, status: result.status, providerProfile: provider.profile, inputSource, originalSize: task.naturalSize, providerSize: { width: normalized.width, height: normalized.height }, rawRegionCount: providerRegions.length, finalRegionCount: result.regions.length, filteredRegionCount: Math.max(0, providerRegions.length - regions.length), elapsedMs: rawResult.elapsedMs, ...(providerRegions.length > regions.length ? { note: "filtered invalid or out-of-bounds boxes" } : {}) });
       eventBus.publish({ type: "job.completed", surfaceId: task.surfaceId, result });
       return { ok: true, surfaceId: task.surfaceId, status: result.status, result };
     } catch (error) {
@@ -166,4 +168,11 @@ function mapProviderRegionsToOriginalImage<T extends { box: { x: number; y: numb
       height: Math.round(region.box.height * scaleY),
     },
   }));
+}
+
+function clampProviderRegionsToImage<T extends { box: { x: number; y: number; width: number; height: number } }>(regions: T[], imageSize: { width: number; height: number }): T[] {
+  return regions.flatMap((region) => {
+    const box = clampRectToBounds(region.box, imageSize);
+    return box ? [{ ...region, box }] : [];
+  });
 }

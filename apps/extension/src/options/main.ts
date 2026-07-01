@@ -274,7 +274,9 @@ function formatDiagnostics(records: Array<Record<string, unknown>>): string {
     const inputSource = String(record.inputSource ?? "?");
     const elapsedMs = String(record.elapsedMs ?? "?");
     const provider = String(record.providerProfile ?? "?");
-    return `${status} | ${surfaceId} | ${regions} regions | ${inputSource} | ${elapsedMs}ms | ${provider}`;
+    const filtered = typeof record.filteredRegionCount === "number" && record.filteredRegionCount > 0 ? ` | filtered ${record.filteredRegionCount}` : "";
+    const note = typeof record.note === "string" && record.note ? ` | ${record.note}` : "";
+    return `${status} | ${surfaceId} | ${regions} regions | ${inputSource} | ${elapsedMs}ms | ${provider}${filtered}${note}`;
   }).join("\n");
 }
 

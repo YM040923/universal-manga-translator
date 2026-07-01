@@ -116,3 +116,22 @@ test("OverlayRenderer applies vertical writing mode from layout style", () => {
 
   assert.equal((document.querySelector("[data-umt-surface-id='vertical-surface']") as HTMLElement).style.writingMode, "vertical-rl");
 });
+
+
+test("clamps overlay boxes to the rendered surface and skips unusable boxes", () => {
+  const { img } = setupDomWithImage({ x: 10, y: 20, width: 100, height: 100 });
+  const renderer = new OverlayRenderer();
+  const result = fakeResult("clamped");
+  result.regions = [
+    { ...result.regions[0]!, id: "keep", box: { x: -10, y: 10, width: 40, height: 30 } },
+    { ...result.regions[0]!, id: "skip", box: { x: 200, y: 200, width: 5, height: 5 } },
+  ];
+
+  renderer.render(img, { width: 100, height: 100 }, result);
+
+  const keep = document.querySelector<HTMLElement>("[data-umt-region-id='keep']")!;
+  assert.equal(keep.style.left, "10px");
+  assert.equal(keep.style.top, "30px");
+  assert.equal(keep.style.width, "30px");
+  assert.equal(document.querySelector("[data-umt-region-id='skip']"), null);
+});

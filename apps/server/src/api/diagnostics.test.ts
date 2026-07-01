@@ -46,3 +46,30 @@ test("readRecentDiagnostics returns newest safe records first", () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+
+test("FileDiagnosticsWriter records filtered region counts", () => {
+  const dir = mkdtempSync(join(tmpdir(), "umt-diag-filtered-"));
+  try {
+    const writer = new FileDiagnosticsWriter(join(dir, "diagnostics.log"));
+    writer.record({
+      surfaceId: "s-filtered",
+      status: "empty",
+      providerProfile: "p",
+      inputSource: "imageData",
+      originalSize: { width: 100, height: 100 },
+      providerSize: { width: 100, height: 100 },
+      rawRegionCount: 2,
+      finalRegionCount: 0,
+      filteredRegionCount: 2,
+      elapsedMs: 9,
+      note: "filtered invalid boxes",
+    });
+
+    const text = readFileSync(join(dir, "diagnostics.log"), "utf8");
+    assert.match(text, /"filteredRegionCount":2/);
+    assert.match(text, /filtered invalid boxes/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

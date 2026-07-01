@@ -224,3 +224,26 @@ test("diagnostics API returns recent safe records", async () => {
   assert.deepEqual(response.json(), { ok: true, records });
   await app.close();
 });
+
+
+test("submit clamps provider boxes to original image bounds and filters unusable boxes", async () => {
+  const app = await buildServer({
+    provider: "test",
+    targetLanguage: "zh-CN",
+    visionProvider: {
+      profile: "bounds-provider",
+      process: async () => [
+        { id: "r1", box: { x: -10, y: 10, width: 40, height: 30 }, sourceText: "hi", translatedText: "你好", confidence: 1, orientation: "horizontal", kind: "dialogue" },
+        { id: "r2", box: { x: 2000, y: 2000, width: 10, height: 10 }, sourceText: "bad", translatedText: "坏", confidence: 1, orientation: "horizontal", kind: "dialogue" },
+      ],
+    },
+  });
+
+  const response = await app.inject({ method: "POST", url: "/v1/surfaces/submit", payload: { task } });
+
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.json().status, "completed");
+  assert.deepEqual(response.json().result.regions.map((region: any) => region.id), ["r1"]);
+  assert.deepEqual(response.json().result.regions[0].box, { x: 0, y: 10, width: 30, height: 30 });
+  await app.close();
+});
