@@ -1,4 +1,4 @@
-import { BackendClient, SurfaceSubmitTracker } from "./client/backend-client";
+﻿import { BackendClient, SurfaceSubmitTracker } from "./client/backend-client";
 import { createSurfaceTask } from "./capture/surface-capture";
 import { detectImageSurfaces } from "./detector/surface-detector";
 import { isUmtContentCommand } from "./messages";
@@ -47,7 +47,7 @@ async function bootstrap(): Promise<void> {
 
   function selectedSurfaces(): PrioritizedSurface[] {
     const prioritized = prioritizeSurfaces(detectImageSurfaces(document), viewportRect());
-    if (settings.imageRange === "fullPage") return prioritized;
+    if (settings.imageRange === "fullPage") return prioritized.slice(0, settings.maxFullPageSurfaces);
     return prioritized.filter((item) => item.priority === "p0" || item.priority === "p1");
   }
 
@@ -58,7 +58,7 @@ async function bootstrap(): Promise<void> {
       return;
     }
     setPanelStatus(`UMT: submitting ${fresh.length}`, "busy");
-    for (const item of fresh) {
+    await runWithConcurrency(fresh, settings.maxConcurrentSubmissions, async (item) => {
       submitTracker.markSubmitted(item.surface.surfaceId);
       try {
         const response = await client.submit(createSurfaceTask(item.surface, item.priority, settings.targetLanguage));
@@ -72,7 +72,7 @@ async function bootstrap(): Promise<void> {
         statusCounter.recordFailedResponse(item.surface.surfaceId);
         setCountersStatus();
       }
-    }
+    });
   }
 
   function scan(): void {
@@ -170,7 +170,7 @@ async function bootstrap(): Promise<void> {
 
   chrome.storage?.onChanged?.addListener((changes, areaName) => {
     if (areaName !== "sync") return;
-    const relevant = ["backendUrl", "targetLanguage", "translationModel", "autoTranslateDefault", "imageRange", "pretranslateNextPage", "floatingButtonEnabled", "siteSettings", "autoTranslate"];
+    const relevant = ["backendUrl", "targetLanguage", "translationModel", "autoTranslateDefault", "imageRange", "pretranslateNextPage", "floatingButtonEnabled", "siteSettings", "providerProfile", "openAICompatibleBaseUrl", "requestTimeoutMs", "maxConcurrentSubmissions", "maxFullPageSurfaces", "retryCount", "autoTranslate"];
     if (relevant.some((key) => Object.prototype.hasOwnProperty.call(changes, key))) void reloadSettings();
   });
 
@@ -186,4 +186,15 @@ async function bootstrap(): Promise<void> {
 
 function settingsStatus(settings: ExtensionSettings, autoTranslate: boolean): string {
   return autoTranslate ? `UMT: backend connected | ${settings.targetLanguage}` : `UMT: backend connected | auto off | ${settings.targetLanguage}`;
+}
+async function runWithConcurrency<T>(items: T[], concurrency: number, worker: (item: T) => Promise<void>): Promise<void> {
+  const limit = Math.max(1, Math.min(Math.trunc(concurrency), 8));
+  let index = 0;
+  async function runNext(): Promise<void> {
+    while (index < items.length) {
+      const item = items[index++];
+      if (item !== undefined) await worker(item);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, () => runNext()));
 }
