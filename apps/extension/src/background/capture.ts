@@ -10,6 +10,7 @@ export async function handleCaptureVisibleTabMessage(
   try {
     const windowId = sender.tab?.windowId ?? chrome.windows.WINDOW_ID_CURRENT;
     const imageData = await captureVisibleTab(windowId, { format: "png" });
+    if (!imageData || !imageData.startsWith("data:image/")) throw new Error("empty screenshot data from browser capture");
     return { ok: true, imageData };
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) };

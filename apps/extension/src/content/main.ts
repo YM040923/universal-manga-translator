@@ -184,8 +184,8 @@ async function bootstrap(): Promise<void> {
       } else {
         setPanelStatus("UMT: manual region failed", "error");
       }
-    } catch {
-      setPanelStatus("UMT: screenshot unavailable", "error");
+    } catch (error) {
+      setPanelStatus(`UMT: screenshot failed: ${formatShortError(error)}`, "error");
     }
   }
 
@@ -304,3 +304,8 @@ async function runWithConcurrency<T>(items: T[], concurrency: number, worker: (i
 
 
 
+
+function formatShortError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.length > 96 ? `${message.slice(0, 93)}...` : message;
+}

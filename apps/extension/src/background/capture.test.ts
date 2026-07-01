@@ -32,5 +32,13 @@ test("handleCaptureVisibleTabMessage reports capture errors", async () => {
 
   assert.deepEqual(response, { ok: false, error: "denied" });
 });
+test("handleCaptureVisibleTabMessage reports empty capture data", async () => {
+  const response = await handleCaptureVisibleTabMessage(
+    { source: "umt-content", command: "captureVisibleTab" },
+    { tab: { windowId: 1 } as chrome.tabs.Tab },
+    async () => "",
+  );
 
-
+  assert.equal(response.ok, false);
+  assert.match(response.ok ? "" : response.error, /empty screenshot/i);
+});

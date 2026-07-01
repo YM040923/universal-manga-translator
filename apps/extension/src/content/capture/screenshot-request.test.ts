@@ -21,4 +21,9 @@ test("requestVisibleTabScreenshot throws capture failure message", async () => {
     /denied/,
   );
 });
-
+test("requestVisibleTabScreenshot rejects empty screenshot data", async () => {
+  await assert.rejects(
+    requestVisibleTabScreenshot({ sendMessage: async () => ({ ok: true, imageData: "" }) }),
+    /empty screenshot/i,
+  );
+});

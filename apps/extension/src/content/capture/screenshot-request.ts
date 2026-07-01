@@ -6,6 +6,7 @@ export interface ScreenshotRequestRuntime {
 
 export async function requestVisibleTabScreenshot(runtime: ScreenshotRequestRuntime = chrome.runtime): Promise<string> {
   const response = await runtime.sendMessage({ source: "umt-content", command: "captureVisibleTab" });
-  if (response.ok) return response.imageData;
-  throw new Error(response.error);
+  if (!response.ok) throw new Error(response.error);
+  if (!response.imageData || !response.imageData.startsWith("data:image/")) throw new Error("empty screenshot data from browser capture");
+  return response.imageData;
 }
