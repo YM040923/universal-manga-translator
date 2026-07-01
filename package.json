@@ -5,11 +5,12 @@
     "type":  "module",
     "scripts":  {
                     "build":  "pnpm --filter @umt/shared build \u0026\u0026 pnpm --filter @umt/server build \u0026\u0026 pnpm --filter @umt/extension build",
-                    "test":  "pnpm --filter @umt/shared test \u0026\u0026 pnpm --filter @umt/server test \u0026\u0026 pnpm --filter @umt/extension test",
+                    "test":  "pnpm --filter @umt/shared test \u0026\u0026 pnpm --filter @umt/server test \u0026\u0026 pnpm --filter @umt/extension test \u0026\u0026 node --test scripts/*.test.mjs",
                     "typecheck":  "pnpm -r typecheck",
                     "dev:server":  "pnpm --filter @umt/server dev",
                     "dev:extension":  "pnpm --filter @umt/extension dev",
-                    "test:e2e":  "playwright test tests/integration"
+                    "test:e2e":  "playwright test tests/integration",
+                    "doctor":  "node scripts/doctor.mjs"
                 },
     "devDependencies":  {
                             "@playwright/test":  "^1.45.0",
