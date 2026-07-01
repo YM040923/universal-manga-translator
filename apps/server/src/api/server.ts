@@ -124,7 +124,7 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
       memoryCache.set(cacheKey, rawResult);
       surfaceCache?.save(cacheKey, rawResult);
       const result = applyStoredOverrides(rawResult, task.targetLanguage, manualOverrideStore);
-      diagnostics.record({ surfaceId: task.surfaceId, status: result.status, providerProfile: provider.profile, inputSource, originalSize: task.naturalSize, providerSize: { width: normalized.width, height: normalized.height }, rawRegionCount: providerRegions.length, finalRegionCount: result.regions.length, filteredRegionCount: Math.max(0, providerRegions.length - regions.length), elapsedMs: rawResult.elapsedMs, ...(providerRegions.length > regions.length ? { note: "filtered invalid or out-of-bounds boxes" } : {}) });
+      diagnostics.record({ surfaceId: task.surfaceId, status: result.status, providerProfile: provider.profile, inputSource, originalSize: task.naturalSize, providerSize: { width: normalized.width, height: normalized.height }, rawRegionCount: providerRegions.length, finalRegionCount: result.regions.length, filteredRegionCount: Math.max(0, providerRegions.length - regions.length), elapsedMs: rawResult.elapsedMs, ...diagnosticNoteForResult(providerRegions.length, regions.length) });
       eventBus.publish({ type: "job.completed", surfaceId: task.surfaceId, result });
       return { ok: true, surfaceId: task.surfaceId, status: result.status, result };
     } catch (error) {
@@ -175,4 +175,11 @@ function clampProviderRegionsToImage<T extends { box: { x: number; y: number; wi
     const box = clampRectToBounds(region.box, imageSize);
     return box ? [{ ...region, box }] : [];
   });
+}
+
+function diagnosticNoteForResult(rawRegionCount: number, clampedRegionCount: number): { note?: string } {
+  if (rawRegionCount === 0) return { note: "no-regions-from-provider" };
+  if (clampedRegionCount === 0) return { note: "all-boxes-filtered" };
+  if (rawRegionCount > clampedRegionCount) return { note: "some-boxes-filtered" };
+  return {};
 }

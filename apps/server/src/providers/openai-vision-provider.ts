@@ -17,11 +17,12 @@ export class OpenAIVisionProvider implements VisionProvider {
   }
 
   static parseRegionsFromContent(content: string): TextRegion[] {
-    const fenced = content.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1];
-    const candidate = fenced ?? content.slice(content.indexOf("{"), content.lastIndexOf("}") + 1);
-    if (!candidate || candidate.trim().length === 0) return [];
-    const parsed = JSON.parse(candidate) as { regions?: TextRegion[] };
-    return Array.isArray(parsed.regions) ? parsed.regions.filter(isUsefulRegion) : [];
+    const candidate = extractJsonCandidate(content);
+    if (!candidate) return [];
+    const parsed = parseModelJson(candidate);
+    if (!parsed) return [];
+    const regions = Array.isArray(parsed) ? parsed : Array.isArray((parsed as { regions?: unknown }).regions) ? (parsed as { regions: unknown[] }).regions : [];
+    return regions.filter(isUsefulRegion) as TextRegion[];
   }
 
   async process(input: ProviderInput): Promise<TextRegion[]> {
@@ -47,6 +48,39 @@ export class OpenAIVisionProvider implements VisionProvider {
     const payload = (await response.json()) as { choices?: Array<{ message?: { content?: string } }> };
     return OpenAIVisionProvider.parseRegionsFromContent(payload.choices?.[0]?.message?.content ?? "{\"regions\":[]}");
   }
+}
+
+function extractJsonCandidate(content: string): string {
+  const fenced = content.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1];
+  if (fenced) return fenced.trim();
+  const objectStart = content.indexOf("{");
+  const objectEnd = content.lastIndexOf("}");
+  const arrayStart = content.indexOf("[");
+  const arrayEnd = content.lastIndexOf("]");
+  if (arrayStart >= 0 && arrayEnd > arrayStart && (objectStart < 0 || arrayStart < objectStart)) return content.slice(arrayStart, arrayEnd + 1).trim();
+  if (objectStart >= 0 && objectEnd > objectStart) return content.slice(objectStart, objectEnd + 1).trim();
+  return "";
+}
+
+function parseModelJson(candidate: string): unknown | null {
+  for (const attempt of [candidate, repairLooseJson(candidate)]) {
+    try {
+      return JSON.parse(attempt);
+    } catch {
+      // try next repair strategy
+    }
+  }
+  return null;
+}
+
+function repairLooseJson(value: string): string {
+  return value
+    .replace(/[\u2018\u2019]/g, "'")
+    .replace(/[\u201c\u201d]/g, '"')
+    .replace(/([{,]\s*)([A-Za-z_][A-Za-z0-9_]*)(\s*:)/g, '$1"$2"$3')
+    .replace(/'([^'\\]*(?:\\.[^'\\]*)*)'/g, (_match, inner: string) => `"${inner.replace(/"/g, '\\"')}"`)
+    .replace(/:\s*\.([0-9]+)/g, ': 0.$1')
+    .replace(/,\s*([}\]])/g, '$1');
 }
 
 function buildVisionPrompt(targetLanguage: string): string {

@@ -247,3 +247,41 @@ test("submit clamps provider boxes to original image bounds and filters unusable
   assert.deepEqual(response.json().result.regions[0].box, { x: 0, y: 10, width: 30, height: 30 });
   await app.close();
 });
+
+
+test("diagnostics note distinguishes provider-empty from all boxes filtered", async () => {
+  const records: Array<Record<string, unknown>> = [];
+  const app = await buildServer({
+    provider: "test",
+    targetLanguage: "zh-CN",
+    diagnosticsWriter: { record: (record) => records.push(record as unknown as Record<string, unknown>) },
+    visionProvider: {
+      profile: "empty-provider",
+      process: async () => [],
+    },
+  });
+
+  await app.inject({ method: "POST", url: "/v1/surfaces/submit", payload: { task: { ...task, surfaceId: "provider-empty" } } });
+
+  assert.equal(records.at(-1)?.note, "no-regions-from-provider");
+  await app.close();
+});
+
+test("diagnostics note marks all provider boxes filtered", async () => {
+  const records: Array<Record<string, unknown>> = [];
+  const app = await buildServer({
+    provider: "test",
+    targetLanguage: "zh-CN",
+    diagnosticsWriter: { record: (record) => records.push(record as unknown as Record<string, unknown>) },
+    visionProvider: {
+      profile: "bad-box-provider",
+      process: async () => [{ id: "r1", box: { x: 9999, y: 9999, width: 10, height: 10 }, sourceText: "bad", translatedText: "坏", confidence: 1, orientation: "horizontal", kind: "dialogue" }],
+    },
+  });
+
+  await app.inject({ method: "POST", url: "/v1/surfaces/submit", payload: { task: { ...task, surfaceId: "all-filtered" } } });
+
+  assert.equal(records.at(-1)?.note, "all-boxes-filtered");
+  assert.equal(records.at(-1)?.filteredRegionCount, 1);
+  await app.close();
+});

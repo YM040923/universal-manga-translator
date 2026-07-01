@@ -168,3 +168,26 @@ test("provider prompt requests coordinates in the provided image coordinate spac
     globalThis.fetch = originalFetch;
   }
 });
+
+
+test("repairs common non-strict JSON responses", () => {
+  const content = `{ regions: [ { id: 'r1', box: { x: 1, y: 2, width: 30, height: 40, }, sourceText: 'こんにちは', translatedText: '你好', confidence: .9, orientation: 'horizontal', kind: 'dialogue', }, ], }`;
+  const parsed = OpenAIVisionProvider.parseRegionsFromContent(content);
+
+  assert.equal(parsed.length, 1);
+  assert.equal(parsed[0]?.translatedText, "你好");
+});
+
+test("parses bare region arrays from model responses", () => {
+  const content = `[{"id":"r1","box":{"x":1,"y":2,"width":30,"height":40},"sourceText":"hi","translatedText":"你好","confidence":1,"orientation":"horizontal","kind":"dialogue"}]`;
+  const parsed = OpenAIVisionProvider.parseRegionsFromContent(content);
+
+  assert.equal(parsed.length, 1);
+  assert.equal(parsed[0]?.sourceText, "hi");
+});
+
+test("parseRegionsFromContent returns empty regions for unparseable model chatter", () => {
+  const parsed = OpenAIVisionProvider.parseRegionsFromContent("I cannot help with that.");
+
+  assert.deepEqual(parsed, []);
+});
