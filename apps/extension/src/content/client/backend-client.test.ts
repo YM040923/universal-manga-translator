@@ -34,3 +34,23 @@ test("BackendClient saves manual override", async () => {
   assert.equal(calls[0]?.init.method, "POST");
   assert.deepEqual(JSON.parse(String(calls[0]?.init.body)), { imageHash: "hash", targetLanguage: "zh-CN", regionId: "r1", translatedText: "manual edit" });
 });
+
+test("BackendClient reads sanitized provider config status", async () => {
+  const calls: string[] = [];
+  globalThis.fetch = (async (url: string | URL | Request) => {
+    calls.push(String(url));
+    return new Response(JSON.stringify({
+      ok: true,
+      provider: "openai-compatible",
+      targetLanguage: "zh-CN",
+      providerProfile: "openai-compatible:gpt-4.1-mini",
+      openAICompatible: { baseUrl: "https://api.openai.com/v1", model: "gpt-4.1-mini", apiKeyConfigured: true },
+    }), { status: 200, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+
+  const status = await new BackendClient("http://127.0.0.1:47831").configStatus();
+
+  assert.equal(calls[0], "http://127.0.0.1:47831/v1/config/status");
+  assert.equal(status.ok, true);
+  assert.equal(status.ok && status.openAICompatible.apiKeyConfigured, true);
+});

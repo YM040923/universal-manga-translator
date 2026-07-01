@@ -1,4 +1,4 @@
-import test from "node:test";
+﻿import test from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
 import { mountOptionsPage, type OptionsPageDeps } from "./main.js";
@@ -82,9 +82,10 @@ function setupDom(): void {
   globalThis.HTMLElement = dom.window.HTMLElement;
 }
 
-function deps(options: { storage?: SettingsStorageArea; checkBackend?: (backendUrl: string) => Promise<boolean> } = {}): OptionsPageDeps {
+function deps(options: { storage?: SettingsStorageArea; checkBackend?: (backendUrl: string) => Promise<boolean>; configStatus?: OptionsPageDeps["configStatus"] } = {}): OptionsPageDeps {
   const result: OptionsPageDeps = { storage: options.storage ?? fakeStorage(DEFAULT_SETTINGS) };
   if (options.checkBackend) result.checkBackend = options.checkBackend;
+  if (options.configStatus) result.configStatus = options.configStatus;
   return result;
 }
 
@@ -108,3 +109,25 @@ function fakeStorage(initial: ExtensionSettings): SettingsStorageArea & { saved:
     },
   };
 }
+
+test("settings page displays backend provider status without secrets", async () => {
+  setupDom();
+  await mountOptionsPage(document.querySelector<HTMLElement>("#app")!, deps({
+    configStatus: async () => ({
+      ok: true,
+      provider: "openai-compatible",
+      targetLanguage: "zh-CN",
+      providerProfile: "openai-compatible:gpt-4.1-mini",
+      openAICompatible: { baseUrl: "https://api.openai.com/v1", model: "gpt-4.1-mini", apiKeyConfigured: true },
+    }),
+  }));
+
+  document.querySelector<HTMLButtonElement>("[data-action='check-provider']")!.click();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  const status = document.querySelector<HTMLElement>("[data-provider-status]")?.textContent ?? "";
+  assert.match(status, /openai-compatible/);
+  assert.match(status, /gpt-4\.1-mini/);
+  assert.match(status, /API key 已配置/);
+  assert.doesNotMatch(status, /sk-/);
+});

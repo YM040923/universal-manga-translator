@@ -22,6 +22,9 @@ export interface BuildServerOptions {
   eventBus?: EventBus;
   maxImageLongEdge?: number;
   jpegQuality?: number;
+  openAICompatibleBaseUrl?: string;
+  openAIModel?: string;
+  openAIApiKeyConfigured?: boolean;
 }
 
 export async function buildServer(options: BuildServerOptions): Promise<FastifyInstance> {
@@ -41,6 +44,18 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
   });
 
   app.get("/health", async () => ({ ok: true, provider: options.provider, targetLanguage: options.targetLanguage }));
+
+  app.get("/v1/config/status", async () => ({
+    ok: true,
+    provider: options.provider,
+    targetLanguage: options.targetLanguage,
+    providerProfile: provider.profile,
+    openAICompatible: {
+      baseUrl: options.openAICompatibleBaseUrl ?? "",
+      model: options.openAIModel ?? "",
+      apiKeyConfigured: Boolean(options.openAIApiKeyConfigured),
+    },
+  }));
 
   app.post<{ Body: SaveManualOverrideRequest }>("/v1/overrides", async (request) => {
     const override = request.body;

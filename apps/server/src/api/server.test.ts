@@ -1,4 +1,4 @@
-import test from "node:test";
+﻿import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -98,4 +98,31 @@ test("manual override API saves and applies edited text to submit results", asyn
     db?.close();
     rmSync(dir, { recursive: true, force: true });
   }
+});
+test("config status exposes provider details without leaking API key", async () => {
+  const app = await buildServer({
+    provider: "openai-compatible",
+    targetLanguage: "zh-CN",
+    visionProvider: { profile: "openai-compatible:gpt-4.1-mini", process: async () => [] },
+    openAICompatibleBaseUrl: "https://api.openai.com/v1",
+    openAIModel: "gpt-4.1-mini",
+    openAIApiKeyConfigured: true,
+  });
+
+  const response = await app.inject({ method: "GET", url: "/v1/config/status" });
+
+  assert.equal(response.statusCode, 200);
+  assert.deepEqual(response.json(), {
+    ok: true,
+    provider: "openai-compatible",
+    targetLanguage: "zh-CN",
+    providerProfile: "openai-compatible:gpt-4.1-mini",
+    openAICompatible: {
+      baseUrl: "https://api.openai.com/v1",
+      model: "gpt-4.1-mini",
+      apiKeyConfigured: true,
+    },
+  });
+  assert.equal(JSON.stringify(response.json()).includes("sk-"), false);
+  await app.close();
 });

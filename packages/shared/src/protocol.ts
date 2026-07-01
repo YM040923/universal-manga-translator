@@ -15,6 +15,18 @@ export interface SaveManualOverrideRequest extends ManualOverridePayload {}
 export interface SaveManualOverrideResponse { ok: true; override: ManualOverridePayload; }
 export interface ListManualOverridesResponse { ok: true; overrides: ManualOverridePayload[]; }
 
+export interface ConfigStatusResponse {
+  ok: true;
+  provider: string;
+  targetLanguage: string;
+  providerProfile: string;
+  openAICompatible: {
+    baseUrl: string;
+    model: string;
+    apiKeyConfigured: boolean;
+  };
+}
+
 export type ServerEvent =
   | { type: "backend.ready"; port: number }
   | { type: "job.queued"; surfaceId: string }

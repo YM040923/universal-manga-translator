@@ -1,8 +1,10 @@
+import type { ApiResponse, ConfigStatusResponse } from "@umt/shared/protocol";
 import { loadSettings, saveSettings, type ExtensionSettings, type ImageRange, type SettingsStorageArea } from "../settings/settings.js";
 
 export interface OptionsPageDeps {
   storage?: SettingsStorageArea;
   checkBackend?: (backendUrl: string) => Promise<boolean>;
+  configStatus?: (backendUrl: string) => Promise<ApiResponse<ConfigStatusResponse>>;
 }
 
 const TEXT = {
@@ -16,6 +18,9 @@ const TEXT = {
   backendUrl: "\u540e\u7aef URL",
   checkBackend: "\u68c0\u67e5\u540e\u7aef",
   provider: "\u63d0\u4f9b\u5546 / \u6a21\u578b",
+  checkProvider: "\u68c0\u67e5\u63d0\u4f9b\u5546",
+  keyConfigured: "API key \u5df2\u914d\u7f6e",
+  keyMissing: "API key \u672a\u914d\u7f6e",
   providerProfile: "\u63d0\u4f9b\u5546\u914d\u7f6e",
   translationModel: "\u7ffb\u8bd1\u6a21\u578b",
   compatibleBaseUrl: "OpenAI \u517c\u5bb9 Base URL",
@@ -46,6 +51,25 @@ export async function mountOptionsPage(root: HTMLElement, deps: OptionsPageDeps 
   const form = root.querySelector<HTMLFormElement>("[data-options-form]")!;
   const status = root.querySelector<HTMLElement>("[data-options-status]")!;
   const backendHealth = root.querySelector<HTMLElement>("[data-backend-health]")!;
+  const providerStatus = root.querySelector<HTMLElement>("[data-provider-status]")!;
+
+  root.querySelector<HTMLButtonElement>("[data-action='check-provider']")!.addEventListener("click", () => {
+    const backendUrl = field<HTMLInputElement>(form, "backendUrl").value;
+    providerStatus.textContent = TEXT.checking;
+    void (deps.configStatus ?? defaultConfigStatus)(backendUrl).then((config) => {
+      if (!config.ok) {
+        providerStatus.textContent = TEXT.offline;
+        providerStatus.dataset.state = "bad";
+        return;
+      }
+      const keyState = config.openAICompatible.apiKeyConfigured ? TEXT.keyConfigured : TEXT.keyMissing;
+      providerStatus.textContent = `${config.provider} | ${config.providerProfile} | ${config.openAICompatible.model || "mock"} | ${keyState}`;
+      providerStatus.dataset.state = config.openAICompatible.apiKeyConfigured || config.provider === "mock" ? "ok" : "bad";
+    }).catch(() => {
+      providerStatus.textContent = TEXT.offline;
+      providerStatus.dataset.state = "bad";
+    });
+  });
 
   root.querySelector<HTMLButtonElement>("[data-action='check-backend']")!.addEventListener("click", () => {
     const backendUrl = field<HTMLInputElement>(form, "backendUrl").value;
@@ -107,6 +131,7 @@ function markup(settings: ExtensionSettings): string {
           <label>${TEXT.providerProfile} <input name="providerProfile" type="text" required value="${escapeAttr(settings.providerProfile)}" /></label>
           <label>${TEXT.translationModel} <input name="translationModel" type="text" required value="${escapeAttr(settings.translationModel)}" /></label>
           <label>${TEXT.compatibleBaseUrl} <input name="openAICompatibleBaseUrl" type="url" value="${escapeAttr(settings.openAICompatibleBaseUrl)}" placeholder="https://api.openai.com/v1" /></label>
+          <div class="provider-status-row"><button type="button" data-action="check-provider">${TEXT.checkProvider}</button><span data-provider-status class="health">${TEXT.notChecked}</span></div>
           <p class="hint">${TEXT.keyHint}</p>
         </section>
 
@@ -163,12 +188,17 @@ async function defaultCheckBackend(backendUrl: string): Promise<boolean> {
   return response.ok;
 }
 
+async function defaultConfigStatus(backendUrl: string): Promise<ApiResponse<ConfigStatusResponse>> {
+  const response = await fetch(`${backendUrl.replace(/\/$/, "")}/v1/config/status`, { cache: "no-store" });
+  return (await response.json()) as ApiResponse<ConfigStatusResponse>;
+}
+
 function escapeAttr(value: string): string {
   return value.replace(/[&<>"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;" })[char] ?? char);
 }
 
 function styles(): string {
-  return `.umt-settings-page{max-width:860px;margin:0 auto;padding:24px;font:14px system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#0f172a}.page-header{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:18px}.page-header h1{margin:0;font-size:26px}.page-header p{margin:6px 0 0;color:#64748b}.health{border-radius:999px;background:#e2e8f0;color:#475569;padding:7px 12px;font-weight:800}.health[data-state='ok']{background:#dcfce7;color:#166534}.health[data-state='bad']{background:#fee2e2;color:#991b1b}.settings-card{background:#fff;border:1px solid #d8e2ef;border-radius:18px;padding:18px;margin:14px 0;box-shadow:0 8px 24px rgba(15,23,42,.06)}.settings-card h2{font-size:17px;margin:0 0 14px}.settings-card label{display:grid;grid-template-columns:220px 1fr;gap:14px;align-items:center;margin:10px 0}.settings-card input:not([type='checkbox']),.settings-card select{border:1px solid #cbd5e1;border-radius:12px;padding:9px 11px;background:#f8fafc}.checkbox{display:flex!important;grid-template-columns:none!important;gap:9px!important;justify-content:flex-start}.inline-actions{display:flex;align-items:center;gap:12px;margin-top:10px}.inline-actions button,.form-footer button{border:0;border-radius:12px;background:#ff6a1a;color:#fff;padding:10px 14px;font-weight:900;cursor:pointer}.inline-actions code{background:#f1f5f9;border-radius:10px;padding:8px 10px;color:#334155}.hint{color:#64748b;margin:10px 0 0}.form-footer{display:flex;align-items:center;gap:12px;margin:18px 0 0}[data-options-status]{font-weight:800;color:#166534}`;
+  return `.umt-settings-page{max-width:860px;margin:0 auto;padding:24px;font:14px system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#0f172a}.page-header{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:18px}.page-header h1{margin:0;font-size:26px}.page-header p{margin:6px 0 0;color:#64748b}.health{border-radius:999px;background:#e2e8f0;color:#475569;padding:7px 12px;font-weight:800}.health[data-state='ok']{background:#dcfce7;color:#166534}.health[data-state='bad']{background:#fee2e2;color:#991b1b}.settings-card{background:#fff;border:1px solid #d8e2ef;border-radius:18px;padding:18px;margin:14px 0;box-shadow:0 8px 24px rgba(15,23,42,.06)}.settings-card h2{font-size:17px;margin:0 0 14px}.settings-card label{display:grid;grid-template-columns:220px 1fr;gap:14px;align-items:center;margin:10px 0}.settings-card input:not([type='checkbox']),.settings-card select{border:1px solid #cbd5e1;border-radius:12px;padding:9px 11px;background:#f8fafc}.checkbox{display:flex!important;grid-template-columns:none!important;gap:9px!important;justify-content:flex-start}.inline-actions,.provider-status-row{display:flex;align-items:center;gap:12px;margin-top:10px}.inline-actions button,.provider-status-row button,.form-footer button{border:0;border-radius:12px;background:#ff6a1a;color:#fff;padding:10px 14px;font-weight:900;cursor:pointer}.inline-actions code{background:#f1f5f9;border-radius:10px;padding:8px 10px;color:#334155}.hint{color:#64748b;margin:10px 0 0}.form-footer{display:flex;align-items:center;gap:12px;margin:18px 0 0}[data-options-status]{font-weight:800;color:#166534}`;
 }
 
 if (typeof document !== "undefined") {

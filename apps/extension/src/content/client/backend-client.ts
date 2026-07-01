@@ -1,4 +1,4 @@
-import type { ApiResponse, ManualOverridePayload, SaveManualOverrideRequest, SaveManualOverrideResponse, ServerEvent, SubmitSurfaceRequest, SubmitSurfaceResponse } from "@umt/shared/protocol";
+import type { ApiResponse, ConfigStatusResponse, ManualOverridePayload, SaveManualOverrideRequest, SaveManualOverrideResponse, ServerEvent, SubmitSurfaceRequest, SubmitSurfaceResponse } from "@umt/shared/protocol";
 import type { SurfaceTask } from "@umt/shared/types";
 
 export function createEventUrl(baseUrl: string): string {
@@ -45,6 +45,11 @@ export class BackendClient {
     } catch {
       return false;
     }
+  }
+
+  async configStatus(): Promise<ApiResponse<ConfigStatusResponse>> {
+    const response = await fetch(`${this.baseUrl}/v1/config/status`, { cache: "no-store" });
+    return (await response.json()) as ApiResponse<ConfigStatusResponse>;
   }
 
   async submit(task: SurfaceTask): Promise<ApiResponse<SubmitSurfaceResponse>> {
