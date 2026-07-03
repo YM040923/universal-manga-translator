@@ -1,6 +1,7 @@
 import { chromium } from "@playwright/test";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import { readFileSync } from "node:fs";
 
 const DEFAULT_URL = "https://asurascans.com/comics/the-heavenly-demon-wants-a-quiet-life-30e93729/chapter/60";
 
@@ -40,8 +41,11 @@ const report = {
   pageState: null,
   backend: null,
   diagnostics: null,
+  runtimeLogs: [],
   screenshot: resolve(outputDir, "extension-qa.png"),
 };
+
+const env = readDotEnv(resolve(projectRoot, ".env"));
 
 function check(name, ok, detail = "") {
   report.checks.push({ name, ok: Boolean(ok), detail });
@@ -54,12 +58,33 @@ try {
   check("extension-service-worker", report.serviceWorkers.some((item) => item.startsWith("chrome-extension://")), report.serviceWorkers.join(", "));
   const worker = context.serviceWorkers()[0];
   if (worker) {
+    const ocrKeys = splitKeys(env.OCR_API_KEYS || env.OCR_API_KEY || env.UAPIS_API_KEYS || env.UAPIS_API_KEY);
     await worker.evaluate(async () => {
-      await chrome.storage.sync.set({
-        enabledSites: { "asurascans.com": true },
-        runMode: "direct",
-      });
+      await chrome.storage.sync.set({ enabledSites: { "asurascans.com": true }, runMode: "direct" });
     });
+    if (args.get("configure-direct") === "true") {
+      await worker.evaluate(async (config) => {
+        await chrome.storage.sync.set(config);
+      }, {
+        runMode: "direct",
+        directOcr: {
+          apiUrl: env.OCR_API_URL || "",
+          apiKeys: ocrKeys,
+          inputMode: env.OCR_INPUT_MODE || "image_base64",
+          imageField: env.OCR_IMAGE_FIELD || "image_base64",
+          staticFieldsText: env.OCR_STATIC_FIELDS_JSON || "{}",
+          regionsPaths: splitList(env.OCR_REGIONS_PATHS || "words_result,data.words_result,data.result,data.regions,result,regions"),
+          textPaths: splitList(env.OCR_TEXT_PATHS || "words,text,content"),
+          boxPaths: splitList(env.OCR_BOX_PATHS || "location,box,bbox,vertexes_location"),
+          confidencePaths: splitList(env.OCR_CONFIDENCE_PATHS || "score,confidence"),
+        },
+        directTranslator: {
+          baseUrl: env.OPENAI_BASE_URL || "",
+          apiKey: env.OPENAI_API_KEY || "",
+          model: env.OPENAI_MODEL || "gpt-4.1-mini",
+        },
+      });
+    }
   }
 
   const page = await context.newPage();
@@ -94,8 +119,10 @@ try {
     check("translation-completed-or-cached-target", firstCompleted.length >= translateCount, `${firstCompleted.length}/${translateCount} completed-or-cached`);
     check("translation-rendered-overlay", report.pageState.renderedRegions >= 1 || report.pageState.cachedOrCompletedButtons >= 1, `${report.pageState.renderedRegions} rendered regions, ${report.pageState.cachedOrCompletedButtons} completed/cached buttons`);
     report.diagnostics = await fetchJsonFromNode("http://127.0.0.1:47831/v1/diagnostics/recent?limit=20");
+    if (worker) report.runtimeLogs = await readRuntimeLogs(worker);
   }
 
+  if (worker && !report.runtimeLogs.length) report.runtimeLogs = await readRuntimeLogs(worker);
   await page.screenshot({ path: report.screenshot, fullPage: false });
   report.ok = report.checks.every((item) => item.ok);
 } finally {
@@ -111,6 +138,7 @@ async function readPageState(page) {
   return page.evaluate(() => {
     const buttons = [...document.querySelectorAll("[data-umt-surface-button]")].map((el) => ({
       text: el.textContent,
+      title: el.getAttribute("title"),
       status: el.getAttribute("data-umt-surface-status"),
       index: Number(el.getAttribute("data-umt-surface-index") || "0"),
       rect: rect(el),
@@ -140,6 +168,27 @@ async function readPageState(page) {
   });
 }
 
+
+async function readRuntimeLogs(worker) {
+  try {
+    return await worker.evaluate(async () => {
+      const stored = await chrome.storage.local.get("runtimeLogs");
+      const logs = Array.isArray(stored.runtimeLogs) ? stored.runtimeLogs : [];
+      return logs.slice(-30).map((entry) => ({
+        ...entry,
+        detail: sanitizeLogText(entry?.detail),
+        message: sanitizeLogText(entry?.message),
+      }));
+
+      function sanitizeLogText(value) {
+        return String(value ?? "").replace(/sk-[A-Za-z0-9_-]+/g, "sk-***").replace(/Bearer\s+[A-Za-z0-9._-]+/gi, "Bearer ***");
+      }
+    });
+  } catch (error) {
+    return [{ level: "error", source: "qa", message: "read runtime logs failed", detail: error instanceof Error ? error.message : String(error) }];
+  }
+}
+
 async function fetchJsonFromNode(url) {
   try {
     const response = await fetch(url, { cache: "no-store" });
@@ -159,4 +208,26 @@ async function waitForTranslationSettled(page, count, timeout) {
     if (statuses.length && statuses.every((status) => terminal.has(status))) return;
     await page.waitForTimeout(1000);
   }
+}
+
+function readDotEnv(path) {
+  try {
+    return Object.fromEntries(readFileSync(path, "utf8").split(/\r?\n/).flatMap((line) => {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith("#")) return [];
+      const index = trimmed.indexOf("=");
+      if (index < 0) return [];
+      return [[trimmed.slice(0, index), trimmed.slice(index + 1)]];
+    }));
+  } catch {
+    return {};
+  }
+}
+
+function splitList(value) {
+  return String(value || "").split(/[,\n;]+/).map((item) => item.trim()).filter(Boolean);
+}
+
+function splitKeys(value) {
+  return splitList(value);
 }

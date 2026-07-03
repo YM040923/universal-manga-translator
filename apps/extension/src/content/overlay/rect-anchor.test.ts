@@ -1,7 +1,7 @@
 ﻿import test from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
-import { createRectOverlayAnchor } from "./rect-anchor.js";
+import { createDocumentRectOverlayAnchor, createRectOverlayAnchor } from "./rect-anchor.js";
 
 test("createRectOverlayAnchor exposes a stable viewport rect for screenshot overlays", () => {
   const dom = new JSDOM("<body></body>");
@@ -37,4 +37,18 @@ test("createRectOverlayAnchor stays attached to document content when the page s
 
   assert.equal(afterScroll.top, -10);
   assert.equal(afterScroll.bottom, 70);
+});
+
+test("createDocumentRectOverlayAnchor restores cached manual selection document coordinates", () => {
+  const dom = new JSDOM("<body></body>");
+  globalThis.document = dom.window.document;
+  globalThis.window = dom.window as unknown as Window & typeof globalThis;
+  Object.defineProperty(window, "scrollX", { value: 0, configurable: true });
+  Object.defineProperty(window, "scrollY", { value: 120, configurable: true });
+
+  const anchor = createDocumentRectOverlayAnchor({ x: 20, y: 300, width: 120, height: 80 });
+  const rect = anchor.getBoundingClientRect();
+
+  assert.equal(rect.top, 180);
+  assert.equal(rect.bottom, 260);
 });

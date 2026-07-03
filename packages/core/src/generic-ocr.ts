@@ -44,6 +44,13 @@ export interface GenericOcrParseOptions {
   confidencePathCandidates?: string[];
 }
 
+export type GenericOcrErrorKind = "quota" | "auth" | "rate_limit" | "network" | "empty" | "server" | "unknown";
+
+export interface GenericOcrErrorClassification {
+  kind: GenericOcrErrorKind;
+  retryable: boolean;
+}
+
 const DEFAULT_REGIONS_PATHS = ["words_result", "data.words_result", "data.result", "data.regions", "result", "regions"];
 const DEFAULT_TEXT_PATHS = ["words", "text", "content"];
 const DEFAULT_BOX_PATHS = ["location", "box", "bbox", "vertexes_location"];
@@ -63,11 +70,15 @@ export class GenericNetworkOcrClient {
 
   async recognize(input: GenericOcrImageInput): Promise<GenericOcrRegion[]> {
     const attempts = Math.max(1, Math.min(5, this.options.attempts ?? 3));
+    const keyCount = Math.max(1, this.keyPool.status().count);
+    const maxAttempts = attempts + Math.max(0, keyCount - 1);
     let lastError: unknown;
-    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       try {
         const lease = this.keyPool.next();
-        if (!lease && this.keyPool.status().count > 0) throw new Error("No available OCR API key; all configured keys are blocked after quota/auth/rate-limit errors.");
+        if (!lease && this.keyPool.status().count > 0) {
+          throw lastError instanceof Error ? lastError : new Error("No available OCR API key; all configured keys are blocked after quota/auth/rate-limit errors.");
+        }
         try {
           const regions = await this.recognizeOnce(input, lease?.value);
           if (lease) this.keyPool.reportSuccess(lease);
@@ -78,7 +89,8 @@ export class GenericNetworkOcrClient {
         }
       } catch (error) {
         lastError = error;
-        if (attempt >= attempts || !isRetriableOcrError(error)) break;
+        const shouldTryAnotherKey = isKeyExhaustionError(error) && this.keyPool.status().available > 0;
+        if (attempt >= maxAttempts || (!shouldTryAnotherKey && (attempt >= attempts || !isRetriableOcrError(error)))) break;
         await delay((this.options.retryDelayMs ?? 900) * attempt);
       }
     }
@@ -252,19 +264,30 @@ function isErrorPayload(payload: unknown): boolean {
 
 function formatGenericOcrError(status: number, payload: unknown): string {
   const object = payload && typeof payload === "object" ? payload as Record<string, unknown> : {};
-  const code = object.code ?? object.error_code ?? object.errcode ?? "";
-  const message = object.message ?? object.error ?? object.error_msg ?? object.msg ?? "";
+  const code = object.code ?? object.error_code ?? object.errcode ?? object.error ?? "";
+  const message = object.message ?? object.error_msg ?? object.msg ?? "";
   return `Network OCR failed: ${status}${code ? ` ${String(code)}` : ""}${message ? ` ${String(message)}` : ""}`.trim();
+}
+
+export function classifyGenericOcrError(error: unknown): GenericOcrErrorClassification {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/no text regions|no regions|empty/i.test(message)) return { kind: "empty", retryable: false };
+  if (/\b402\b|quota|balance|insufficient|exhaust|credits?|账户积分不足|余额不足/i.test(message)) return { kind: "quota", retryable: false };
+  if (/\b401\b|\b403\b|INVALID_API_KEY|unauthorized|forbidden|permission|无权限/i.test(message)) return { kind: "auth", retryable: false };
+  if (/\b429\b|rate.?limit|qps|too many requests|limit reached/i.test(message)) return { kind: "rate_limit", retryable: true };
+  if (/fetch failed|socket|timeout|aborted|ECONNRESET|ETIMEDOUT|network/i.test(message)) return { kind: "network", retryable: true };
+  if (/\b5\d\d\b|\b524\b|server/i.test(message)) return { kind: "server", retryable: true };
+  return { kind: "unknown", retryable: false };
 }
 
 function isKeyExhaustionError(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
-  return /quota|balance|insufficient|exhaust|limit|429|401|403|INVALID_API_KEY|unauthorized|forbidden/i.test(error.message);
+  const kind = classifyGenericOcrError(error).kind;
+  return kind === "quota" || kind === "auth" || kind === "rate_limit";
 }
 
 function isRetriableOcrError(error: unknown): boolean {
-  if (!(error instanceof Error)) return false;
-  return /fetch failed|socket|timeout|aborted|ECONNRESET|ETIMEDOUT|429|500|502|503|504|524|quota|balance|insufficient|exhaust|limit|401|403|INVALID_API_KEY/i.test(error.message);
+  return classifyGenericOcrError(error).retryable;
 }
 
 function delay(ms: number): Promise<void> {

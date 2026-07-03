@@ -46,7 +46,16 @@ test("validateDoctorState rejects legacy product providers", () => {
 });
 
 test("validateDoctorState accepts legacy VISION_PROVIDER only as read compatibility", () => {
-  const result = validateDoctorState({ env: { VISION_PROVIDER: "network-ocr-openai-compatible", OPENAI_API_KEY: "x", OCR_API_KEYS: "y" }, extensionBuilt: true, serverDataDirExists: true });
+  const result = validateDoctorState({
+    env: {
+      VISION_PROVIDER: "network-ocr-openai-compatible",
+      OPENAI_API_KEY: "x",
+      OCR_API_KEYS: "y",
+      OCR_API_URL: "https://ocr.example.test/ocr",
+    },
+    extensionBuilt: true,
+    serverDataDirExists: true,
+  });
   assert.equal(result.ok, true);
   assert.equal(result.checks.find((check) => check.id === "provider")?.message, "TRANSLATION_PIPELINE=network-ocr-openai-compatible");
 });

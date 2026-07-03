@@ -20,6 +20,7 @@ docs/superpowers/
 
 apps/desktop/dist-app/
 qa-output/
+release/
 server-runtime*.log
 *.log
 *.tmp

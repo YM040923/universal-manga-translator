@@ -25,7 +25,7 @@ result.items
 pages.0.blocks
 ```
 
-## 模板 A：类百度格式
+## 模板 A：location 对象格式
 
 响应：
 

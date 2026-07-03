@@ -15,6 +15,8 @@ export interface QueueSnapshot {
 
 export interface TranslationQueueOptions {
   concurrency: number;
+  maxAutoItems?: number;
+  stopAfterConsecutiveFailures?: number;
   worker: (surface: RegisteredSurface) => Promise<SurfaceStatus | void>;
   onStatusChange?: (surfaceId: string, status: SurfaceStatus) => void;
 }
@@ -28,6 +30,8 @@ export class TranslationQueue {
   private paused = false;
   private processing = new Set<string>();
   private generation = 0;
+  private autoRun: Promise<void> | null = null;
+  private followUpAutoRunRequested = false;
 
   constructor(private readonly options: TranslationQueueOptions) {}
 
@@ -60,6 +64,7 @@ export class TranslationQueue {
 
   clear(_reason: string): void {
     this.generation += 1;
+    this.autoRun = null;
     this.surfaces = [];
     this.statuses.clear();
     this.processing.clear();
@@ -67,9 +72,31 @@ export class TranslationQueue {
   }
 
   async startAuto(): Promise<void> {
+    if (this.autoRun) {
+      this.followUpAutoRunRequested = true;
+      return this.autoRun;
+    }
+    const run = this.runAutoLoop();
+    this.autoRun = run;
+    try {
+      await run;
+    } finally {
+      if (this.autoRun === run) this.autoRun = null;
+    }
+  }
+
+  private async runAutoLoop(): Promise<void> {
+    do {
+      this.followUpAutoRunRequested = false;
+      await this.runAuto();
+    } while (this.followUpAutoRunRequested && !this.paused);
+  }
+
+  private async runAuto(): Promise<void> {
     if (this.paused) return;
     const generation = this.generation;
-    const pending = this.surfaces.filter((surface) => !TERMINAL_STATUSES.has(this.getStatus(surface.surfaceId)));
+    const maxItems = Math.max(1, Math.trunc(this.options.maxAutoItems ?? Number.POSITIVE_INFINITY));
+    const pending = this.surfaces.filter((surface) => !TERMINAL_STATUSES.has(this.getStatus(surface.surfaceId))).slice(0, maxItems);
     for (const surface of pending) this.mark(surface.surfaceId, "queued");
     if (!pending.length) return;
     const [first, ...rest] = pending;
@@ -112,14 +139,43 @@ export class TranslationQueue {
           const resultStatus = await this.options.worker(surface);
           this.processing.delete(surface.surfaceId);
           if (generation === this.generation) this.mark(surface.surfaceId, resultStatus ?? "completed");
+          if (generation === this.generation && this.shouldPauseAfterFailures()) {
+            this.pauseForFailureLimit();
+            return;
+          }
         } catch {
           this.processing.delete(surface.surfaceId);
           if (generation === this.generation) this.mark(surface.surfaceId, "failed");
+          if (generation === this.generation && this.shouldPauseAfterFailures()) {
+            this.pauseForFailureLimit();
+            return;
+          }
         } finally {
           this.processing.delete(surface.surfaceId);
         }
       }
     };
     await Promise.all(Array.from({ length: Math.min(concurrency, pending.length) }, () => runNext()));
+  }
+
+  private shouldPauseAfterFailures(): boolean {
+    const limit = Math.trunc(this.options.stopAfterConsecutiveFailures ?? 0);
+    if (limit <= 0) return false;
+    const terminal = this.surfaces.filter((surface) => TERMINAL_STATUSES.has(this.getStatus(surface.surfaceId)));
+    let consecutiveFailures = 0;
+    for (let index = terminal.length - 1; index >= 0; index -= 1) {
+      const status = this.getStatus(terminal[index]!.surfaceId);
+      if (status !== "failed") break;
+      consecutiveFailures += 1;
+      if (consecutiveFailures >= limit) return true;
+    }
+    return false;
+  }
+
+  private pauseForFailureLimit(): void {
+    this.paused = true;
+    for (const surface of this.surfaces) {
+      if (this.getStatus(surface.surfaceId) === "queued") this.mark(surface.surfaceId, "idle");
+    }
   }
 }

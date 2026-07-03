@@ -12,6 +12,10 @@ export interface CorePipelineInput extends GenericOcrImageInput {
   targetLanguage: string;
   sourceLanguage: string;
   retranslate?: boolean;
+  glossary?: Record<string, string>;
+  chapterContext?: string;
+  previousTranslations?: Array<{ id: string; translatedText: string }>;
+  termCandidates?: string[];
 }
 
 export interface CoreOcrProvider {
@@ -39,7 +43,7 @@ export interface CorePipelineResult {
 
 export class OcrTranslatePipeline {
   readonly profile: string;
-  lastOcrCacheStatus: "hit" | "miss" | "disabled" = "disabled";
+  lastOcrCacheStatus: "hit" | "miss" | "coalesced" | "disabled" = "disabled";
 
   constructor(private readonly options: OcrTranslatePipelineOptions) {
     this.profile = options.profile;
@@ -56,11 +60,17 @@ export class OcrTranslatePipeline {
   async process(input: CorePipelineInput): Promise<CorePipelineResult> {
     const ocrRegions = (await this.readOcrRegions(input)).map((region) => classifyRegionKind(region, input.width, input.height));
     const textBlocks = groupOcrRegionsIntoTextBlocks(ocrRegions);
+    const translationOptions: TextTranslationOptions = { retranslate: input.retranslate === true };
+    if (input.glossary && Object.keys(input.glossary).length) translationOptions.glossary = input.glossary;
+    if (input.chapterContext?.trim()) translationOptions.chapterContext = input.chapterContext.trim();
+    if (input.previousTranslations?.length) translationOptions.previousTranslations = input.previousTranslations;
+    const termCandidates = mergeUniqueTerms([...(input.termCandidates ?? []), ...extractTermCandidates(textBlocks)]);
+    if (termCandidates.length) translationOptions.termCandidates = termCandidates;
     const translated = await this.options.translator.translate(
-      textBlocks.map((region) => ({ id: region.id, text: region.sourceText })),
+      buildTranslationItems(textBlocks),
       input.targetLanguage,
       input.sourceLanguage,
-      { retranslate: input.retranslate === true },
+      translationOptions,
     );
     const translatedById = new Map(translated.map((item) => [item.id, item.translatedText]));
     return {
@@ -87,11 +97,127 @@ export class OcrTranslatePipeline {
       this.lastOcrCacheStatus = "hit";
       return cached;
     }
+    const inFlight = inFlightOcrReads.get(key);
+    if (inFlight) {
+      this.lastOcrCacheStatus = "coalesced";
+      return inFlight;
+    }
     this.lastOcrCacheStatus = "miss";
-    const regions = await this.options.ocr.recognize(input);
-    if (regions.length > 0) await this.options.ocrCache.set(key, regions);
-    return regions;
+    const read = (async () => {
+      const regions = await this.options.ocr.recognize(input);
+      if (regions.length > 0) await this.options.ocrCache!.set(key, regions);
+      return regions;
+    })();
+    inFlightOcrReads.set(key, read);
+    try {
+      return await read;
+    } finally {
+      if (inFlightOcrReads.get(key) === read) inFlightOcrReads.delete(key);
+    }
   }
+}
+
+const inFlightOcrReads = new Map<string, Promise<GenericOcrRegion[]>>();
+
+function buildTranslationItems(regions: GenericOcrRegion[]): TextTranslationItem[] {
+  return regions.map((region, index) => ({
+    id: region.id,
+    text: region.sourceText,
+    context: [
+      `order ${index + 1}/${regions.length}`,
+      `kind: ${region.kind}`,
+      `orientation: ${region.orientation}`,
+      `box: x=${Math.round(region.box.x)}, y=${Math.round(region.box.y)}, w=${Math.round(region.box.width)}, h=${Math.round(region.box.height)}`,
+      index > 0 ? `previous: ${compactContextText(regions[index - 1]!.sourceText)}` : "",
+      index < regions.length - 1 ? `next: ${compactContextText(regions[index + 1]!.sourceText)}` : "",
+    ].filter(Boolean).join("; "),
+  }));
+}
+
+function compactContextText(text: string): string {
+  const compact = text.replace(/\s+/g, " ").trim();
+  return compact.length > 140 ? `${compact.slice(0, 137)}...` : compact;
+}
+
+function extractTermCandidates(regions: GenericOcrRegion[]): string[] {
+  const counts = new Map<string, number>();
+  for (const region of regions) {
+    const text = region.sourceText.replace(/[’']/g, "'").replace(/[^A-Za-z0-9'\-\s]/g, " ");
+    for (const candidate of candidateTermsFromText(text)) counts.set(candidate, (counts.get(candidate) ?? 0) + 1);
+  }
+  return [...counts.entries()]
+    .filter(([term, count]) => count > 1 || term.includes(" ") || /^[A-Z]{2,}$/.test(term) || isSingleNameCandidate(term))
+    .sort((a, b) => b[1] - a[1] || b[0].length - a[0].length || a[0].localeCompare(b[0]))
+    .map(([term]) => term)
+    .slice(0, 24);
+}
+
+function mergeUniqueTerms(terms: string[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const raw of terms) {
+    const term = raw.replace(/\s+/g, " ").trim();
+    if (!term || seen.has(term.toLowerCase())) continue;
+    seen.add(term.toLowerCase());
+    result.push(term);
+    if (result.length >= 24) break;
+  }
+  return result;
+}
+
+function candidateTermsFromText(text: string): string[] {
+  const tokens = text.split(/\s+/).filter(Boolean);
+  const candidates: string[] = [];
+  let phrase: string[] = [];
+  const flush = () => {
+    if (phrase.length) {
+      if (phrase.length === 1) candidates.push(phrase[0]!);
+      else {
+        for (let start = 0; start < phrase.length; start += 1) {
+          for (let end = start + 1; end <= Math.min(phrase.length, start + 4); end += 1) {
+            const slice = phrase.slice(start, end);
+            if (slice.length === 1 || slice.length >= 2) candidates.push(slice.join(" "));
+          }
+        }
+      }
+    }
+    phrase = [];
+  };
+  for (const raw of tokens) {
+    const token = raw.replace(/^[^A-Za-z0-9]+|[^A-Za-z0-9]+$/g, "");
+    if (!token) {
+      flush();
+      continue;
+    }
+    const proper = isLikelyProperToken(token);
+    if (proper) phrase.push(token);
+    else flush();
+  }
+  flush();
+  return [...new Set(candidates.filter(isUsefulTermCandidate))];
+}
+
+const COMMON_CAPITALIZED_WORDS = new Set([
+  "A", "An", "And", "Are", "As", "At", "But", "By", "Can", "Did", "Do", "Does", "For", "From", "Go", "Had", "Has", "Have", "He", "Her", "Here", "His", "How", "I", "If", "In", "Is", "It", "Me", "My", "No", "Not", "Of", "Oh", "On", "Or", "Our", "She", "So", "That", "The", "Then", "There", "They", "This", "To", "Was", "We", "What", "When", "Where", "Who", "Why", "Will", "With", "Yes", "You", "Your",
+]);
+
+function isLikelyProperToken(token: string): boolean {
+  if (token.length < 2 || token.length > 32) return false;
+  if (/^\d+$/.test(token)) return false;
+  if (/^[A-Z]{2,}$/.test(token)) return true;
+  return /^[A-Z][a-z0-9'\-]+$/.test(token);
+}
+
+function isUsefulTermCandidate(term: string): boolean {
+  if (term.length < 3 || term.length > 64) return false;
+  const parts = term.split(/\s+/);
+  if (parts.length === 1 && COMMON_CAPITALIZED_WORDS.has(term)) return false;
+  if (parts.every((part) => COMMON_CAPITALIZED_WORDS.has(part))) return false;
+  return /[A-Za-z]/.test(term);
+}
+
+function isSingleNameCandidate(term: string): boolean {
+  return /^[A-Z][a-z][A-Za-z'\-]{2,}$/.test(term) && !COMMON_CAPITALIZED_WORDS.has(term);
 }
 
 export function buildOcrCacheKey(profile: string, input: { imageHash: string; width: number; height: number; sourceLanguage: string }): string {

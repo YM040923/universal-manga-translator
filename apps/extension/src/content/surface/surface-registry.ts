@@ -25,6 +25,20 @@ export class SurfaceRegistry {
   }
 }
 
+export function isLikelyReaderPage(root: Document = document, surfaces: RegisteredSurface[] = SurfaceRegistry.scan(root).surfaces): boolean {
+  if (looksLikeChapterUrl(root.location.href)) return true;
+  if (surfaces.length >= 2 && looksLikeStackedReaderSurfaces(surfaces)) return true;
+  if (surfaces.length === 1) {
+    const surface = surfaces[0]!;
+    const rect = surface.rect;
+    const viewportWidth = root.defaultView?.innerWidth ?? rect.width;
+    const isTallPage = rect.height >= Math.max(1200, rect.width * 1.8);
+    const fillsReaderColumn = rect.width >= Math.min(700, viewportWidth * 0.55);
+    return isTallPage && fillsReaderColumn && looksLikeChapterImageUrl(surface.imageUrl);
+  }
+  return false;
+}
+
 function toRegisteredCandidate(image: HTMLImageElement, domIndex: number, pageUrl: string): (Omit<RegisteredSurface, "index"> & { domIndex: number }) | null {
   const rect = image.getBoundingClientRect();
   const naturalSize = { width: image.naturalWidth || Math.round(rect.width), height: image.naturalHeight || Math.round(rect.height) };
@@ -48,6 +62,35 @@ function isMainMangaImage(rect: DOMRect | { width: number; height: number }, nat
   const width = hasRenderedSize ? rect.width : naturalSize.width;
   const height = hasRenderedSize ? rect.height : naturalSize.height;
   return width >= 500 && height >= 600 && height / Math.max(1, width) >= 0.7;
+}
+
+function looksLikeChapterUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return /(?:^|\/)(chapter|chap|episode|ep|read|reader)(?:\/|-|_|$)|\/\d+(?:\/)?$/i.test(parsed.pathname);
+  } catch {
+    return false;
+  }
+}
+
+function looksLikeChapterImageUrl(url: string): boolean {
+  return /(?:chapter|chap|episode|ep|page|pages|reader|webtoon|manga|comics?)|\/\d+\/[^/]+\.(?:webp|jpe?g|png)(?:$|\?)/i.test(url);
+}
+
+function looksLikeStackedReaderSurfaces(surfaces: RegisteredSurface[]): boolean {
+  const sorted = [...surfaces].sort((a, b) => a.rect.y - b.rect.y);
+  const readerLike = sorted.filter((surface) => surface.rect.width >= 500 && surface.rect.height >= 600 && looksLikeChapterImageUrl(surface.imageUrl));
+  if (readerLike.length < 2) return false;
+  let stackedPairs = 0;
+  for (let i = 1; i < readerLike.length; i += 1) {
+    const previous = readerLike[i - 1]!;
+    const current = readerLike[i]!;
+    const horizontalCenterDistance = Math.abs((previous.rect.x + previous.rect.width / 2) - (current.rect.x + current.rect.width / 2));
+    const sameReaderColumn = horizontalCenterDistance <= Math.max(120, Math.min(previous.rect.width, current.rect.width) * 0.35);
+    const verticalGap = current.rect.y - (previous.rect.y + previous.rect.height);
+    if (sameReaderColumn && verticalGap >= -40 && verticalGap <= 420) stackedPairs += 1;
+  }
+  return stackedPairs >= 1;
 }
 
 function absoluteImageUrl(value: string, pageUrl: string): string {

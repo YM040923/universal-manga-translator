@@ -11,10 +11,18 @@ interface RenderState {
   result: SurfaceResult;
 }
 
+interface RenderedRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
 export interface OverlayRendererOptions {
   targetLanguage?: string;
   onManualEdit?: (override: ManualOverridePayload) => void;
   appearance?: Partial<OverlayAppearance>;
+  replaceExistingRoot?: boolean;
 }
 
 function manualEditKey(imageHash: string, targetLanguage: string, regionId: string): string {
@@ -36,6 +44,7 @@ export function clearManualEdits(): void {
 export class OverlayRenderer {
   private readonly root: HTMLDivElement;
   private readonly rendered = new Map<string, RenderState>();
+  private readonly manualSelectionProtection = new Map<string, RenderedRect[]>();
   private readonly targetLanguage: string;
   private readonly onManualEdit: ((override: ManualOverridePayload) => void) | undefined;
   private appearance: OverlayAppearance;
@@ -44,6 +53,9 @@ export class OverlayRenderer {
     this.targetLanguage = options.targetLanguage ?? "zh-CN";
     this.onManualEdit = options.onManualEdit;
     this.appearance = normalizeOverlayAppearance(options.appearance ?? DEFAULT_SETTINGS.overlayAppearance);
+    if (options.replaceExistingRoot) {
+      for (const node of [...document.querySelectorAll("[data-umt-overlay-root='true']")]) node.remove();
+    }
     this.root = document.createElement("div");
     this.root.dataset.umtOverlayRoot = "true";
     this.root.style.cssText = "position:absolute;left:0;top:0;width:0;height:0;z-index:2147483646;pointer-events:none;";
@@ -58,11 +70,13 @@ export class OverlayRenderer {
     const escaped = typeof CSS !== "undefined" && CSS.escape ? CSS.escape(surfaceId) : surfaceId.replace(/'/g, "\\'");
     for (const node of [...this.root.querySelectorAll(`[data-umt-surface-id='${escaped}']`)]) node.remove();
     this.rendered.delete(surfaceId);
+    this.manualSelectionProtection.delete(surfaceId);
   }
 
   clearAll(): void {
     this.root.replaceChildren();
     this.rendered.clear();
+    this.manualSelectionProtection.clear();
     clearManualEdits();
     this.setVisible(false);
   }
@@ -86,20 +100,28 @@ export class OverlayRenderer {
     const rect = element.getBoundingClientRect();
     const renderedRect = { x: rect.x + window.scrollX, y: rect.y + window.scrollY, width: rect.width, height: rect.height };
     const seenRegionIds = new Set<string>();
+    const isManualSelection = isManualSelectionSurface(result.surfaceId);
+    const currentManualBoxes: RenderedRect[] = [];
     const renderRegions = mergeRenderableRegions(result.regions);
     for (const region of renderRegions) {
       const clampedNaturalBox = clampRectToBounds(region.box, naturalSize);
       if (!clampedNaturalBox) continue;
-      seenRegionIds.add(region.id);
       const manualEdit = loadManualEdit(result.imageHash, this.targetLanguage, region.id);
       if (manualEdit === "") continue;
       const textNaturalBox = expandRectWithinBounds(clampedNaturalBox, naturalSize, 1);
       const maskNaturalBox = expandRectWithinBounds(clampedNaturalBox, naturalSize, this.appearance.maskScale);
       const textBox = mapNaturalBoxToRenderedBox(textNaturalBox, naturalSize, renderedRect);
       const box = mapNaturalBoxToRenderedBox(maskNaturalBox, naturalSize, renderedRect);
+      if (isManualSelection) {
+        currentManualBoxes.push(box);
+      } else if (this.overlapsManualSelection(box)) {
+        continue;
+      }
+      seenRegionIds.add(region.id);
       const node = this.findOrCreateRegionNode(result.surfaceId, region.id);
       node.dataset.umtSurfaceId = result.surfaceId;
       node.dataset.umtRegionId = region.id;
+      node.dataset.umtManualSelection = isManualSelection ? "true" : "false";
       const chip = this.findOrCreateTextChip(node);
       chip.dataset.umtTextChip = "true";
       const padding = maskPaddingForBox(textBox.width, textBox.height, 1);
@@ -193,6 +215,10 @@ export class OverlayRenderer {
         }
       };
     }
+    if (isManualSelection) {
+      this.manualSelectionProtection.set(result.surfaceId, currentManualBoxes);
+      this.removeNormalNodesCoveredByManualSelections(currentManualBoxes);
+    }
     this.removeStaleRegionNodes(result.surfaceId, seenRegionIds);
   }
 
@@ -222,6 +248,22 @@ export class OverlayRenderer {
     for (const node of [...this.root.querySelectorAll<HTMLElement>(selector)]) {
       const regionId = node.dataset.umtRegionId;
       if (!regionId || !seenRegionIds.has(regionId)) node.remove();
+    }
+  }
+
+  private overlapsManualSelection(box: RenderedRect): boolean {
+    for (const protectedBoxes of this.manualSelectionProtection.values()) {
+      if (protectedBoxes.some((protectedBox) => rectsOverlapSignificantly(box, protectedBox))) return true;
+    }
+    return false;
+  }
+
+  private removeNormalNodesCoveredByManualSelections(protectedBoxes: RenderedRect[]): void {
+    if (!protectedBoxes.length) return;
+    for (const node of [...this.root.querySelectorAll<HTMLElement>("[data-umt-region-id]")]) {
+      if (node.dataset.umtManualSelection === "true" || isManualSelectionSurface(node.dataset.umtSurfaceId ?? "")) continue;
+      const box = rectFromStyle(node);
+      if (box && protectedBoxes.some((protectedBox) => rectsOverlapSignificantly(box, protectedBox))) node.remove();
     }
   }
 }
@@ -372,6 +414,26 @@ function rectIntersectionArea(a: { x: number; y: number; width: number; height: 
   const right = Math.min(a.x + a.width, b.x + b.width);
   const bottom = Math.min(a.y + a.height, b.y + b.height);
   return Math.max(0, right - left) * Math.max(0, bottom - top);
+}
+
+function rectsOverlapSignificantly(a: RenderedRect, b: RenderedRect): boolean {
+  const overlapArea = rectIntersectionArea(a, b);
+  if (overlapArea <= 0) return false;
+  const smallerArea = Math.min(a.width * a.height, b.width * b.height);
+  return smallerArea > 0 && overlapArea / smallerArea >= 0.12;
+}
+
+function rectFromStyle(node: HTMLElement): RenderedRect | null {
+  const x = Number.parseFloat(node.style.left);
+  const y = Number.parseFloat(node.style.top);
+  const width = Number.parseFloat(node.style.width);
+  const height = Number.parseFloat(node.style.height);
+  if (![x, y, width, height].every(Number.isFinite) || width <= 0 || height <= 0) return null;
+  return { x, y, width, height };
+}
+
+function isManualSelectionSurface(surfaceId: string): boolean {
+  return surfaceId.startsWith("manual:");
 }
 
 function glyphSafeInsetForText(text: string, width: number, height: number, fittedFontSize: number): number {

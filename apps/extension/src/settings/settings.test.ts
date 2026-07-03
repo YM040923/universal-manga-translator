@@ -78,7 +78,7 @@ test("loadSettings includes backend and performance defaults", async () => {
   const settings = await loadSettings(fakeStorage());
   assert.equal(settings.runMode, "direct");
   assert.equal(settings.providerProfile, "network-ocr-openai-compatible");
-  assert.equal(settings.translationModel, "gpt-5.4-mini");
+  assert.equal(settings.translationModel, "gpt-4.1-mini");
   assert.equal(settings.openAICompatibleBaseUrl, "");
   assert.equal(settings.requestTimeoutMs, 60000);
   assert.equal(settings.maxConcurrentSubmissions, 2);
@@ -99,12 +99,15 @@ test("loadSettings includes plugin-only direct API defaults", async () => {
     textPaths: ["words", "text", "content"],
     boxPaths: ["location", "box", "bbox", "vertexes_location"],
     confidencePaths: ["score", "confidence"],
+    maxAutoOcrPages: 80,
+    stopAfterConsecutiveFailures: 4,
   });
   assert.deepEqual(settings.directTranslator, {
     baseUrl: "",
     apiKey: "",
-    model: "gpt-5.4-mini",
+    model: "gpt-4.1-mini",
   });
+  assert.equal(settings.glossaryText, "");
 });
 
 test("normalizeSettings accepts direct mode API configuration", () => {
@@ -120,6 +123,8 @@ test("normalizeSettings accepts direct mode API configuration", () => {
       textPaths: [" text "],
       boxPaths: [" box "],
       confidencePaths: [" score "],
+      maxAutoOcrPages: 80,
+      stopAfterConsecutiveFailures: 4,
     },
     directTranslator: {
       baseUrl: "https://api.example.com/v1/",
@@ -139,12 +144,37 @@ test("normalizeSettings accepts direct mode API configuration", () => {
     textPaths: ["text"],
     boxPaths: ["box"],
     confidencePaths: ["score"],
+    maxAutoOcrPages: 80,
+    stopAfterConsecutiveFailures: 4,
   });
   assert.deepEqual(settings.directTranslator, {
     baseUrl: "https://api.example.com/v1",
     apiKey: "sk-test",
     model: "gpt-test",
   });
+});
+
+test("normalizeSettings preserves user glossary text and exposes a stable glossary hash", () => {
+  const settings = normalizeSettings({
+    glossaryText: "Clark = 克拉克\nMurim: 武林\n\n# comment\nbad line",
+  });
+
+  assert.equal(settings.glossaryText, "Clark = 克拉克\nMurim = 武林");
+  assert.deepEqual(settings.glossary, { Clark: "克拉克", Murim: "武林" });
+  assert.match(settings.glossaryHash, /^glossary:[a-f0-9]{16}$/);
+  assert.equal(normalizeSettings({ glossaryText: "Murim=武林\nClark=克拉克" }).glossaryHash, settings.glossaryHash);
+});
+
+test("normalizeSettings adds /v1 to bare OpenAI-compatible translator domains", () => {
+  const settings = normalizeSettings({
+    directTranslator: {
+      baseUrl: "https://cf.ai-pixel.online/",
+      apiKey: "sk-test",
+      model: "gpt-test",
+    },
+  });
+
+  assert.equal(settings.directTranslator.baseUrl, "https://cf.ai-pixel.online/v1");
 });
 
 test("normalizeSettings clamps invalid backend and performance fields", () => {
@@ -298,9 +328,9 @@ test("normalizeSettings clamps overlay appearance fields", () => {
   assert.deepEqual(settings.overlayAppearance, {
     maskShape: "auto",
     fontScale: 1.3,
-    maskScale: 2,
-    ellipseX: 55,
-    ellipseY: 30,
+    maskScale: 4,
+    ellipseX: 90,
+    ellipseY: 20,
     opacity: 1,
   });
 });
@@ -318,4 +348,35 @@ test("normalizeSettings allows a much smaller overlay mask scale", () => {
   });
 
   assert.equal(settings.overlayAppearance.maskScale, 0.2);
+});
+
+test("normalizeSettings allows wider ellipse tuning for large speech bubbles", () => {
+  const settings = normalizeSettings({
+    overlayAppearance: {
+      maskShape: "ellipse",
+      fontScale: 1,
+      maskScale: 3.5,
+      ellipseX: 85,
+      ellipseY: 78,
+      opacity: 1,
+    },
+  });
+
+  assert.equal(settings.overlayAppearance.maskScale, 3.5);
+  assert.equal(settings.overlayAppearance.ellipseX, 85);
+  assert.equal(settings.overlayAppearance.ellipseY, 78);
+});
+
+test("normalizeSettings clamps OCR cost protection fields", () => {
+  const settings = normalizeSettings({
+    directOcr: {
+      ...DEFAULT_SETTINGS.directOcr,
+      maxAutoOcrPages: 999,
+      stopAfterConsecutiveFailures: 99,
+    } as never,
+  });
+
+  assert.equal(settings.directOcr.maxAutoOcrPages, 120);
+  assert.equal(settings.directOcr.stopAfterConsecutiveFailures, 10);
+  assert.equal(normalizeSettings({ directOcr: { ...DEFAULT_SETTINGS.directOcr, maxAutoOcrPages: 0, stopAfterConsecutiveFailures: 0 } as never }).directOcr.maxAutoOcrPages, DEFAULT_SETTINGS.directOcr.maxAutoOcrPages);
 });

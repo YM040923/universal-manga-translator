@@ -1,4 +1,4 @@
-import test from "node:test";
+﻿import test from "node:test";
 import assert from "node:assert/strict";
 import { OpenAICompatibleTextTranslator, parseTranslationResults } from "./openai-translator.js";
 
@@ -51,6 +51,20 @@ test("OpenAICompatibleTextTranslator lists models from OpenAI-compatible /models
   assert.deepEqual(await translator.listModels(), ["gpt-5.4-mini", "gpt-5.5"]);
   assert.equal(seenUrl, "https://api.example.test/v1/models");
   assert.equal(seenAuthorization, "Bearer key");
+});
+
+test("OpenAICompatibleTextTranslator reports non-JSON HTML responses as base URL guidance", async () => {
+  const translator = new OpenAICompatibleTextTranslator({
+    baseUrl: "https://api.example.test",
+    apiKey: "key",
+    model: "gpt-test",
+    fetch: async () => new Response("<!doctype html><html></html>", { status: 200, headers: { "content-type": "text/html" } }),
+  });
+
+  await assert.rejects(
+    translator.translate([{ id: "r1", text: "Hello" }], "zh-CN", "auto"),
+    /non-JSON response.*Base URL includes \/v1/i,
+  );
 });
 
 test("OpenAICompatibleTextTranslator retries transient fetch failures", async () => {
@@ -117,6 +131,28 @@ test("OpenAICompatibleTextTranslator uses a manga localization prompt with name 
   assert.match(prompt, /do not translate.*names.*literally/i);
 });
 
+test("OpenAICompatibleTextTranslator prompt discourages literal machine-translation style and uses page context", async () => {
+  let prompt = "";
+  const translator = new OpenAICompatibleTextTranslator({
+    baseUrl: "https://api.example.test/v1",
+    apiKey: "key",
+    model: "gpt-test",
+    fetch: async (_url, init) => {
+      const body = JSON.parse(String(init?.body));
+      prompt = body.messages[0].content;
+      return new Response(JSON.stringify({ choices: [{ message: { content: '{"items":[{"id":"r1","translatedText":"克拉克在哪？"}]}' } }] }), { status: 200, headers: { "content-type": "application/json" } });
+    },
+  });
+
+  await translator.translate([{ id: "r1", text: "Where is Clark?", context: "order 1/2; next: He went home." }], "zh-CN", "auto");
+
+  assert.match(prompt, /First understand the whole page/i);
+  assert.match(prompt, /Avoid literal word-by-word translation/i);
+  assert.match(prompt, /not machine-translated/i);
+  assert.match(prompt, /speaker intent/i);
+  assert.match(prompt, /order 1\/2/);
+});
+
 test("OpenAICompatibleTextTranslator can add retranslation improvement guidance", async () => {
   let prompt = "";
   const translator = new OpenAICompatibleTextTranslator({
@@ -135,4 +171,105 @@ test("OpenAICompatibleTextTranslator can add retranslation improvement guidance"
   assert.match(prompt, /retranslation/i);
   assert.match(prompt, /previous result may be poor/i);
   assert.match(prompt, /improve/i);
+});
+
+test("OpenAICompatibleTextTranslator prompt makes glossary terms mandatory and stable", async () => {
+  let prompt = "";
+  const translator = new OpenAICompatibleTextTranslator({
+    baseUrl: "https://api.example.test/v1",
+    apiKey: "key",
+    model: "gpt-test",
+    fetch: async (_url, init) => {
+      const body = JSON.parse(String(init?.body));
+      prompt = body.messages[0].content;
+      return new Response(JSON.stringify({ choices: [{ message: { content: '{"items":[{"id":"r1","translatedText":"克拉克来自武林。"}]}' } }] }), { status: 200, headers: { "content-type": "application/json" } });
+    },
+  });
+
+  await translator.translate(
+    [{ id: "r1", text: "Clark came from Murim." }],
+    "zh-CN",
+    "auto",
+    { glossary: { Clark: "克拉克", Murim: "武林" } },
+  );
+
+  assert.match(prompt, /User glossary/i);
+  assert.match(prompt, /mandatory/i);
+  assert.match(prompt, /Clark/);
+  assert.match(prompt, /克拉克/);
+  assert.match(prompt, /Murim/);
+  assert.match(prompt, /武林/);
+  assert.match(prompt, /Do not rename/i);
+});
+
+test("OpenAICompatibleTextTranslator prompt includes chapter context and stronger natural manga style rules", async () => {
+  let prompt = "";
+  const translator = new OpenAICompatibleTextTranslator({
+    baseUrl: "https://api.example.test/v1",
+    apiKey: "key",
+    model: "gpt-test",
+    fetch: async (_url, init) => {
+      const body = JSON.parse(String(init?.body));
+      prompt = body.messages[0].content;
+      return new Response(JSON.stringify({ choices: [{ message: { content: '{"items":[{"id":"r1","translatedText":"�㵽�����ʲô��"}]}' } }] }), { status: 200, headers: { "content-type": "application/json" } });
+    },
+  });
+
+  await translator.translate(
+    [{ id: "r1", text: "What do you want?", context: "kind: dialogue" }],
+    "zh-CN",
+    "auto",
+    { chapterContext: "Earlier: Clark is suspicious of the Heavenly Demon." },
+  );
+
+  assert.match(prompt, /Chapter context/i);
+  assert.match(prompt, /Clark is suspicious/);
+  assert.match(prompt, /spoken Chinese/i);
+  assert.match(prompt, /translationese/i);
+  assert.match(prompt, /dialogue.*spoken Chinese/i);
+});
+
+
+test("OpenAICompatibleTextTranslator prompt keeps Chinese style guidance readable", async () => {
+  let prompt = "";
+  const translator = new OpenAICompatibleTextTranslator({
+    baseUrl: "https://api.example.test/v1",
+    apiKey: "key",
+    model: "gpt-test",
+    fetch: async (_url, init) => {
+      const body = JSON.parse(String(init?.body));
+      prompt = body.messages[0].content;
+      return new Response(JSON.stringify({ choices: [{ message: { content: '{"items":[{"id":"r1","translatedText":"你好"}]}' } }] }), { status: 200, headers: { "content-type": "application/json" } });
+    },
+  });
+
+  await translator.translate([{ id: "r1", text: "Hello" }], "zh-CN", "auto");
+
+  assert.match(prompt, /口语/);
+  assert.doesNotMatch(prompt, /鍙|�/);
+});
+
+test("OpenAICompatibleTextTranslator prompt includes auto term candidates for stable names", async () => {
+  let prompt = "";
+  const translator = new OpenAICompatibleTextTranslator({
+    baseUrl: "https://api.example.test/v1",
+    apiKey: "key",
+    model: "gpt-test",
+    fetch: async (_url, init) => {
+      const body = JSON.parse(String(init?.body));
+      prompt = body.messages[0].content;
+      return new Response(JSON.stringify({ choices: [{ message: { content: '{"items":[{"id":"r1","translatedText":"克拉克"}]}' } }] }), { status: 200, headers: { "content-type": "application/json" } });
+    },
+  });
+
+  await translator.translate(
+    [{ id: "r1", text: "Clark meets Heavenly Demon" }],
+    "zh-CN",
+    "auto",
+    { termCandidates: ["Clark", "Heavenly Demon"] },
+  );
+
+  assert.match(prompt, /Auto-detected term candidates/i);
+  assert.match(prompt, /Clark/);
+  assert.match(prompt, /Heavenly Demon/);
 });

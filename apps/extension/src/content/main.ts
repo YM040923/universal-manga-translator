@@ -2,6 +2,8 @@
 import { DirectClient } from "./client/direct-client";
 import { supportsEventStream, type TranslatorClient } from "./client/translator-client";
 import { ChapterResultCache, type ChapterResultCacheContext } from "./cache/chapter-result-cache";
+import { ManualSelectionCache, type ManualSelectionCacheContext } from "./cache/manual-selection-cache";
+import { ExtensionManualOverrideStore } from "./cache/manual-overrides";
 import { createSurfaceTask, createSurfaceTaskWithImageData } from "./capture/surface-capture";
 import { createScreenshotSurface, readImageSize } from "./capture/screenshot-crop";
 import { requestVisibleTabScreenshot } from "./capture/screenshot-request";
@@ -11,14 +13,15 @@ import type { DetectedSurface } from "./detector/surface-detector";
 import { EventResultRouter } from "./events/event-result-router";
 import { isUmtContentCommand } from "./messages";
 import { OverlayRenderer } from "./overlay/overlay-renderer";
-import { createRectOverlayAnchor } from "./overlay/rect-anchor";
+import { createDocumentRectOverlayAnchor } from "./overlay/rect-anchor";
 import { ChapterProgress } from "./progress/chapter-progress";
 import { FloatingPanel } from "./panel/floating-panel";
 import { ManualSelectionController } from "./selection/manual-selection";
 import { TranslationQueue } from "./queue/translation-queue";
 import type { SurfaceStatus } from "./surface/surface-state";
 import { SurfaceControl } from "./surface/surface-control";
-import { SurfaceRegistry, type RegisteredSurface } from "./surface/surface-registry";
+import { selectVisibleSurfaces } from "./surface/visible-surfaces";
+import { isLikelyReaderPage, SurfaceRegistry, type RegisteredSurface } from "./surface/surface-registry";
 import { isRenderableSurfaceResult } from "./translation-result";
 import { getEffectiveSiteSettings, isSiteEnabled, loadSettings, saveSettings, setSiteSettings, setTranslationOverlayVisible, type ExtensionSettings } from "../settings/settings";
 import { appendRuntimeLog } from "../settings/runtime-log";
@@ -42,14 +45,17 @@ async function bootstrap(): Promise<boolean> {
   const submitTracker = new SurfaceSubmitTracker();
   const progress = new ChapterProgress();
   const chapterCache = new ChapterResultCache();
+  const manualSelectionCache = new ManualSelectionCache();
+  const manualOverrides = new ExtensionManualOverrideStore();
   let floatingPanel: FloatingPanel;
-  if (settings.progressWidgetEnabled) await progress.mount();
 
   let jobSessionId = createJobSessionId();
   let eventSocket: WebSocket | null = null;
   let eventsConnected = false;
   let registry: SurfaceRegistry = SurfaceRegistry.scan(document);
+  let readerUiMounted = false;
   let controls = new Map<string, SurfaceControl>();
+  const surfaceFailureDetails = new Map<string, string>();
 
   let queue = createQueue();
   let eventResultRouter = createEventResultRouter(renderer);
@@ -62,7 +68,15 @@ async function bootstrap(): Promise<boolean> {
   }
 
   function createRenderer(current: ExtensionSettings, translator: TranslatorClient): OverlayRenderer {
-    return new OverlayRenderer({ targetLanguage: current.targetLanguage, appearance: current.overlayAppearance, onManualEdit: (override) => void translator.saveManualOverride(override) });
+    return new OverlayRenderer({
+      targetLanguage: current.targetLanguage,
+      appearance: current.overlayAppearance,
+      replaceExistingRoot: true,
+      onManualEdit: (override) => {
+        void manualOverrides.save(override).catch((error) => logError("save local manual override failed", error));
+        void translator.saveManualOverride(override).catch((error) => logError("save manual override failed", error));
+      },
+    });
   }
 
   function createEventResultRouter(currentRenderer: OverlayRenderer): EventResultRouter {
@@ -80,9 +94,11 @@ async function bootstrap(): Promise<boolean> {
   function createQueue(): TranslationQueue {
     return new TranslationQueue({
       concurrency: Math.max(1, Math.min(settings.maxConcurrentSubmissions, 2)),
+      maxAutoItems: settings.directOcr.maxAutoOcrPages,
+      stopAfterConsecutiveFailures: settings.directOcr.stopAfterConsecutiveFailures,
       worker: translateRegisteredSurface,
       onStatusChange: (surfaceId, status) => {
-        controls.get(surfaceId)?.setStatus(status);
+        setSurfaceControlStatus(surfaceId, status);
         updateProgress();
       },
     });
@@ -135,7 +151,7 @@ async function bootstrap(): Promise<boolean> {
     for (const surface of surfaces) {
       const entry = doc.entries[surface.imageUrl];
       if (!entry) continue;
-      const result = { ...entry.result, surfaceId: surface.surfaceId, status: "cached" as const };
+      const result = await manualOverrides.applyToResult({ ...entry.result, surfaceId: surface.surfaceId, status: "cached" as const }, settings.targetLanguage);
       renderer.render(surface.element, surface.naturalSize, result);
       renderer.setVisible(settings.translationOverlayVisible);
       eventResultRouter.track(surface.surfaceId, surface.element, surface.naturalSize);
@@ -147,6 +163,19 @@ async function bootstrap(): Promise<boolean> {
     return { pageUrl: window.location.href, targetLanguage: settings.targetLanguage, providerProfile: currentProviderProfile() };
   }
 
+  function manualSelectionCacheContext(): ManualSelectionCacheContext {
+    return { pageUrl: window.location.href, targetLanguage: settings.targetLanguage, providerProfile: currentProviderProfile() };
+  }
+
+  async function restoreCachedManualSelections(): Promise<void> {
+    const doc = await manualSelectionCache.read(manualSelectionCacheContext());
+    for (const entry of doc.entries) {
+      const result = await manualOverrides.applyToResult({ ...entry.result, surfaceId: entry.id, status: "cached" as const }, settings.targetLanguage);
+      renderer.render(createDocumentRectOverlayAnchor(entry.documentRect), entry.naturalSize, result);
+      renderer.setVisible(settings.translationOverlayVisible);
+    }
+  }
+
   function currentProviderProfile(): string {
     if (typeof client.providerProfile === "function") return client.providerProfile();
     return settings.providerProfile;
@@ -155,6 +184,13 @@ async function bootstrap(): Promise<boolean> {
   function scanAndMountControls(reason: string): RegisteredSurface[] {
     registry = SurfaceRegistry.scan(document);
     const surfaces = registry.surfaces.slice(0, settings.maxFullPageSurfaces);
+    if (!isLikelyReaderPage(document, surfaces)) {
+      queue.setSurfaces([]);
+      updateProgress();
+      logInfo("reader page inactive", `${reason} | found=${surfaces.length}`);
+      return [];
+    }
+    mountReaderUi();
     const activeIds = new Set(surfaces.map((surface) => surface.surfaceId));
     for (const [surfaceId, control] of controls) {
       if (!activeIds.has(surfaceId)) {
@@ -185,13 +221,21 @@ async function bootstrap(): Promise<boolean> {
     updateProgress();
     logInfo("surface registry scan", `${reason} | found=${surfaces.length}`);
     void restoreCachedChapterResults(surfaces).catch((error) => logError("restore chapter cache failed", error));
+    void restoreCachedManualSelections().catch((error) => logError("restore manual selection cache failed", error));
     return surfaces;
   }
 
-  function markSurface(surfaceId: string, status: SurfaceStatus): void {
+  function markSurface(surfaceId: string, status: SurfaceStatus, detail?: string): void {
+    if (status === "failed" && detail) surfaceFailureDetails.set(surfaceId, detail);
+    if (status !== "failed") surfaceFailureDetails.delete(surfaceId);
     if (!queue.mark(surfaceId, status)) return;
-    controls.get(surfaceId)?.setStatus(status);
+    setSurfaceControlStatus(surfaceId, status);
     updateProgress();
+  }
+
+  function setSurfaceControlStatus(surfaceId: string, status: SurfaceStatus): void {
+    const detail = status === "failed" ? surfaceFailureDetails.get(surfaceId) : undefined;
+    controls.get(surfaceId)?.setStatus(status, detail ? { detail } : {});
   }
 
   function updateProgress(): void {
@@ -230,18 +274,23 @@ async function bootstrap(): Promise<boolean> {
       markSurface(surface.surfaceId, "ocr");
       const response = force ? await client.retranslate(task, jobSessionId) : await client.submit(task, jobSessionId);
       if (response.ok && isRenderableSurfaceResult(response.result)) {
-        renderer.render(surface.element, surface.naturalSize, response.result);
+        const result = await manualOverrides.applyToResult(response.result, settings.targetLanguage);
+        renderer.render(surface.element, surface.naturalSize, result);
         renderer.setVisible(settings.translationOverlayVisible);
-        debugRenderer.markResult(surface.element, surface.naturalSize, response.result);
-        void chapterCache.save(cacheContext(), surface.imageUrl, response.result).catch((error) => logError("save chapter cache failed", error));
-        return response.result.status === "cached" ? "cached" : "completed";
+        debugRenderer.markResult(surface.element, surface.naturalSize, result);
+        void chapterCache.save(cacheContext(), surface.imageUrl, result).catch((error) => logError("save chapter cache failed", error));
+        return result.status === "cached" ? "cached" : "completed";
       }
       if (response.ok && response.result?.status === "empty") return "empty";
       if (response.ok && response.status === "cancelled") return "cancelled";
-      logWarn("submit not renderable", `${surface.surfaceId} | ${response.ok ? response.status : response.error}`);
+      const detail = response.ok ? response.status : response.error;
+      logWarn("submit not renderable", `${surface.surfaceId} | ${detail}`);
+      markSurface(surface.surfaceId, "failed", detail);
       return "failed";
     } catch (error) {
+      const detail = formatShortError(error);
       logError("submit failed", error);
+      surfaceFailureDetails.set(surface.surfaceId, detail);
       submitTracker.release(surface.surfaceId);
       return "failed";
     }
@@ -265,7 +314,32 @@ async function bootstrap(): Promise<boolean> {
     updateProgress();
   }
 
+  async function retranslateVisibleSurfaces(): Promise<void> {
+    const surfaces = selectVisibleSurfaces(scanAndMountControls("retranslate-visible")).slice(0, Math.max(1, settings.maxConcurrentSubmissions + 2));
+    if (!surfaces.length) return;
+    ensureEventStream();
+    let cursor = 0;
+    const concurrency = Math.max(1, Math.min(settings.maxConcurrentSubmissions, 2));
+    const runNext = async (): Promise<void> => {
+      while (cursor < surfaces.length) {
+        const surface = surfaces[cursor++];
+        if (!surface) continue;
+        submitTracker.release(surface.surfaceId);
+        queue.mark(surface.surfaceId, "idle");
+        const status = await translateRegisteredSurface(surface, true);
+        markSurface(surface.surfaceId, status);
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(concurrency, surfaces.length) }, () => runNext()));
+    updateProgress();
+  }
+
   function startManualSelection(): void {
+    if (!isLikelyReaderPage(document, registry.surfaces.slice(0, settings.maxFullPageSurfaces))) {
+      logInfo("manual selection ignored outside reader page");
+      return;
+    }
+    mountReaderUi();
     const controller = new ManualSelectionController({
       onSelect: (rect) => void translateManualRect(rect),
       onCancel: () => logInfo("manual selection cancelled"),
@@ -288,9 +362,12 @@ async function bootstrap(): Promise<boolean> {
       });
       const response = await client.submit(createSurfaceTask(surface, "p0", settings.targetLanguage), jobSessionId);
       if (response.ok && isRenderableSurfaceResult(response.result)) {
-        renderer.render(createRectOverlayAnchor(rect), surface.naturalSize, response.result);
+        const result = await manualOverrides.applyToResult(response.result, settings.targetLanguage);
+        const documentRect = { x: rect.x + window.scrollX, y: rect.y + window.scrollY, width: rect.width, height: rect.height };
+        renderer.render(createDocumentRectOverlayAnchor(documentRect), surface.naturalSize, result);
         renderer.setVisible(settings.translationOverlayVisible);
-        logInfo("render manual region", `regions=${response.result.regions.length}`);
+        void manualSelectionCache.save(manualSelectionCacheContext(), { id: surface.surfaceId, documentRect, naturalSize: surface.naturalSize, result }).catch((error) => logError("save manual selection cache failed", error));
+        logInfo("render manual region", `regions=${result.regions.length}`);
       } else {
         logWarn("manual region not renderable", response.ok ? response.status : response.error);
       }
@@ -329,12 +406,14 @@ async function bootstrap(): Promise<boolean> {
   async function resetPageState(reason: string, clearOverlay = true): Promise<void> {
     await cancelCurrentQueue(reason);
     submitTracker.clear();
+    surfaceFailureDetails.clear();
     eventResultRouter.clear();
     queue.clear(reason);
     resetProgress("等待开始");
     if (clearOverlay) {
       renderer.clearAll();
       await chapterCache.clear(cacheContext()).catch((error) => logError("clear chapter cache failed", error));
+      await manualSelectionCache.clear(manualSelectionCacheContext()).catch((error) => logError("clear manual selection cache failed", error));
     }
     debugRenderer.clear();
     for (const control of controls.values()) control.remove();
@@ -382,6 +461,16 @@ async function bootstrap(): Promise<boolean> {
     renderer.refreshAll();
   }
 
+  function mountReaderUi(): void {
+    if (readerUiMounted) return;
+    floatingPanel.mount();
+    floatingPanel.setOverlayVisible(settings.translationOverlayVisible);
+    floatingPanel.setEnabled(settings.floatingButtonEnabled);
+    if (settings.progressWidgetEnabled) void progress.mount();
+    renderer.setVisible(settings.translationOverlayVisible);
+    readerUiMounted = true;
+  }
+
   function toDetectedSurface(surface: RegisteredSurface): DetectedSurface {
     const rect = surface.element.getBoundingClientRect();
     return {
@@ -396,14 +485,10 @@ async function bootstrap(): Promise<boolean> {
   }
 
   floatingPanel = new FloatingPanel({
-    onRetranslatePage: () => void translatePage(true),
+    onRetranslatePage: () => void retranslateVisibleSurfaces(),
     onSelectRegion: () => startManualSelection(),
     onToggleOverlayVisibility: (visible) => void setOverlayVisibility(visible),
   });
-  floatingPanel.mount();
-  floatingPanel.setOverlayVisible(settings.translationOverlayVisible);
-  floatingPanel.setEnabled(settings.floatingButtonEnabled);
-  renderer.setVisible(settings.translationOverlayVisible);
 
   logInfo("content script started", `${location.hostname} | mode=${settings.runMode} | target=${settings.targetLanguage}`);
   scanAndMountControls("load");
@@ -441,6 +526,7 @@ async function bootstrap(): Promise<boolean> {
     if (message.command === "clearPage") void resetPageState("popup-clear", true);
     if (message.command === "selectRegion") startManualSelection();
     if (message.command === "retranslate") void translatePage(true);
+    if (message.command === "retranslateVisible") void retranslateVisibleSurfaces();
     if (message.command === "cancelQueue") void cancelCurrentQueue("popup-cancel");
     if (message.command === "setOverlayVisibility") void setOverlayVisibility(message.visible !== false);
     if (message.command === "toggleOverlayVisibility") void toggleOverlayVisibility();

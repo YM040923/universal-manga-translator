@@ -212,3 +212,118 @@ test("TranslationQueue resumes configured concurrency after the first pending pa
   await running;
   assert.equal(queue.getStatus("s2"), "completed");
 });
+
+test("TranslationQueue limits auto OCR pages per run", async () => {
+  const processed: string[] = [];
+  const queue = new TranslationQueue({
+    concurrency: 2,
+    maxAutoItems: 2,
+    worker: async (item) => { processed.push(item.surfaceId); return "completed"; },
+  });
+  queue.setSurfaces([surface(1), surface(2), surface(3), surface(4)]);
+
+  await queue.startAuto();
+
+  assert.deepEqual(processed, ["s1", "s2"]);
+  assert.equal(queue.getStatus("s3"), "idle");
+});
+
+test("TranslationQueue pauses after too many consecutive OCR failures", async () => {
+  const processed: string[] = [];
+  const queue = new TranslationQueue({
+    concurrency: 1,
+    stopAfterConsecutiveFailures: 2,
+    worker: async (item) => {
+      processed.push(item.surfaceId);
+      return "failed";
+    },
+  });
+  queue.setSurfaces([surface(1), surface(2), surface(3)]);
+
+  await queue.startAuto();
+
+  assert.deepEqual(processed, ["s1", "s2"]);
+  assert.equal(queue.snapshot().paused, true);
+  assert.equal(queue.getStatus("s3"), "idle");
+});
+
+test("TranslationQueue coalesces overlapping auto runs so surfaces are not submitted twice", async () => {
+  const processed: string[] = [];
+  let releaseFirst!: () => void;
+  const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+  const queue = new TranslationQueue({
+    concurrency: 2,
+    worker: async (item) => {
+      processed.push(item.surfaceId);
+      if (item.surfaceId === "s1") await firstGate;
+      return "completed";
+    },
+  });
+  queue.setSurfaces([surface(1), surface(2), surface(3)]);
+
+  const firstRun = queue.startAuto();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const secondRun = queue.startAuto();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  releaseFirst();
+  await Promise.all([firstRun, secondRun]);
+
+  assert.deepEqual(processed.sort(), ["s1", "s2", "s3"]);
+});
+
+test("TranslationQueue keeps a new auto run alive when an old cleared run finishes", async () => {
+  const processed: string[] = [];
+  let releaseOld!: () => void;
+  let releaseNew!: () => void;
+  const oldGate = new Promise<void>((resolve) => { releaseOld = resolve; });
+  const newGate = new Promise<void>((resolve) => { releaseNew = resolve; });
+  const queue = new TranslationQueue({
+    concurrency: 1,
+    worker: async (item) => {
+      processed.push(item.surfaceId);
+      if (item.surfaceId === "s1") await oldGate;
+      if (item.surfaceId === "s2") await newGate;
+      return "completed";
+    },
+  });
+  queue.setSurfaces([surface(1)]);
+  const oldRun = queue.startAuto();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  queue.clear("test-clear");
+  queue.setSurfaces([surface(2), surface(3)]);
+  const newRun = queue.startAuto();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  releaseOld();
+  await oldRun;
+  const overlappingNewRun = queue.startAuto();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  releaseNew();
+  await Promise.all([newRun, overlappingNewRun]);
+
+  assert.deepEqual(processed, ["s1", "s2", "s3"]);
+});
+
+test("TranslationQueue follows up an active auto run when new surfaces are added", async () => {
+  const processed: string[] = [];
+  let releaseFirst!: () => void;
+  const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+  const queue = new TranslationQueue({
+    concurrency: 1,
+    worker: async (item) => {
+      processed.push(item.surfaceId);
+      if (item.surfaceId === "s1") await firstGate;
+      return "completed";
+    },
+  });
+  queue.setSurfaces([surface(1)]);
+  const firstRun = queue.startAuto();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  queue.setSurfaces([surface(1), surface(2)]);
+  const followUp = queue.startAuto();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  releaseFirst();
+  await Promise.all([firstRun, followUp]);
+
+  assert.deepEqual(processed, ["s1", "s2"]);
+  assert.equal(queue.getStatus("s2"), "completed");
+});

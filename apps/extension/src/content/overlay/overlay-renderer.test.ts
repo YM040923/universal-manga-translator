@@ -151,6 +151,92 @@ test("manual edit callback receives override payload", () => {
   assert.deepEqual(saved, { imageHash: "hash", targetLanguage: "zh-CN", regionId: "r1", translatedText: "manual edit" });
 });
 
+test("creating a replacement renderer removes the previous overlay root so old manual bubbles follow popup visibility", () => {
+  const { img } = setupDomWithImage({ x: 10, y: 20, width: 500, height: 1000 });
+  const first = new OverlayRenderer();
+  first.render(img, { width: 1000, height: 2000 }, fakeResult("old-root"));
+
+  const second = new OverlayRenderer({ replaceExistingRoot: true });
+  second.render(img, { width: 1000, height: 2000 }, fakeResult("new-root"));
+  second.setVisible(false);
+
+  const roots = [...document.querySelectorAll<HTMLElement>("[data-umt-overlay-root='true']")];
+  assert.equal(roots.length, 1);
+  assert.equal(roots[0]?.style.display, "none");
+});
+
+test("manual selection overlays remove overlapping normal translation bubbles", () => {
+  const { img } = setupDomWithImage({ x: 0, y: 0, width: 500, height: 500 });
+  const renderer = new OverlayRenderer();
+  renderer.render(img, { width: 500, height: 500 }, fakeResult("page-1"));
+
+  const manual = fakeResult("manual:selection-1");
+  manual.regions = [{
+    ...manual.regions[0]!,
+    id: "manual-r1",
+    box: { x: 92, y: 92, width: 220, height: 120 },
+    translatedText: "manual selection wins",
+  }];
+  renderer.render(img, { width: 500, height: 500 }, manual);
+
+  assert.equal(document.querySelector("[data-umt-surface-id='page-1'][data-umt-region-id='r1']"), null);
+  assert.equal(document.querySelector("[data-umt-surface-id='manual:selection-1'][data-umt-region-id='manual-r1']")?.textContent, "manual selection wins");
+});
+
+test("normal translation cannot cover an existing manual selection overlay", () => {
+  const { img } = setupDomWithImage({ x: 0, y: 0, width: 500, height: 500 });
+  const renderer = new OverlayRenderer();
+  const manual = fakeResult("manual:selection-2");
+  manual.regions = [{
+    ...manual.regions[0]!,
+    id: "manual-r1",
+    box: { x: 92, y: 92, width: 220, height: 120 },
+    translatedText: "cached manual selection",
+  }];
+  renderer.render(img, { width: 500, height: 500 }, manual);
+
+  renderer.render(img, { width: 500, height: 500 }, fakeResult("page-2"));
+
+  assert.equal(document.querySelector("[data-umt-surface-id='page-2'][data-umt-region-id='r1']"), null);
+  assert.equal(document.querySelector("[data-umt-surface-id='manual:selection-2'][data-umt-region-id='manual-r1']")?.textContent, "cached manual selection");
+});
+
+test("normal translation outside a manual selection overlay is still rendered", () => {
+  const { img } = setupDomWithImage({ x: 0, y: 0, width: 500, height: 500 });
+  const renderer = new OverlayRenderer();
+  const manual = fakeResult("manual:selection-3");
+  manual.regions = [{
+    ...manual.regions[0]!,
+    id: "manual-r1",
+    box: { x: 10, y: 10, width: 60, height: 40 },
+    translatedText: "manual corner",
+  }];
+  renderer.render(img, { width: 500, height: 500 }, manual);
+
+  renderer.render(img, { width: 500, height: 500 }, fakeResult("page-3"));
+
+  assert.equal(document.querySelector("[data-umt-surface-id='page-3'][data-umt-region-id='r1']")?.textContent, "hello translated");
+  assert.equal(document.querySelector("[data-umt-surface-id='manual:selection-3'][data-umt-region-id='manual-r1']")?.textContent, "manual corner");
+});
+
+test("clearing a manual selection removes its protection area", () => {
+  const { img } = setupDomWithImage({ x: 0, y: 0, width: 500, height: 500 });
+  const renderer = new OverlayRenderer();
+  const manual = fakeResult("manual:selection-4");
+  manual.regions = [{
+    ...manual.regions[0]!,
+    id: "manual-r1",
+    box: { x: 92, y: 92, width: 220, height: 120 },
+    translatedText: "temporary manual selection",
+  }];
+  renderer.render(img, { width: 500, height: 500 }, manual);
+
+  renderer.clearSurface("manual:selection-4");
+  renderer.render(img, { width: 500, height: 500 }, fakeResult("page-4"));
+
+  assert.equal(document.querySelector("[data-umt-surface-id='page-4'][data-umt-region-id='r1']")?.textContent, "hello translated");
+});
+
 function setupDomWithImage(rect: Rect | (() => Rect)) {
   const dom = new JSDOM(`<body><img id="page" /></body>`, { url: "https://example.test" });
   globalThis.document = dom.window.document;
