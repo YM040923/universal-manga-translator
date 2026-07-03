@@ -6,6 +6,15 @@ export interface ContentScriptInjectionDeps {
   executeScript: (details: { tabId: number; files: string[] }) => Promise<void> | void;
 }
 
+export interface InjectableTab {
+  id?: number;
+  url?: string;
+}
+
+export interface TabQueryDeps extends ContentScriptInjectionDeps {
+  queryTabs: () => Promise<InjectableTab[]> | InjectableTab[];
+}
+
 export async function handleActivateSiteMessage(message: UmtActivateSiteRequest, deps: ContentScriptInjectionDeps): Promise<UmtActivateSiteResponse> {
   try {
     const storage = deps.storage;
@@ -26,6 +35,18 @@ export async function maybeInjectContentScriptForTab(tabId: number, url: string 
   await injectContentScript(tabId, deps);
 }
 
+export async function injectContentScriptsIntoEnabledTabs(deps: TabQueryDeps): Promise<void> {
+  const tabs = await deps.queryTabs();
+  await Promise.all(tabs.map(async (tab) => {
+    if (typeof tab.id !== "number") return;
+    await maybeInjectContentScriptForTab(tab.id, tab.url, deps).catch(() => {
+      // Some Chrome pages, PDF viewers, discarded tabs, or restricted frames reject
+      // scripting injection. Ignore per-tab failures so one bad tab does not prevent
+      // already enabled manga tabs from being restored after extension reload.
+    });
+  }));
+}
+
 export function registerSiteActivationHandlers(runtime: typeof chrome.runtime = chrome.runtime, tabs: typeof chrome.tabs = chrome.tabs, scripting: typeof chrome.scripting = chrome.scripting): void {
   const deps: ContentScriptInjectionDeps = { executeScript: async (details) => { await scripting.executeScript({ target: { tabId: details.tabId }, files: details.files }); } };
   runtime.onMessage.addListener((message: unknown, _sender, sendResponse) => {
@@ -37,6 +58,16 @@ export function registerSiteActivationHandlers(runtime: typeof chrome.runtime = 
     if (changeInfo.status !== "complete") return;
     void maybeInjectContentScriptForTab(tabId, tab.url, deps);
   });
+  const queryDeps: TabQueryDeps = {
+    ...deps,
+    queryTabs: async () => (await tabs.query({ url: ["http://*/*", "https://*/*"] })).map((tab) => ({
+      ...(typeof tab.id === "number" ? { id: tab.id } : {}),
+      ...(typeof tab.url === "string" ? { url: tab.url } : {}),
+    })),
+  };
+  runtime.onStartup?.addListener?.(() => { void injectContentScriptsIntoEnabledTabs(queryDeps); });
+  runtime.onInstalled?.addListener?.(() => { void injectContentScriptsIntoEnabledTabs(queryDeps); });
+  void injectContentScriptsIntoEnabledTabs(queryDeps);
 }
 
 async function injectContentScript(tabId: number, deps: ContentScriptInjectionDeps): Promise<void> {

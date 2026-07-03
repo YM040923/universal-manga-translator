@@ -50,6 +50,29 @@ test("popup sends page commands only after site is enabled", async () => {
   ]);
 });
 
+test("popup ensures content script is injected when opening an already enabled site", async () => {
+  const dom = setupDom();
+  const ensured: unknown[] = [];
+  const storage = fakeStorage(enableSiteForUrl(DEFAULT_SETTINGS, "https://asurascans.com/a"));
+  const root = dom.window.document.querySelector<HTMLElement>("#app")!;
+
+  await mountPopupPage(root, deps({ storage, ensured, tabUrl: "https://asurascans.com/a" }));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.deepEqual(ensured, [{ tabId: 123, url: "https://asurascans.com/a" }]);
+});
+
+test("popup does not inject content script before a site is enabled", async () => {
+  const dom = setupDom();
+  const ensured: unknown[] = [];
+  const root = dom.window.document.querySelector<HTMLElement>("#app")!;
+
+  await mountPopupPage(root, deps({ ensured, tabUrl: "https://asurascans.com/a" }));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.deepEqual(ensured, []);
+});
+
 test("popup primary controls are all wired to page commands", async () => {
   const dom = setupDom();
   const sent: unknown[] = [];
@@ -335,15 +358,17 @@ function setupDom(): JSDOM {
   return dom;
 }
 
-function deps(options: { storage?: SettingsStorageArea; backendOnline?: boolean; tabUrl?: string; sentMessages?: unknown[]; activated?: unknown[]; checkBackend?: (backendUrl: string) => Promise<boolean> } = {}): PopupDeps {
+function deps(options: { storage?: SettingsStorageArea; backendOnline?: boolean; tabUrl?: string; sentMessages?: unknown[]; activated?: unknown[]; ensured?: unknown[]; checkBackend?: (backendUrl: string) => Promise<boolean> } = {}): PopupDeps {
   const sent = options.sentMessages;
   const activated = options.activated;
+  const ensured = options.ensured;
   return {
     storage: options.storage ?? fakeStorage(DEFAULT_SETTINGS),
     queryActiveTab: async () => ({ id: 123, url: options.tabUrl ?? "https://asurascans.com/chapter/1" }),
     checkBackend: options.checkBackend ?? (async () => options.backendOnline ?? true),
     sendMessageToTab: async (tabId, message) => { sent?.push({ tabId, message }); },
     activateSite: async (tabId: number, url: string) => { activated?.push({ tabId, url }); return { ok: true }; },
+    ensureContentScript: async (tabId: number, url: string) => { ensured?.push({ tabId, url }); return { ok: true }; },
   };
 }
 

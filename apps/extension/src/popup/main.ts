@@ -24,6 +24,7 @@ export interface PopupDeps {
   configStatus?: (backendUrl: string) => Promise<ApiResponse<ConfigStatusResponse>>;
   sendMessageToTab?: (tabId: number, message: UmtContentCommand) => Promise<void> | void;
   activateSite?: (tabId: number, url: string) => Promise<UmtActivateSiteResponse>;
+  ensureContentScript?: (tabId: number, url: string) => Promise<UmtActivateSiteResponse>;
 }
 
 const TEXT = {
@@ -77,6 +78,16 @@ export async function mountPopupPage(root: HTMLElement, deps: PopupDeps = {}): P
     const effectiveSite = getEffectiveSiteSettings(settings, url);
     root.innerHTML = markup({ settings, backendOnline, domain, unsupported, enabled, autoTranslate: effectiveSite.autoTranslate, selfTestSummary });
     bind({ unsupported, enabled });
+  };
+
+  const ensureActiveTabContentScript = async (): Promise<void> => {
+    if (!tab?.id || !tab.url || !isSiteEnabled(settings, tab.url)) return;
+    try {
+      await (deps.ensureContentScript ?? deps.activateSite ?? defaultActivateSite)(tab.id, tab.url);
+    } catch {
+      // Keep popup responsive. Page commands still attempt a lazy injection fallback
+      // and will surface command-specific failures if injection is impossible.
+    }
   };
 
   const refreshBackendStatus = async (): Promise<void> => {
@@ -186,6 +197,7 @@ export async function mountPopupPage(root: HTMLElement, deps: PopupDeps = {}): P
   };
 
   render();
+  void ensureActiveTabContentScript();
   void refreshBackendStatus();
 }
 

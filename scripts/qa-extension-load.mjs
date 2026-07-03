@@ -52,6 +52,15 @@ try {
   await context.waitForEvent("serviceworker", { timeout: 15_000 }).catch(() => null);
   report.serviceWorkers = context.serviceWorkers().map((worker) => worker.url());
   check("extension-service-worker", report.serviceWorkers.some((item) => item.startsWith("chrome-extension://")), report.serviceWorkers.join(", "));
+  const worker = context.serviceWorkers()[0];
+  if (worker) {
+    await worker.evaluate(async () => {
+      await chrome.storage.sync.set({
+        enabledSites: { "asurascans.com": true },
+        runMode: "direct",
+      });
+    });
+  }
 
   const page = await context.newPage();
   page.on("console", (msg) => report.console.push({ type: msg.type(), text: msg.text() }));
