@@ -5,18 +5,40 @@ import path from "node:path";
 
 const root = path.resolve(import.meta.dirname, "..");
 
-test("README documents plugin-only mode, advanced desktop mode, API keys, and local OCR HTTP", () => {
+test("README presents plugin-only mode as the main user product", () => {
   const readme = fs.readFileSync(path.join(root, "README.md"), "utf8");
   for (const phrase of [
-    "插件直连模式",
-    "高级桌面/后端模式",
-    "API Key",
-    "本地 OCR HTTP",
+    "纯插件版",
+    "不需要桌面端",
+    "不需要本地后端",
     "chrome://extensions",
     "apps/extension/dist",
+    "API Key",
+    "自检",
+    "本地 OCR HTTP",
   ]) {
     assert.match(readme, new RegExp(escapeRegExp(phrase)), phrase);
   }
+  assert.equal(readme.indexOf("## 快速开始：纯插件版") >= 0, true);
+  assert.equal(readme.indexOf("## 高级/实验：后端和桌面端") > readme.indexOf("## 快速开始：纯插件版"), true);
+});
+
+test("release checklist prioritizes extension zip instead of desktop packaging", () => {
+  const checklist = fs.readFileSync(path.join(root, "docs/release-checklist.md"), "utf8");
+  assert.match(checklist, /extension-release\.zip/);
+  assert.match(checklist, /apps\/extension\/dist/);
+  assert.match(checklist, /Desktop\/backend.*advanced/i);
+});
+
+test("release artifacts are ignored instead of committed", () => {
+  const gitignore = fs.readFileSync(path.join(root, ".gitignore"), "utf8");
+  assert.match(gitignore, /^release\/$/m);
+});
+
+test("public examples use generic placeholders instead of a bundled OCR vendor", () => {
+  const envExample = fs.readFileSync(path.join(root, ".env.example"), "utf8");
+  assert.match(envExample, /OCR_API_URL=https:\/\/example\.com\/ocr/);
+  assert.doesNotMatch(envExample, /uapis\.cn|baidu/i);
 });
 
 test("local OCR and API template docs exist and contain required mapping guidance", () => {

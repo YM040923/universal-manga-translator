@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { GenericNetworkOcrClient, getByPath, parseGenericOcrRegions } from "./generic-ocr.js";
+import { GenericNetworkOcrClient, classifyGenericOcrError, getByPath, parseGenericOcrRegions } from "./generic-ocr.js";
 
 test("getByPath reads nested dot paths and array indexes", () => {
   assert.equal(getByPath({ data: { items: [{ text: "hello" }] } }, "data.items.0.text"), "hello");
@@ -93,4 +93,38 @@ test("GenericNetworkOcrClient rotates keys on quota/auth/rate errors", async () 
   assert.deepEqual(authorizations, ["Bearer exhausted", "Bearer fresh"]);
   assert.equal(regions[0]?.sourceText, "ROTATED");
   assert.equal(client.keyStatus().available, 1);
+});
+
+test("classifyGenericOcrError labels common provider failures", () => {
+  assert.deepEqual(classifyGenericOcrError(new Error("Network OCR failed: 402 INSUFFICIENT_CREDITS 账户积分不足")), { kind: "quota", retryable: false });
+  assert.deepEqual(classifyGenericOcrError(new Error("Network OCR failed: 401 INVALID_API_KEY")), { kind: "auth", retryable: false });
+  assert.deepEqual(classifyGenericOcrError(new Error("Network OCR failed: 429 rate limit")), { kind: "rate_limit", retryable: true });
+  assert.deepEqual(classifyGenericOcrError(new Error("fetch failed")), { kind: "network", retryable: true });
+  assert.deepEqual(classifyGenericOcrError(new Error("Network OCR returned no text regions")), { kind: "empty", retryable: false });
+});
+
+test("GenericNetworkOcrClient tries all configured keys on quota even when retries are disabled", async () => {
+  const authorizations: string[] = [];
+  const client = new GenericNetworkOcrClient({
+    endpoint: "https://ocr.example.test/ocr",
+    apiKeys: ["empty-a", "empty-b", "fresh"],
+    attempts: 1,
+    retryDelayMs: 1,
+    regionsPathCandidates: ["words_result"],
+    textPathCandidates: ["words"],
+    boxPathCandidates: ["location"],
+    fetch: async (_url, init) => {
+      const authorization = new Headers(init?.headers).get("authorization") ?? "";
+      authorizations.push(authorization);
+      if (authorization !== "Bearer fresh") {
+        return new Response(JSON.stringify({ code: "INSUFFICIENT_CREDITS", message: "quota exhausted" }), { status: 402, headers: { "content-type": "application/json" } });
+      }
+      return new Response(JSON.stringify({ words_result: [{ words: "OK", location: { left: 1, top: 2, width: 30, height: 20 } }] }), { status: 200, headers: { "content-type": "application/json" } });
+    },
+  });
+
+  const regions = await client.recognize({ imageBytes: new TextEncoder().encode("image") });
+
+  assert.deepEqual(authorizations, ["Bearer empty-a", "Bearer empty-b", "Bearer fresh"]);
+  assert.equal(regions[0]?.sourceText, "OK");
 });

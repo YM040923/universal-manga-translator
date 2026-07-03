@@ -1,7 +1,8 @@
-import test from "node:test";
+﻿import test from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
 import { mountPopupPage, type PopupDeps } from "./main.js";
+import type { UmtDirectHttpRequest, UmtDirectHttpResponse } from "../content/messages.js";
 import { DEFAULT_SETTINGS, enableSiteForUrl, setSiteSettings, type ExtensionSettings, type SettingsStorageArea } from "../settings/settings.js";
 
 test("popup shows an enable button before a site is activated", async () => {
@@ -45,7 +46,7 @@ test("popup sends page commands only after site is enabled", async () => {
 
   assert.deepEqual(sent, [
     { tabId: 123, message: { source: "umt-popup", command: "translate" } },
-    { tabId: 123, message: { source: "umt-popup", command: "retranslate" } },
+    { tabId: 123, message: { source: "umt-popup", command: "retranslateVisible" } },
     { tabId: 123, message: { source: "umt-popup", command: "cancelQueue" } },
   ]);
 });
@@ -87,7 +88,7 @@ test("popup primary controls are all wired to page commands", async () => {
 
   assert.deepEqual(sent.map((entry) => (entry as { message: { command: string } }).message.command), [
     "translate",
-    "retranslate",
+    "retranslateVisible",
     "togglePause",
     "clearPage",
     "cancelQueue",
@@ -268,20 +269,22 @@ test("popup can switch between direct and backend mode", async () => {
   const root = dom.window.document.querySelector<HTMLElement>("#app")!;
 
   await mountPopupPage(root, deps({ storage, tabUrl: "https://asurascans.com/a" }));
+  root.querySelector<HTMLButtonElement>("[data-action='open-api-settings']")!.click();
   const select = root.querySelector<HTMLSelectElement>("[data-field='run-mode']")!;
   select.value = "backend";
-  select.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
+  root.querySelector<HTMLButtonElement>("[data-action='save-api-settings']")!.click();
   await Promise.resolve();
 
   assert.equal(storage.current.runMode, "backend");
 });
 
-test("popup exposes complete direct API configuration fields in plugin-only mode", async () => {
+test("popup exposes complete direct API configuration fields in plugin-only settings page", async () => {
   const dom = setupDom();
   const storage = fakeStorage(enableSiteForUrl(DEFAULT_SETTINGS, "https://asurascans.com/a"));
   const root = dom.window.document.querySelector<HTMLElement>("#app")!;
 
   await mountPopupPage(root, deps({ storage, tabUrl: "https://asurascans.com/a" }));
+  root.querySelector<HTMLButtonElement>("[data-action='open-api-settings']")!.click();
 
   for (const field of [
     "direct-ocr-url",
@@ -296,6 +299,7 @@ test("popup exposes complete direct API configuration fields in plugin-only mode
     "direct-ocr-box-paths",
     "direct-ocr-confidence-paths",
     "direct-ocr-static-fields",
+    "glossary-text",
   ]) {
     assert.ok(root.querySelector(`[data-field='${field}']`), `${field} should be rendered`);
   }
@@ -308,6 +312,7 @@ test("popup saves direct OCR and translator API configuration", async () => {
   const root = dom.window.document.querySelector<HTMLElement>("#app")!;
 
   await mountPopupPage(root, deps({ storage, tabUrl: "https://asurascans.com/a" }));
+  root.querySelector<HTMLButtonElement>("[data-action='open-api-settings']")!.click();
   setValue(root, dom, "direct-ocr-url", "https://ocr.example/ocr");
   setValue(root, dom, "direct-ocr-keys", "ocr-a\nocr-b");
   setValue(root, dom, "direct-ocr-input-mode", "file");
@@ -320,6 +325,8 @@ test("popup saves direct OCR and translator API configuration", async () => {
   setValue(root, dom, "direct-ocr-box-paths", "bbox\nlocation");
   setValue(root, dom, "direct-ocr-confidence-paths", "confidence\nscore");
   setValue(root, dom, "direct-ocr-static-fields", "{\"language\":\"en\"}");
+  setValue(root, dom, "glossary-text", "Clark = 克拉克\nMurim = 武林");
+  root.querySelector<HTMLButtonElement>("[data-action='save-api-settings']")!.click();
   await new Promise((resolve) => setTimeout(resolve, 0));
 
   assert.equal(storage.current.directOcr.apiUrl, "https://ocr.example/ocr");
@@ -334,6 +341,8 @@ test("popup saves direct OCR and translator API configuration", async () => {
   assert.deepEqual(storage.current.directOcr.boxPaths, ["bbox", "location"]);
   assert.deepEqual(storage.current.directOcr.confidencePaths, ["confidence", "score"]);
   assert.equal(storage.current.directOcr.staticFieldsText, "{\"language\":\"en\"}");
+  assert.equal(storage.current.glossaryText, "Clark = 克拉克\nMurim = 武林");
+  assert.deepEqual(storage.current.glossary, { Clark: "克拉克", Murim: "武林" });
 });
 
 test("popup self-test button reports missing direct configuration without leaking keys", async () => {
@@ -342,6 +351,7 @@ test("popup self-test button reports missing direct configuration without leakin
   const root = dom.window.document.querySelector<HTMLElement>("#app")!;
 
   await mountPopupPage(root, deps({ storage, tabUrl: "https://asurascans.com/a" }));
+  root.querySelector<HTMLButtonElement>("[data-action='open-api-settings']")!.click();
   root.querySelector<HTMLButtonElement>("[data-action='self-test']")!.click();
   await new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -351,6 +361,37 @@ test("popup self-test button reports missing direct configuration without leakin
   assert.equal(text.includes("uapi-ak"), false);
 });
 
+
+test("popup preserves scroll position when changing controls", async () => {
+  const dom = setupDom();
+  const storage = fakeStorage(enableSiteForUrl(DEFAULT_SETTINGS, "https://asurascans.com/a"));
+  const root = dom.window.document.querySelector<HTMLElement>("#app")!;
+
+  await mountPopupPage(root, deps({ storage, tabUrl: "https://asurascans.com/a" }));
+  let panel = root.querySelector<HTMLElement>(".umt-popup")!;
+  panel.scrollTop = 180;
+
+  const input = root.querySelector<HTMLInputElement>("[data-field='overlay-mask-scale']")!;
+  input.value = "1.35";
+  input.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+  await Promise.resolve();
+
+  panel = root.querySelector<HTMLElement>(".umt-popup")!;
+  assert.equal(panel.scrollTop, 180);
+});
+
+test("popup starts settings pages at the top instead of reusing main-panel scroll", async () => {
+  const dom = setupDom();
+  const storage = fakeStorage(enableSiteForUrl(DEFAULT_SETTINGS, "https://asurascans.com/a"));
+  const root = dom.window.document.querySelector<HTMLElement>("#app")!;
+
+  await mountPopupPage(root, deps({ storage, tabUrl: "https://asurascans.com/a" }));
+  root.querySelector<HTMLElement>(".umt-popup")!.scrollTop = 180;
+
+  root.querySelector<HTMLButtonElement>("[data-action='open-api-settings']")!.click();
+
+  assert.equal(root.querySelector<HTMLElement>(".umt-popup")!.scrollTop, 0);
+});
 function setupDom(): JSDOM {
   const dom = new JSDOM('<main id="app"></main>', { url: "chrome-extension://umt/popup.html" });
   globalThis.document = dom.window.document;
@@ -358,11 +399,11 @@ function setupDom(): JSDOM {
   return dom;
 }
 
-function deps(options: { storage?: SettingsStorageArea; backendOnline?: boolean; tabUrl?: string; sentMessages?: unknown[]; activated?: unknown[]; ensured?: unknown[]; checkBackend?: (backendUrl: string) => Promise<boolean> } = {}): PopupDeps {
+function deps(options: { storage?: SettingsStorageArea; backendOnline?: boolean; tabUrl?: string; sentMessages?: unknown[]; activated?: unknown[]; ensured?: unknown[]; checkBackend?: (backendUrl: string) => Promise<boolean>; directHttp?: (request: Omit<UmtDirectHttpRequest, "source" | "command">) => Promise<UmtDirectHttpResponse> } = {}): PopupDeps {
   const sent = options.sentMessages;
   const activated = options.activated;
   const ensured = options.ensured;
-  return {
+  const result: PopupDeps = {
     storage: options.storage ?? fakeStorage(DEFAULT_SETTINGS),
     queryActiveTab: async () => ({ id: 123, url: options.tabUrl ?? "https://asurascans.com/chapter/1" }),
     checkBackend: options.checkBackend ?? (async () => options.backendOnline ?? true),
@@ -370,6 +411,8 @@ function deps(options: { storage?: SettingsStorageArea; backendOnline?: boolean;
     activateSite: async (tabId: number, url: string) => { activated?.push({ tabId, url }); return { ok: true }; },
     ensureContentScript: async (tabId: number, url: string) => { ensured?.push({ tabId, url }); return { ok: true }; },
   };
+  if (options.directHttp) result.directHttp = options.directHttp;
+  return result;
 }
 
 function fakeStorage(initial: ExtensionSettings): SettingsStorageArea & { current: ExtensionSettings } {
@@ -408,4 +451,106 @@ test("popup renders immediately before a slow backend health check finishes", as
   await mounted;
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.equal((root.textContent ?? "").includes("\u540e\u7aef\u5df2\u8fde\u63a5"), true);
+});
+
+test("popup retranslate button targets only visible surfaces", async () => {
+  const dom = setupDom();
+  const sent: unknown[] = [];
+  const storage = fakeStorage(enableSiteForUrl(DEFAULT_SETTINGS, "https://asurascans.com/a"));
+  const root = dom.window.document.querySelector<HTMLElement>("#app")!;
+
+  await mountPopupPage(root, deps({ storage, sentMessages: sent, tabUrl: "https://asurascans.com/a" }));
+  root.querySelector<HTMLButtonElement>("[data-action='retranslate']")!.click();
+  await Promise.resolve();
+
+  assert.deepEqual(sent, [{ tabId: 123, message: { source: "umt-popup", command: "retranslateVisible" } }]);
+});
+
+test("popup keeps API configuration behind a separate settings page with explicit save", async () => {
+  const dom = setupDom();
+  const storage = fakeStorage(enableSiteForUrl(DEFAULT_SETTINGS, "https://asurascans.com/a"));
+  const root = dom.window.document.querySelector<HTMLElement>("#app")!;
+
+  await mountPopupPage(root, deps({ storage, tabUrl: "https://asurascans.com/a" }));
+
+  assert.equal(root.querySelector("[data-field='direct-ocr-url']"), null);
+  assert.ok(root.querySelector("[data-action='open-api-settings']"));
+  root.querySelector<HTMLButtonElement>("[data-action='open-api-settings']")!.click();
+  assert.ok(root.querySelector("[data-field='direct-ocr-url']"));
+  assert.ok(root.querySelector("[data-action='save-api-settings']"));
+});
+
+test("popup API settings are saved only when pressing save", async () => {
+  const dom = setupDom();
+  const storage = fakeStorage(enableSiteForUrl(DEFAULT_SETTINGS, "https://asurascans.com/a"));
+  const root = dom.window.document.querySelector<HTMLElement>("#app")!;
+
+  await mountPopupPage(root, deps({ storage, tabUrl: "https://asurascans.com/a" }));
+  root.querySelector<HTMLButtonElement>("[data-action='open-api-settings']")!.click();
+  setValue(root, dom, "direct-ocr-url", "https://ocr.example/ocr");
+  await Promise.resolve();
+  assert.equal(storage.current.directOcr.apiUrl, "");
+
+  root.querySelector<HTMLButtonElement>("[data-action='save-api-settings']")!.click();
+  await Promise.resolve();
+  assert.equal(storage.current.directOcr.apiUrl, "https://ocr.example/ocr");
+});
+
+test("popup direct self-test surfaces real OCR and AI API failures", async () => {
+  const dom = setupDom();
+  const configured = enableSiteForUrl({
+    ...DEFAULT_SETTINGS,
+    runMode: "direct",
+    directOcr: { ...DEFAULT_SETTINGS.directOcr, apiUrl: "https://ocr.example/ocr", apiKeys: ["ocr-key"] },
+    directTranslator: { baseUrl: "https://api.example", apiKey: "llm-key", model: "gpt-test" },
+  }, "https://asurascans.com/a");
+  const storage = fakeStorage(configured);
+  const root = dom.window.document.querySelector<HTMLElement>("#app")!;
+
+  await mountPopupPage(root, deps({
+    storage,
+    tabUrl: "https://asurascans.com/a",
+    directHttp: async (request) => {
+      if (request.url.includes("ocr")) return { ok: false, status: 402, statusText: "Payment Required", error: "INSUFFICIENT_CREDITS 账户积分不足", headers: {}, bodyText: "{}" };
+      return { ok: true, status: 200, statusText: "OK", headers: { "content-type": "text/html" }, bodyText: "<!doctype html>" };
+    },
+  }));
+  root.querySelector<HTMLButtonElement>("[data-action='open-api-settings']")!.click();
+  root.querySelector<HTMLButtonElement>("[data-action='self-test']")!.click();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  const text = root.textContent ?? "";
+  assert.match(text, /Network OCR failed: 402/);
+  assert.match(text, /INSUFFICIENT_CREDITS/);
+  assert.match(text, /账户积分不足/);
+  assert.match(text, /Base URL.*\/v1|非 JSON/);
+  const selfTest = root.querySelector<HTMLElement>(".self-test")?.textContent ?? "";
+  assert.equal(selfTest.includes("ocr-key"), false);
+  assert.equal(selfTest.includes("llm-key"), false);
+});
+
+
+
+
+
+
+
+test("popup saves OCR cost protection settings", async () => {
+  const dom = setupDom();
+  const storage = fakeStorage(enableSiteForUrl(DEFAULT_SETTINGS, "https://asurascans.com/a"));
+  const root = dom.window.document.querySelector<HTMLElement>("#app")!;
+
+  await mountPopupPage(root, deps({ storage, tabUrl: "https://asurascans.com/a" }));
+  root.querySelector<HTMLButtonElement>("[data-action='open-api-settings']")!.click();
+
+  assert.ok(root.querySelector("[data-field='direct-ocr-max-auto-pages']"));
+  assert.ok(root.querySelector("[data-field='direct-ocr-stop-after-failures']"));
+  setValue(root, dom, "direct-ocr-max-auto-pages", "25");
+  setValue(root, dom, "direct-ocr-stop-after-failures", "3");
+  root.querySelector<HTMLButtonElement>("[data-action='save-api-settings']")!.click();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(storage.current.directOcr.maxAutoOcrPages, 25);
+  assert.equal(storage.current.directOcr.stopAfterConsecutiveFailures, 3);
 });

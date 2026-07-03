@@ -1,6 +1,6 @@
 ﻿import type { OverlayAppearance } from "../settings/settings.js";
 
-export type UmtContentCommandName = "translate" | "refresh" | "togglePause" | "clearPage" | "selectRegion" | "retranslate" | "cancelQueue" | "setOverlayVisibility" | "toggleOverlayVisibility" | "applyOverlayAppearance" | "applySiteSettings" | "applyWidgetSettings";
+export type UmtContentCommandName = "translate" | "refresh" | "togglePause" | "clearPage" | "selectRegion" | "retranslate" | "retranslateVisible" | "cancelQueue" | "setOverlayVisibility" | "toggleOverlayVisibility" | "applyOverlayAppearance" | "applySiteSettings" | "applyWidgetSettings";
 
 export interface UmtContentCommand {
   source: "umt-popup" | "umt-page";
@@ -122,6 +122,7 @@ export function isUmtContentCommand(value: unknown): value is UmtContentCommand 
     candidate.command === "clearPage" ||
     candidate.command === "selectRegion" ||
     candidate.command === "retranslate" ||
+    candidate.command === "retranslateVisible" ||
     candidate.command === "cancelQueue" ||
     candidate.command === "setOverlayVisibility" ||
     candidate.command === "toggleOverlayVisibility" ||

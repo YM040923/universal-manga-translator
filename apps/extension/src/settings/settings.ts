@@ -28,6 +28,8 @@ export interface DirectOcrSettings {
   textPaths: string[];
   boxPaths: string[];
   confidencePaths: string[];
+  maxAutoOcrPages: number;
+  stopAfterConsecutiveFailures: number;
 }
 
 export interface DirectTranslatorSettings {
@@ -65,6 +67,9 @@ export interface ExtensionSettings {
   enabledSites: Record<string, boolean>;
   translationOverlayVisible: boolean;
   overlayAppearance: OverlayAppearance;
+  glossaryText: string;
+  glossary: Record<string, string>;
+  glossaryHash: string;
   directOcr: DirectOcrSettings;
   directTranslator: DirectTranslatorSettings;
   /** @deprecated Use autoTranslateDefault. Kept optional for migration from older UI code. */
@@ -84,7 +89,7 @@ export const DEFAULT_SETTINGS: ExtensionSettings = {
   runMode: "direct",
   backendUrl: "http://127.0.0.1:47831",
   targetLanguage: "zh-CN",
-  translationModel: "gpt-5.4-mini",
+  translationModel: "gpt-4.1-mini",
   providerProfile: "network-ocr-openai-compatible",
   openAICompatibleBaseUrl: "",
   requestTimeoutMs: 60000,
@@ -108,6 +113,9 @@ export const DEFAULT_SETTINGS: ExtensionSettings = {
     ellipseY: 42,
     opacity: 1,
   },
+  glossaryText: "",
+  glossary: {},
+  glossaryHash: "glossary:empty",
   directOcr: {
     apiUrl: "",
     apiKeys: [],
@@ -118,15 +126,19 @@ export const DEFAULT_SETTINGS: ExtensionSettings = {
     textPaths: ["words", "text", "content"],
     boxPaths: ["location", "box", "bbox", "vertexes_location"],
     confidencePaths: ["score", "confidence"],
+    maxAutoOcrPages: 80,
+    stopAfterConsecutiveFailures: 4,
   },
   directTranslator: {
     baseUrl: "",
     apiKey: "",
-    model: "gpt-5.4-mini",
+    model: "gpt-4.1-mini",
   },
 };
 
 export function normalizeSettings(input: LegacyExtensionSettings = {}): ExtensionSettings {
+  const glossaryText = normalizeGlossaryText(input.glossaryText);
+  const glossary = parseGlossaryText(glossaryText);
   return {
     runMode: input.runMode === "backend" ? "backend" : "direct",
     backendUrl: normalizeBackendUrl(input.backendUrl),
@@ -152,6 +164,9 @@ export function normalizeSettings(input: LegacyExtensionSettings = {}): Extensio
     enabledSites: normalizeEnabledSites(input.enabledSites),
     translationOverlayVisible: typeof input.translationOverlayVisible === "boolean" ? input.translationOverlayVisible : DEFAULT_SETTINGS.translationOverlayVisible,
     overlayAppearance: normalizeOverlayAppearance(input.overlayAppearance),
+    glossaryText,
+    glossary,
+    glossaryHash: glossaryHash(glossary),
     directOcr: normalizeDirectOcr(input.directOcr),
     directTranslator: normalizeDirectTranslator(input.directTranslator),
   };
@@ -170,13 +185,15 @@ function normalizeDirectOcr(value: unknown): DirectOcrSettings {
     textPaths: normalizeStringList(raw.textPaths, DEFAULT_SETTINGS.directOcr.textPaths),
     boxPaths: normalizeStringList(raw.boxPaths, DEFAULT_SETTINGS.directOcr.boxPaths),
     confidencePaths: normalizeStringList(raw.confidencePaths, DEFAULT_SETTINGS.directOcr.confidencePaths),
+    maxAutoOcrPages: normalizeInteger(raw.maxAutoOcrPages, 1, 120, DEFAULT_SETTINGS.directOcr.maxAutoOcrPages),
+    stopAfterConsecutiveFailures: normalizeInteger(raw.stopAfterConsecutiveFailures, 1, 10, DEFAULT_SETTINGS.directOcr.stopAfterConsecutiveFailures),
   };
 }
 
 function normalizeDirectTranslator(value: unknown): DirectTranslatorSettings {
   const raw = value && typeof value === "object" && !Array.isArray(value) ? value as Partial<DirectTranslatorSettings> : {};
   return {
-    baseUrl: normalizeOptionalHttpUrl(raw.baseUrl),
+    baseUrl: normalizeOpenAICompatibleBaseUrl(raw.baseUrl),
     apiKey: typeof raw.apiKey === "string" ? raw.apiKey.trim() : "",
     model: normalizeNonEmptyString(raw.model, DEFAULT_SETTINGS.directTranslator.model),
   };
@@ -190,9 +207,9 @@ export function normalizeOverlayAppearance(value: unknown): OverlayAppearance {
   return {
     maskShape,
     fontScale: normalizeNumber(raw.fontScale, 0.75, 1.3, DEFAULT_SETTINGS.overlayAppearance.fontScale),
-    maskScale: normalizeNumber(raw.maskScale, 0.2, 2, DEFAULT_SETTINGS.overlayAppearance.maskScale),
-    ellipseX: normalizeNumber(raw.ellipseX, 35, 55, DEFAULT_SETTINGS.overlayAppearance.ellipseX),
-    ellipseY: normalizeNumber(raw.ellipseY, 30, 55, DEFAULT_SETTINGS.overlayAppearance.ellipseY),
+    maskScale: normalizeNumber(raw.maskScale, 0.2, 4, DEFAULT_SETTINGS.overlayAppearance.maskScale),
+    ellipseX: normalizeNumber(raw.ellipseX, 20, 90, DEFAULT_SETTINGS.overlayAppearance.ellipseX),
+    ellipseY: normalizeNumber(raw.ellipseY, 20, 90, DEFAULT_SETTINGS.overlayAppearance.ellipseY),
     opacity: normalizeNumber(raw.opacity, 0.35, 1, DEFAULT_SETTINGS.overlayAppearance.opacity),
   };
 }
@@ -300,6 +317,21 @@ function normalizeOptionalHttpUrl(value: unknown): string {
   }
 }
 
+function normalizeOpenAICompatibleBaseUrl(value: unknown): string {
+  const normalized = normalizeOptionalHttpUrl(value);
+  if (!normalized) return "";
+  try {
+    const url = new URL(normalized);
+    if (url.pathname === "" || url.pathname === "/") {
+      url.pathname = "/v1";
+      return url.toString().replace(/\/$/, "");
+    }
+  } catch {
+    return normalized;
+  }
+  return normalized;
+}
+
 function normalizeNonEmptyString(value: unknown, fallback: string): string {
   if (typeof value !== "string") return fallback;
   const trimmed = value.trim();
@@ -323,6 +355,45 @@ function normalizeJsonObjectText(value: unknown, fallback: string): string {
   } catch {
     return fallback;
   }
+}
+
+function normalizeGlossaryText(value: unknown): string {
+  if (typeof value !== "string") return "";
+  const entries = Object.entries(parseGlossaryText(value));
+  return entries.map(([source, target]) => `${source} = ${target}`).join("\n");
+}
+
+function parseGlossaryText(value: string): Record<string, string> {
+  const glossary: Record<string, string> = {};
+  for (const rawLine of value.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) continue;
+    const match = line.match(/^(.+?)(?:=>|=|:)(.+)$/);
+    if (!match) continue;
+    const source = normalizeGlossaryTerm(match[1] ?? "");
+    const target = normalizeGlossaryTerm(match[2] ?? "");
+    if (!source || !target) continue;
+    glossary[source] = target;
+  }
+  return Object.fromEntries(Object.entries(glossary).sort(([a], [b]) => a.localeCompare(b)));
+}
+
+function normalizeGlossaryTerm(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function glossaryHash(glossary: Record<string, string>): string {
+  const entries = Object.entries(glossary);
+  if (!entries.length) return "glossary:empty";
+  const canonical = JSON.stringify(entries);
+  let hash = 0xcbf29ce484222325n;
+  const prime = 0x100000001b3n;
+  const mask = 0xffffffffffffffffn;
+  for (const char of canonical) {
+    hash ^= BigInt(char.codePointAt(0) ?? 0);
+    hash = (hash * prime) & mask;
+  }
+  return `glossary:${hash.toString(16).padStart(16, "0")}`;
 }
 
 function normalizeInteger(value: unknown, min: number, max: number, fallback: number): number {

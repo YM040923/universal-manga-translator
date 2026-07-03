@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
-import { SurfaceRegistry } from "./surface-registry.js";
+import { isLikelyReaderPage, SurfaceRegistry } from "./surface-registry.js";
 
 function setupDom(): Document {
   const dom = new JSDOM(`<!doctype html><html><body>
@@ -84,4 +84,44 @@ test("SurfaceRegistry ignores tiny rendered avatar images even when original fil
   const registry = SurfaceRegistry.scan(dom.window.document);
 
   assert.deepEqual(registry.surfaces.map((surface) => surface.element.id), ["page"]);
+});
+
+test("isLikelyReaderPage accepts chapter pages with stacked manga pages", () => {
+  const doc = setupDom();
+  const surfaces = SurfaceRegistry.scan(doc).surfaces;
+
+  assert.equal(isLikelyReaderPage(doc, surfaces), true);
+});
+
+test("isLikelyReaderPage rejects comic directory pages with cover images", () => {
+  const dom = new JSDOM(`<!doctype html><html><body>
+    <img id="hero" src="https://cdn.example/covers/the-title-400.webp">
+    <img id="cover1" src="https://cdn.example/covers/a-400.webp">
+    <img id="cover2" src="https://cdn.example/covers/b-400.webp">
+  </body></html>`, { url: "https://reader.example/comics/the-title" });
+  globalThis.window = dom.window as unknown as Window & typeof globalThis;
+  globalThis.document = dom.window.document;
+  globalThis.HTMLElement = dom.window.HTMLElement;
+  globalThis.HTMLImageElement = dom.window.HTMLImageElement;
+  const rects: Record<string, { x: number; y: number; width: number; height: number }> = {
+    hero: { x: 40, y: 80, width: 640, height: 900 },
+    cover1: { x: 40, y: 1100, width: 520, height: 720 },
+    cover2: { x: 620, y: 1100, width: 520, height: 720 },
+  };
+  for (const img of [...dom.window.document.images]) {
+    const r = rects[img.id]!;
+    Object.defineProperty(img, "naturalWidth", { value: r.width, configurable: true });
+    Object.defineProperty(img, "naturalHeight", { value: r.height, configurable: true });
+    img.getBoundingClientRect = () => ({ x: r.x, y: r.y, left: r.x, top: r.y, right: r.x + r.width, bottom: r.y + r.height, width: r.width, height: r.height, toJSON: () => ({}) });
+  }
+  const surfaces = SurfaceRegistry.scan(dom.window.document).surfaces;
+
+  assert.equal(surfaces.length >= 1, true);
+  assert.equal(isLikelyReaderPage(dom.window.document, surfaces), false);
+});
+
+test("isLikelyReaderPage allows reader URLs before lazy images finish loading", () => {
+  const dom = new JSDOM(`<!doctype html><html><body></body></html>`, { url: "https://reader.example/comics/the-title/chapter/60" });
+
+  assert.equal(isLikelyReaderPage(dom.window.document, []), true);
 });

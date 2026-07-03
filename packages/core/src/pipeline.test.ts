@@ -68,7 +68,156 @@ test("OcrTranslatePipeline can reuse cached OCR regions during retranslate", asy
   assert.equal(result.regions[0]?.translatedText, "é‡æ–°ç¿»è¯‘");
 });
 
+test("OcrTranslatePipeline sends reading-order page context to the translator", async () => {
+  let seenItems: TextTranslationItem[] = [];
+  const pipeline = new OcrTranslatePipeline({
+    profile: "network-ocr:image+openai-compatible:gpt",
+    ocr: {
+      recognize: async () => [
+        region("r1", "Where is Clark?", 10, 20, 160, 30),
+        region("r2", "He went to the tower.", 12, 160, 180, 30),
+      ],
+    },
+    translator: {
+      translate: async (items: TextTranslationItem[]) => {
+        seenItems = items;
+        return items.map((item) => ({ id: item.id, translatedText: item.text }));
+      },
+    },
+  });
+
+  await pipeline.process({ imageBytes: new Uint8Array([1]), imageHash: "hash", width: 300, height: 500, targetLanguage: "zh-CN", sourceLanguage: "auto" });
+
+  assert.equal(seenItems.length, 2);
+  assert.match(seenItems[0]?.context ?? "", /order 1\/2/);
+  assert.match(seenItems[0]?.context ?? "", /next: He went to the tower\./);
+  assert.match(seenItems[1]?.context ?? "", /previous: Where is Clark\?/);
+  assert.match(seenItems[1]?.context ?? "", /kind: dialogue/);
+  assert.match(seenItems[1]?.context ?? "", /box:/);
+});
+
+test("OcrTranslatePipeline passes glossary terms to translator options", async () => {
+  let seenOptions: TextTranslationOptions | undefined;
+  const pipeline = new OcrTranslatePipeline({
+    profile: "network-ocr:image+openai-compatible:gpt",
+    ocr: { recognize: async () => [region("r1", "Murim Lord Clark", 10, 20, 180, 30)] },
+    translator: {
+      translate: async (items: TextTranslationItem[], _target, _source, options?: TextTranslationOptions) => {
+        seenOptions = options;
+        return items.map((item) => ({ id: item.id, translatedText: item.text }));
+      },
+    },
+  });
+
+  await pipeline.process({
+    imageBytes: new Uint8Array([1]),
+    imageHash: "hash",
+    width: 300,
+    height: 500,
+    targetLanguage: "zh-CN",
+    sourceLanguage: "auto",
+    glossary: { Murim: "æ­¦æž—", Clark: "å…‹æ‹‰å…‹" },
+  });
+
+  assert.deepEqual(seenOptions?.glossary, { Murim: "æ­¦æž—", Clark: "å…‹æ‹‰å…‹" });
+});
+
 test("buildOcrCacheKey ignores downstream translator model changes", () => {
   const input = { imageHash: "hash", width: 100, height: 200, sourceLanguage: "en" };
   assert.equal(buildOcrCacheKey("network-ocr:image+openai-compatible:gpt-a", input), buildOcrCacheKey("network-ocr:image+openai-compatible:gpt-b", input));
+});
+
+// RED: concurrent pipelines should share one OCR read for the same cache key.
+test("OcrTranslatePipeline coalesces concurrent OCR misses for the same image", async () => {
+  let ocrCalls = 0;
+  let releaseOcr!: () => void;
+  const gate = new Promise<void>((resolve) => { releaseOcr = resolve; });
+  const stored = new Map<string, GenericOcrRegion[]>();
+  const cache: CoreOcrCache = {
+    get: async (key) => stored.get(key) ?? null,
+    set: async (key, regions) => { stored.set(key, regions); },
+  };
+  const ocr: CoreOcrProvider = {
+    recognize: async () => {
+      ocrCalls += 1;
+      await gate;
+      return [region("r1", "HELLO", 10, 20)];
+    },
+  };
+  const translator: CoreTextTranslator = {
+    translate: async (items) => items.map((item) => ({ id: item.id, translatedText: "ÄãºÃ" })),
+  };
+  const first = new OcrTranslatePipeline({ profile: "network-ocr:image+openai-compatible:gpt", ocr, translator, ocrCache: cache });
+  const second = new OcrTranslatePipeline({ profile: "network-ocr:image+openai-compatible:gpt", ocr, translator, ocrCache: cache });
+  const input = { imageBytes: new Uint8Array([1, 2, 3]), imageHash: "same", width: 100, height: 100, targetLanguage: "zh-CN", sourceLanguage: "auto" };
+
+  const firstRun = first.process(input);
+  const secondRun = second.process(input);
+  await Promise.resolve();
+  releaseOcr();
+  await Promise.all([firstRun, secondRun]);
+
+  assert.equal(ocrCalls, 1);
+  assert.equal(first.lastOcrCacheStatus, "miss");
+  assert.equal(second.lastOcrCacheStatus, "coalesced");
+});
+
+test("OcrTranslatePipeline forwards chapter context and previous translations", async () => {
+  let optionsSeen: TextTranslationOptions | undefined;
+  const pipeline = new OcrTranslatePipeline({
+    profile: "network-ocr:image+openai-compatible:gpt",
+    ocr: { recognize: async () => [region("r1", "Hello", 10, 20)] },
+    translator: {
+      translate: async (items, _target, _source, options) => {
+        optionsSeen = options;
+        return items.map((item) => ({ id: item.id, translatedText: "ÄãºÃ" }));
+      },
+    },
+  });
+
+  await pipeline.process({
+    imageBytes: new Uint8Array([1]),
+    imageHash: "h-context",
+    width: 100,
+    height: 100,
+    targetLanguage: "zh-CN",
+    sourceLanguage: "auto",
+    chapterContext: "Earlier: protagonist is angry.",
+    previousTranslations: [{ id: "old", translatedText: "Ö®Ç°ÒëÎÄ" }],
+  });
+
+  assert.equal(optionsSeen?.chapterContext, "Earlier: protagonist is angry.");
+  assert.deepEqual(optionsSeen?.previousTranslations, [{ id: "old", translatedText: "Ö®Ç°ÒëÎÄ" }]);
+});
+
+test("buildOcrCacheKey ignores text style and glossary cache versions", () => {
+  const input = { imageHash: "same-image", width: 100, height: 200, sourceLanguage: "auto" };
+
+  assert.equal(
+    buildOcrCacheKey("direct:image_base64+openai-compatible:gpt-a+style:manga-v1+glossary:a", input),
+    buildOcrCacheKey("direct:image_base64+openai-compatible:gpt-b+style:manga-v9+glossary:b", input),
+  );
+});
+
+test("OcrTranslatePipeline auto-detects repeated proper-name term candidates", async () => {
+  let seenOptions: TextTranslationOptions | undefined;
+  const pipeline = new OcrTranslatePipeline({
+    profile: "network-ocr:image+openai-compatible:gpt",
+    ocr: { recognize: async () => [
+      region("r1", "Clark met Heavenly Demon", 10, 20, 180, 20),
+      region("r2", "Clark drew Moon Blade", 10, 60, 180, 20),
+    ] },
+    translator: {
+      translate: async (items, _target, _source, options) => {
+        seenOptions = options;
+        return items.map((item) => ({ id: item.id, translatedText: item.text }));
+      },
+    },
+  });
+
+  await pipeline.process({ imageBytes: new Uint8Array([1]), imageHash: "terms", width: 300, height: 300, targetLanguage: "zh-CN", sourceLanguage: "auto" });
+
+  assert.ok(seenOptions?.termCandidates?.includes("Clark"));
+  assert.ok(seenOptions?.termCandidates?.includes("Heavenly Demon"));
+  assert.ok(seenOptions?.termCandidates?.includes("Moon Blade"));
 });

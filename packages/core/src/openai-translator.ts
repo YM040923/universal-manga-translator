@@ -8,6 +8,8 @@ export interface TextTranslationOptions {
   retranslate?: boolean;
   previousTranslations?: Array<{ id: string; translatedText: string }>;
   glossary?: Record<string, string>;
+  chapterContext?: string;
+  termCandidates?: string[];
 }
 
 export interface TextTranslationResult {
@@ -42,7 +44,7 @@ export class OpenAICompatibleTextTranslator {
       headers: { authorization: `Bearer ${this.options.apiKey}` },
     });
     if (!response.ok) return [this.options.model];
-    const payload = await response.json() as { data?: Array<{ id?: unknown }> };
+    const payload = await readJsonResponse(response, "OpenAI-compatible models");
     const models = (payload.data ?? []).map((item) => typeof item.id === "string" ? item.id : "").filter(Boolean);
     return models.length ? models : [this.options.model];
   }
@@ -67,7 +69,7 @@ export class OpenAICompatibleTextTranslator {
           }),
         });
         if (!response.ok) throw new Error(`OpenAI-compatible text translator failed: ${response.status}`);
-        const payload = (await response.json()) as { choices?: Array<{ message?: { content?: string } }> };
+        const payload = await readJsonResponse(response, "OpenAI-compatible text translator");
         return parseTranslationResults(payload.choices?.[0]?.message?.content ?? "", items);
       } catch (error) {
         lastError = error;
@@ -79,6 +81,20 @@ export class OpenAICompatibleTextTranslator {
   }
 }
 
+async function readJsonResponse(response: Response, label: string): Promise<{ data?: Array<{ id?: unknown }>; choices?: Array<{ message?: { content?: string } }> }> {
+  const contentType = response.headers.get("content-type") ?? "";
+  const text = await response.text();
+  if (!/json/i.test(contentType)) {
+    const preview = text.replace(/\s+/g, " ").slice(0, 120);
+    throw new Error(`${label} returned non-JSON response (${contentType || "unknown content-type"}). Check that Base URL includes /v1. Preview: ${preview}`);
+  }
+  try {
+    return JSON.parse(text) as { data?: Array<{ id?: unknown }>; choices?: Array<{ message?: { content?: string } }> };
+  } catch (error) {
+    throw new Error(`${label} returned invalid JSON: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
 export function buildTranslationPrompt(items: TextTranslationItem[], targetLanguage: string, sourceLanguage: string, options: TextTranslationOptions = {}): string {
   const retryGuidance = options.retranslate
     ? [
@@ -87,16 +103,37 @@ export function buildTranslationPrompt(items: TextTranslationItem[], targetLangu
     ]
     : [];
   const glossaryGuidance = options.glossary && Object.keys(options.glossary).length
-    ? [`Use this glossary consistently: ${JSON.stringify(options.glossary)}`]
+    ? [
+      `User glossary (mandatory, source term -> required translation): ${JSON.stringify(options.glossary)}`,
+      "Do not rename, reinterpret, literal-translate, or vary User glossary terms. If a source term appears, use exactly its required translation consistently.",
+    ]
     : [];
   const previousGuidance = options.previousTranslations?.length
     ? [`Previous translations for improvement/reference: ${JSON.stringify(options.previousTranslations)}`]
     : [];
+  const chapterGuidance = options.chapterContext?.trim()
+    ? [
+      `Chapter context: ${options.chapterContext.trim()}`,
+      "Use this chapter context only to keep names, relationships, tone, and pronouns consistent. Do not invent facts not supported by the OCR text.",
+    ]
+    : [];
+  const termCandidateGuidance = options.termCandidates?.length
+    ? [
+      `Auto-detected term candidates (likely names/titles/places/skills; keep each one semantically consistent across this request): ${JSON.stringify(options.termCandidates)}`,
+      "If a candidate is a real proper name or title in context, choose a natural stable Chinese rendering and keep it consistent. If uncertain, keep the source term unchanged rather than guessing a literal meaning.",
+    ]
+    : [];
   return [
-    "You are a professional manga localization translator for comic speech bubbles.",
+    "You are a professional manga localization translator and Chinese line editor for comic speech bubbles.",
     `Translate the following OCR text from ${sourceLanguage || "auto"} to ${targetLanguage}.`,
+    "First understand the whole page context, speaker intent, emotional tone, and the relationship between adjacent bubbles; then translate each item.",
     "Write natural Chinese dialogue suitable for manga speech bubbles: concise, emotional, conversational, and readable in small bubbles.",
-    "Use surrounding items as the same manga page context, but keep each item id unchanged.",
+    "For dialogue, write fluent spoken Chinese/口语 with character emotion; for narration, use polished Chinese prose; for shouts and action text, keep it short and forceful.",
+    "Avoid literal word-by-word translation, English sentence order, stiff machine-translated wording, and contradictions with nearby bubbles.",
+    "Avoid translationese, unnatural Europeanized Chinese, redundant subjects, and overly formal wording unless the speaker's tone requires it.",
+    "The final Chinese should read like a human comic localization, not machine-translated text.",
+    "Use surrounding items and each item's context field as the same manga page context, but keep each item id unchanged.",
+    "Infer omitted subjects/pronouns from context when necessary, but do not invent new plot facts.",
     "Keep each item id unchanged. Return strict JSON only with this shape:",
     "{\"items\":[{\"id\":string,\"translatedText\":string}]}",
     "Preserve punctuation-only text such as ellipses or question marks. Do not add explanations.",
@@ -104,7 +141,9 @@ export function buildTranslationPrompt(items: TextTranslationItem[], targetLangu
     "Do not translate character names literally as common words. Transliterate stable names into natural Chinese when confident; otherwise keep the original English name unchanged.",
     "Do not output awkward half-translated names like Chinese text plus leftover all-caps English.",
     "Keep recurring proper names consistent within this batch.",
+    ...chapterGuidance,
     ...glossaryGuidance,
+    ...termCandidateGuidance,
     ...previousGuidance,
     ...retryGuidance,
     JSON.stringify({ items }),

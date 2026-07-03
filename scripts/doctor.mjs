@@ -16,12 +16,13 @@ export function parseEnvText(text) {
 
 export function validateDoctorState(state) {
   const provider = state.env.TRANSLATION_PIPELINE || state.env.VISION_PROVIDER || "network-ocr-openai-compatible";
+  const ocrApiUrl = state.env.OCR_API_URL || state.env.OCR_API_ENDPOINT || "";
   const checks = [
     { id: "provider", ok: provider === "network-ocr-openai-compatible", message: `TRANSLATION_PIPELINE=${provider}` },
     { id: "extension-built", ok: state.extensionBuilt, message: state.extensionBuilt ? "extension dist exists" : "run pnpm --filter @umt/extension build" },
     { id: "server-data", ok: state.serverDataDirExists, message: state.serverDataDirExists ? "server data dir exists or can be created" : "server data dir missing" },
     { id: "openai-api-key", ok: Boolean(state.env.OPENAI_API_KEY), message: state.env.OPENAI_API_KEY ? "OPENAI_API_KEY is set" : "OPENAI_API_KEY is required for translation" },
-    { id: "ocr-api-url", ok: Boolean(state.env.OCR_API_URL || "https://uapis.cn/api/v1/image/ocr"), message: `OCR_API_URL=${state.env.OCR_API_URL || "https://uapis.cn/api/v1/image/ocr"}` },
+    { id: "ocr-api-url", ok: Boolean(ocrApiUrl), message: ocrApiUrl ? `OCR_API_URL=${ocrApiUrl}` : "OCR_API_URL is required for network OCR" },
     { id: "ocr-api-keys", ok: Boolean(state.env.OCR_API_KEYS || state.env.OCR_API_KEY), message: (state.env.OCR_API_KEYS || state.env.OCR_API_KEY) ? "OCR API key pool is set" : "OCR_API_KEYS is required for network OCR" },
   ];
   return { ok: checks.every((check) => check.ok), checks };

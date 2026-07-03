@@ -1,8 +1,8 @@
 ﻿# Universal Manga Translator
 
-Universal Manga Translator 是一个面向个人和开源发布的网页漫画翻译工具。它的目标形态是：**默认只装 Chrome 插件即可使用**；如果你需要本地私有代理、更强日志、桌面启动器或本地 OCR HTTP 服务，再启用高级桌面/后端模式。
+Universal Manga Translator 是一个网页漫画翻译工具。**主产品形态是纯插件版：用户只安装 Chrome 插件即可使用，不需要桌面端，不需要本地后端，也不需要命令行长期运行。**
 
-正式翻译链路：
+翻译链路：
 
 ```text
 漫画图片 -> OCR API 提取文字和坐标 -> OpenAI-compatible 文本翻译 -> 插件覆盖渲染
@@ -10,39 +10,127 @@ Universal Manga Translator 是一个面向个人和开源发布的网页漫画�
 
 翻译模型不需要识图能力；图片文字识别和坐标由 OCR API 完成。
 
-## 快速开始：插件直连模式（推荐默认）
+## 快速开始：纯插件版
 
-1. 安装依赖并构建扩展：
+### 给普通用户安装
+
+1. 下载发布包里的 `extension-release.zip`。
+2. 解压到一个固定目录，例如：
+
+```text
+D:\Apps\UniversalMangaTranslator\extension
+```
+
+3. Chrome 打开 `chrome://extensions`。
+4. 打开右上角“开发者模式”。
+5. 点击“加载已解压的扩展程序”，选择刚才解压后的目录。
+6. 打开漫画章节页，点击浏览器右上角插件图标。
+7. 第一次进入某网站时，先点“启用此网站”；插件只会在你启用过的主域名运行。
+8. 打开 API 设置页，填写：
+   - OCR API URL
+   - OCR API Key / 多个 OCR API Keys
+   - OpenAI-compatible Base URL
+   - 翻译 API Key
+   - 翻译模型
+   - 可选：人名 / 术语表
+9. 点击“自检”。自检通过后，回到漫画页点“翻译本页”或开启“自动翻译本网站”。
+
+> 安全提醒：纯插件版会把 API Key 保存在浏览器扩展存储中。不要在不信任的浏览器配置文件里使用真实 key；不要把带有个人 key 的浏览器扩展数据分享给别人。
+
+### 开发者本地构建插件
 
 ```powershell
 pnpm install
 pnpm --filter @umt/extension build
 ```
 
-2. Chrome 打开 `chrome://extensions`，启用“开发者模式”，点击“加载已解压的扩展程序”，选择：
+然后在 Chrome 的 `chrome://extensions` 中加载：
 
 ```text
-F:\meihua\universal-manga-translator\apps\extension\dist
+apps/extension/dist
 ```
 
-3. 打开漫画网站，点击浏览器右上角扩展图标：
-   - 第一次进入某网站时，先点“启用此网站”；插件只会在你启用过的主域名运行。
-   - 运行模式选择“插件直连”。
-   - 在 popup 或后续发布 UI 中填入 OCR API URL / OCR API Keys、OpenAI-compatible Base URL / API Key / 模型。
-   - 点“自检”，确认 OCR 和翻译 API 都已配置。
-   - 点“翻译本页”，或开启“自动翻译本网站”。
+也可以生成给别人安装的插件 zip：
 
-> 安全提醒：插件直连模式会把 API Key 保存在浏览器扩展存储中。不要在不信任的浏览器配置文件里使用你的真实 key；不要把带有个人 key 的扩展数据分享给别人。
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\package-extension.ps1
+```
 
-## 高级桌面/后端模式
+输出文件：
 
-如果你不想让插件直接访问 API，或想使用桌面控制台管理后端、日志、缓存、清理进程，可以使用高级模式：
+```text
+release/extension-release.zip
+```
+
+## API 配置说明
+
+### OCR API
+
+OCR API 负责识别漫画图片里的文字和坐标。插件支持通用网络 OCR API，也可以填写本地 OCR HTTP 地址。
+
+常见配置项：
+
+```text
+OCR API URL=https://example.com/ocr
+OCR API Keys=key-a,key-b,key-c
+```
+
+多个 OCR API Key 会用于轮换；遇到额度不足、鉴权失败、限流等错误时会自动尝试下一个 key。
+
+通用 OCR API 的字段映射模板见 [`docs/api-templates.md`](docs/api-templates.md)。
+
+### 翻译 API
+
+翻译 API 只需要文本模型，不需要识图模型。只要兼容 OpenAI Chat Completions 风格接口即可。
+
+常见配置项：
+
+```text
+OpenAI-compatible Base URL=https://api.openai.com/v1
+API Key=sk-...
+Model=gpt-4.1-mini
+Target Language=zh-CN
+```
+
+### 人名 / 术语表
+
+如果某部漫画有固定人名、地名、组织名、招式名，可以在插件 API 设置里填写术语表。格式是一行一个：
+
+```text
+Clark = 克拉克
+Murim = 武林
+Heavenly Demon = 天魔
+```
+
+插件会把术语表作为强约束传给翻译模型，并把术语表版本加入缓存 profile。也就是说，术语表改动后，同一张图的旧翻译缓存不会继续错误覆盖新词典效果。
+
+## 本地 OCR HTTP
+
+纯插件版也可以接入本地 OCR HTTP 服务：只要你的 OCR 程序暴露一个 HTTP endpoint，例如：
+
+```text
+http://127.0.0.1:9000/ocr
+```
+
+并返回可映射的 JSON 字段即可。详见 [`docs/local-ocr-http.md`](docs/local-ocr-http.md)。
+
+## 高级/实验：后端和桌面端
+
+后端和桌面端不是普通用户的默认入口。它们只适合高级场景，例如：
+
+- 你不想让插件直接保存 API Key
+- 你想把 OCR/翻译请求集中到本地代理
+- 你需要更强的本地日志和缓存
+- 你要开发或调试本项目
+- 未来接入本地图像处理、inpaint、批量导出等重型能力
+
+启动桌面端：
 
 ```powershell
 pnpm desktop
 ```
 
-桌面控制台可以启动/停止本地后端，后端默认地址：
+本地后端默认地址：
 
 ```text
 http://127.0.0.1:47831
@@ -54,49 +142,51 @@ http://127.0.0.1:47831
 TRANSLATION_PIPELINE=network-ocr-openai-compatible
 OPENAI_BASE_URL=https://api.openai.com/v1
 OPENAI_API_KEY=
-OPENAI_MODEL=gpt-5.4-mini
-OCR_API_URL=https://uapis.cn/api/v1/image/ocr
+OPENAI_MODEL=gpt-4.1-mini
+OCR_API_URL=https://example.com/ocr
 OCR_API_KEYS=ocr-key-a,ocr-key-b
 TARGET_LANGUAGE=zh-CN
 ```
 
 旧的 `VISION_PROVIDER` 只作为读取兼容，不再作为正式配置名。
 
-## 本地 OCR HTTP
-
-插件直连模式和高级后端模式都可以接入本地 OCR HTTP 服务：只要你的 OCR 程序暴露一个 HTTP endpoint，例如 `http://127.0.0.1:9000/ocr`，并返回可映射的 JSON 字段即可。详见 [`docs/local-ocr-http.md`](docs/local-ocr-http.md)。
-
-通用 OCR API 的字段映射模板见 [`docs/api-templates.md`](docs/api-templates.md)。
-
 ## 常用命令
+
+普通插件开发主要用：
 
 ```powershell
 pnpm install
-pnpm doctor
-pnpm build
-pnpm test
-pnpm desktop
+pnpm --filter @umt/extension build
+pnpm --filter @umt/extension test
+powershell -ExecutionPolicy Bypass -File .\scripts\package-extension.ps1
 ```
 
-单独构建：
+完整工程检查：
 
 ```powershell
-pnpm --filter @umt/shared build
-pnpm --filter @umt/core build
+pnpm doctor
+pnpm typecheck
+pnpm test
+pnpm build
+```
+
+高级后端/桌面端开发：
+
+```powershell
 pnpm --filter @umt/server build
-pnpm --filter @umt/extension build
 pnpm --filter @umt/desktop build
+pnpm desktop
 ```
 
 ## 项目结构
 
 ```text
-apps/extension  Chrome MV3 扩展，扫描漫画图、调用直连/后端链路、渲染覆盖层
-apps/server     可选本地后端，提供高级缓存、配置、日志、自检
-apps/desktop    Electron 桌面控制台，负责无命令行启动和管理后端
+apps/extension  Chrome MV3 扩展，主产品；扫描漫画图、直连 API、渲染覆盖层
 packages/core   浏览器/Node 共用 OCR、翻译、key 轮换、pipeline
 packages/shared 前后端共享协议和类型
-scripts         检查、构建和 QA 脚本
+apps/server     可选高级本地后端，提供本地缓存、配置、日志、自检
+apps/desktop    实验性 Electron 控制台，用于管理本地后端
+scripts         检查、构建、发布和 QA 脚本
 ```
 
 ## 不要提交或分享
@@ -106,15 +196,13 @@ scripts         检查、构建和 QA 脚本
 - `server-runtime*.log`
 - `node_modules/`
 - `apps/desktop/dist-app/`
+- `release/`
 
 这些文件可能包含 API Key、缓存、日志或本地构建产物。
 
-加载目录也可写作：apps/extension/dist。
-
-
 ## 发布与打包
 
-发布前检查见 [`docs/release-checklist.md`](docs/release-checklist.md)。桌面安装包、portable exe 等大文件请作为 GitHub Release assets 上传，不要提交到 git。
+发布前检查见 [`docs/release-checklist.md`](docs/release-checklist.md)。普通用户发布包优先提供 `extension-release.zip`。桌面端和后端只作为 Advanced / Experimental assets，需要时再单独上传。
 
 ## License
 
