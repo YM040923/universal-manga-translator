@@ -3,10 +3,21 @@
   "name": "Universal Manga Translator",
   "version": "0.1.0",
   "description": "Personal universal manga translation overlay for browser reading.",
-  "permissions": ["storage", "activeTab", "tabs"],
-  "host_permissions": ["<all_urls>"],
-  "background": { "service_worker": "background.js", "type": "module" },
-  "content_scripts": [{ "matches": ["http://*/*", "https://*/*"], "js": ["content.js"], "run_at": "document_idle" }],
-  "options_page": "options.html",
-  "action": { "default_title": "Universal Manga Translator", "default_popup": "popup.html" }
+  "permissions": [
+    "storage",
+    "activeTab",
+    "tabs",
+    "scripting"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "Universal Manga Translator",
+    "default_popup": "popup.html"
+  }
 }

@@ -1,18 +1,19 @@
-﻿import cors from "@fastify/cors";
+import cors from "@fastify/cors";
 import websocket from "@fastify/websocket";
 import Fastify, { type FastifyInstance } from "fastify";
-import type { SaveManualOverrideRequest, SurfaceResult, SurfaceTask, TextRegion } from "@umt/shared";
+import type { CancelledResult, SaveManualOverrideRequest, SurfaceResult, SurfaceTask, TextRegion, UpdateConfigRequest } from "@umt/shared";
 import { clampRectToBounds } from "@umt/shared/geometry";
 import { buildCacheKey, sha256Hex } from "@umt/shared/hashing";
 import type { ManualOverrideStore } from "../cache/manual-overrides.js";
 import { applyManualOverrides } from "../cache/manual-overrides.js";
+import type { OcrCache } from "../cache/ocr-cache.js";
 import type { SurfaceCache } from "../cache/surface-cache.js";
 import { readTaskImage } from "../image/image-input.js";
 import { normalizeForProvider } from "../image/normalize.js";
 import sharp from "sharp";
 import { LAYOUT_VERSION, layoutRegions } from "../layout/layout.js";
-import { MockProvider } from "../providers/mock-provider.js";
 import type { VisionProvider } from "../providers/provider.js";
+import type { ApiKeyPoolStatus } from "../providers/api-key-pool.js";
 import { NullDiagnosticsWriter, type DiagnosticsWriter } from "./diagnostics.js";
 import { EventBus } from "./events.js";
 import { createSelfTestTask, type SelfTestReport, type SelfTestStep } from "./self-test.js";
@@ -20,8 +21,9 @@ import { createSelfTestTask, type SelfTestReport, type SelfTestStep } from "./se
 export interface BuildServerOptions {
   provider: string;
   targetLanguage: string;
-  visionProvider?: VisionProvider;
+  visionProvider: VisionProvider;
   surfaceCache?: SurfaceCache;
+  ocrCache?: OcrCache;
   manualOverrideStore?: ManualOverrideStore;
   eventBus?: EventBus;
   maxImageLongEdge?: number;
@@ -32,17 +34,100 @@ export interface BuildServerOptions {
   diagnosticsWriter?: DiagnosticsWriter;
   diagnosticsReader?: (limit: number) => Array<Record<string, unknown>>;
   diagnosticsClearer?: () => number;
-  openAIImageInputFormat?: "image-url" | "image-field";
+  openAIImageInputFormat?: "image-url" | "image-field" | undefined;
+  ocrProvider?: string | undefined;
+  ocrApiKeyConfigured?: boolean | undefined;
+  ocrKeyStatus?: ApiKeyPoolStatus | undefined;
+  ocrApiUrl?: string | undefined;
+  ocrEndpoint?: string | undefined;
+  ocrLanguageType?: string | undefined;
+  localOcrUrl?: string | undefined;
+  localOcrEngine?: string | undefined;
+  ocrInputMode?: "image_base64" | "file" | undefined;
+  ocrInput?: "image_base64" | "file" | undefined;
+  ocrImageField?: string | undefined;
+  ocrStaticFields?: Record<string, unknown> | undefined;
+  ocrRegionsPaths?: string[] | undefined;
+  ocrTextPaths?: string[] | undefined;
+  ocrBoxPaths?: string[] | undefined;
+  ocrConfidencePaths?: string[] | undefined;
+  ocrNeedLocation?: boolean | undefined;
+  ocrEnableCls?: boolean | undefined;
+  configWritable?: boolean | undefined;
+  updateConfig?: (patch: UpdateConfigRequest) => Promise<RuntimeServerState>;
+}
+
+export interface RuntimeServerState {
+  provider: string;
+  targetLanguage: string;
+  visionProvider: VisionProvider;
+  maxImageLongEdge: number | undefined;
+  jpegQuality: number | undefined;
+  openAICompatibleBaseUrl: string | undefined;
+  openAIModel: string | undefined;
+  openAIApiKeyConfigured: boolean | undefined;
+  openAIImageInputFormat?: "image-url" | "image-field" | undefined;
+  ocrProvider?: string | undefined;
+  ocrApiKeyConfigured?: boolean | undefined;
+  ocrKeyStatus?: ApiKeyPoolStatus | undefined;
+  ocrApiUrl?: string | undefined;
+  ocrEndpoint?: string | undefined;
+  ocrLanguageType?: string | undefined;
+  localOcrUrl?: string | undefined;
+  localOcrEngine?: string | undefined;
+  ocrInputMode?: "image_base64" | "file" | undefined;
+  ocrInput?: "image_base64" | "file" | undefined;
+  ocrImageField?: string | undefined;
+  ocrStaticFields?: Record<string, unknown> | undefined;
+  ocrRegionsPaths?: string[] | undefined;
+  ocrTextPaths?: string[] | undefined;
+  ocrBoxPaths?: string[] | undefined;
+  ocrConfidencePaths?: string[] | undefined;
+  ocrNeedLocation?: boolean | undefined;
+  ocrEnableCls?: boolean | undefined;
+  configWritable?: boolean | undefined;
 }
 
 export async function buildServer(options: BuildServerOptions): Promise<FastifyInstance> {
-  const app = Fastify({ logger: false });
-  const provider: VisionProvider = options.visionProvider ?? new MockProvider();
+  const app = Fastify({ logger: false, bodyLimit: 64 * 1024 * 1024 });
+  let provider: VisionProvider = options.visionProvider;
+  let state: RuntimeServerState = {
+    provider: options.provider,
+    targetLanguage: options.targetLanguage,
+    visionProvider: provider,
+    maxImageLongEdge: options.maxImageLongEdge,
+    jpegQuality: options.jpegQuality,
+    openAICompatibleBaseUrl: options.openAICompatibleBaseUrl,
+    openAIModel: options.openAIModel,
+    openAIApiKeyConfigured: options.openAIApiKeyConfigured,
+    openAIImageInputFormat: options.openAIImageInputFormat,
+    ocrProvider: options.ocrProvider,
+    ocrApiKeyConfigured: options.ocrApiKeyConfigured,
+    ocrKeyStatus: options.ocrKeyStatus,
+    ocrApiUrl: options.ocrApiUrl ?? options.ocrEndpoint,
+    ocrEndpoint: options.ocrEndpoint ?? options.ocrApiUrl,
+    ocrLanguageType: options.ocrLanguageType,
+    localOcrUrl: options.localOcrUrl,
+    localOcrEngine: options.localOcrEngine,
+    ocrInputMode: options.ocrInputMode ?? options.ocrInput,
+    ocrInput: options.ocrInput ?? options.ocrInputMode,
+    ocrImageField: options.ocrImageField,
+    ocrStaticFields: options.ocrStaticFields,
+    ocrRegionsPaths: options.ocrRegionsPaths,
+    ocrTextPaths: options.ocrTextPaths,
+    ocrBoxPaths: options.ocrBoxPaths,
+    ocrConfidencePaths: options.ocrConfidencePaths,
+    ocrNeedLocation: options.ocrNeedLocation,
+    ocrEnableCls: options.ocrEnableCls,
+    configWritable: options.configWritable ?? Boolean(options.updateConfig),
+  };
   const eventBus = options.eventBus ?? new EventBus();
   const memoryCache = new Map<string, SurfaceResult>();
   const surfaceCache = options.surfaceCache;
+  const ocrCache = options.ocrCache;
   const manualOverrideStore = options.manualOverrideStore;
   const diagnostics = options.diagnosticsWriter ?? new NullDiagnosticsWriter();
+  const cancelledSessions = new Set<string>();
 
   await app.register(cors, { origin: true });
   await app.register(websocket);
@@ -52,54 +137,72 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
     socket.on("close", unsubscribe);
   });
 
-  app.get("/health", async () => ({ ok: true, provider: options.provider, targetLanguage: options.targetLanguage }));
+  app.get("/health", async () => ({ ok: true, provider: state.provider, targetLanguage: state.targetLanguage }));
 
-  app.get("/v1/config/status", async () => ({
+  const currentStatus = () => ({
     ok: true,
-    provider: options.provider,
-    targetLanguage: options.targetLanguage,
+    provider: state.provider,
+    targetLanguage: state.targetLanguage,
     providerProfile: provider.profile,
     openAICompatible: {
-      baseUrl: options.openAICompatibleBaseUrl ?? "",
-      model: options.openAIModel ?? "",
-      apiKeyConfigured: Boolean(options.openAIApiKeyConfigured),
-      imageInputFormat: options.openAIImageInputFormat,
+      baseUrl: state.openAICompatibleBaseUrl ?? "",
+      model: state.openAIModel ?? "",
+      apiKeyConfigured: Boolean(state.openAIApiKeyConfigured),
+      imageInputFormat: state.openAIImageInputFormat,
+    },
+    ocr: {
+      provider: state.ocrProvider ?? "none",
+      apiKeyConfigured: Boolean(state.ocrApiKeyConfigured),
+      keyPool: provider.keyStatus?.() ?? state.ocrKeyStatus,
+      apiUrl: state.ocrApiUrl ?? state.ocrEndpoint,
+      endpoint: state.ocrEndpoint ?? state.ocrApiUrl,
+      languageType: state.ocrLanguageType,
+      localUrl: state.localOcrUrl,
+      engine: state.localOcrEngine,
+      inputMode: state.ocrInputMode ?? state.ocrInput,
+      input: state.ocrInput ?? state.ocrInputMode,
+      imageField: state.ocrImageField,
+      staticFields: state.ocrStaticFields,
+      regionsPaths: state.ocrRegionsPaths,
+      textPaths: state.ocrTextPaths,
+      boxPaths: state.ocrBoxPaths,
+      confidencePaths: state.ocrConfidencePaths,
+      needLocation: state.ocrNeedLocation,
+      enableCls: state.ocrEnableCls,
     },
     image: {
-      maxLongEdge: options.maxImageLongEdge ?? 1600,
-      jpegQuality: options.jpegQuality ?? 0.75,
+      maxLongEdge: state.maxImageLongEdge ?? 1600,
+      jpegQuality: state.jpegQuality ?? 0.75,
     },
-    configWritable: false,
-  }));
+    configWritable: Boolean(state.configWritable),
+  });
+
+  app.get("/v1/config/status", async () => currentStatus());
 
   app.get("/v1/models", async () => ({
     ok: true,
     models: provider.listModels ? await provider.listModels() : [provider.profile],
-    currentModel: options.openAIModel ?? provider.profile,
+    currentModel: state.openAIModel ?? provider.profile,
   }));
 
-  app.post("/v1/config", async () => ({
-    ok: true,
-    status: {
+  app.post<{ Body: UpdateConfigRequest }>("/v1/config", async (request) => {
+    if (!options.updateConfig) {
+      return {
+        ok: true,
+        status: currentStatus(),
+        restarted: false,
+        note: "Backend config is loaded from .env at startup; restart the backend process for config changes to take effect.",
+      };
+    }
+    state = await options.updateConfig(request.body ?? {});
+    provider = state.visionProvider;
+    return {
       ok: true,
-      provider: options.provider,
-      targetLanguage: options.targetLanguage,
-      providerProfile: provider.profile,
-      openAICompatible: {
-        baseUrl: options.openAICompatibleBaseUrl ?? "",
-        model: options.openAIModel ?? "",
-        apiKeyConfigured: Boolean(options.openAIApiKeyConfigured),
-        imageInputFormat: options.openAIImageInputFormat,
-      },
-      image: {
-        maxLongEdge: options.maxImageLongEdge ?? 1600,
-        jpegQuality: options.jpegQuality ?? 0.75,
-      },
-      configWritable: false,
-    },
-    restarted: false,
-    note: "Backend config is loaded from .env at startup; restart the backend process for config changes to take effect.",
-  }));
+      status: currentStatus(),
+      restarted: false,
+      note: "Backend config updated in the running local service and will be used for new submissions.",
+    };
+  });
 
   app.post<{ Body: SaveManualOverrideRequest }>("/v1/overrides", async (request) => {
     const override = request.body;
@@ -109,20 +212,22 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
 
   app.get<{ Querystring: { imageHash?: string; targetLanguage?: string } }>("/v1/overrides", async (request) => {
     const imageHash = request.query.imageHash ?? "";
-    const targetLanguage = request.query.targetLanguage ?? options.targetLanguage;
+    const targetLanguage = request.query.targetLanguage ?? state.targetLanguage;
     return { ok: true, overrides: manualOverrideStore?.listForImage(imageHash, targetLanguage) ?? [] };
   });
 
   app.get("/v1/cache/stats", async () => {
     const stats = surfaceCache?.stats() ?? { entries: memoryCache.size, bytes: 0, updatedAt: null };
-    return { ok: true, stats };
+    const ocrStats = ocrCache?.stats();
+    return { ok: true, stats, ocrStats };
   });
 
   app.post("/v1/cache/clear", async () => {
     const persistent = surfaceCache?.clear().deleted ?? 0;
+    const ocrDeleted = ocrCache?.clear().deleted ?? 0;
     const memory = memoryCache.size;
     memoryCache.clear();
-    return { ok: true, deleted: surfaceCache ? persistent : memory };
+    return { ok: true, deleted: (surfaceCache ? persistent : memory) + ocrDeleted, surfaceDeleted: surfaceCache ? persistent : memory, ocrDeleted };
   });
 
   app.get<{ Querystring: { limit?: string } }>("/v1/diagnostics/recent", async (request) => {
@@ -135,52 +240,82 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
     return { ok: true, deleted };
   });
 
-  const processSurface = async (task: SurfaceTask, force = false) => {
+  const processSurface = async (task: SurfaceTask, force = false, jobSessionId?: string) => {
     const started = Date.now();
-    eventBus.publish({ type: "job.queued", surfaceId: task.surfaceId });
+    const isCancelled = () => Boolean(jobSessionId && cancelledSessions.has(jobSessionId));
+    const cancelledResult = (): CancelledResult => ({
+      surfaceId: task.surfaceId,
+      status: "cancelled",
+      recoverable: true,
+      error: "cancelled",
+    });
+    const returnCancelled = () => {
+      const result = cancelledResult();
+      diagnostics.record({ surfaceId: task.surfaceId, status: "cancelled", providerProfile: provider.profile, inputSource: task.imageData ? "imageData" : "imageUrl", originalSize: task.naturalSize, providerSize: task.naturalSize, rawRegionCount: 0, finalRegionCount: 0, elapsedMs: Date.now() - started, note: "job session cancelled" });
+      if (jobSessionId) eventBus.publish({ type: "job.cancelled", surfaceId: task.surfaceId, jobSessionId, result });
+      return { ok: false as const, error: result.error, result };
+    };
+    const sessionEventFields = jobSessionId ? { jobSessionId } : {};
+    eventBus.publish({ type: "job.queued", surfaceId: task.surfaceId, ...sessionEventFields });
     try {
+      if (isCancelled()) return returnCancelled();
+      const imageReadStarted = Date.now();
       const { buffer: imageBuffer, source: inputSource } = await readTaskImage(task);
+      const imageReadMs = Date.now() - imageReadStarted;
+      if (isCancelled()) return returnCancelled();
       const imageHash = sha256Hex(imageBuffer);
       const cacheKey = buildCacheKey({ imageHash, targetLanguage: task.targetLanguage, providerProfile: provider.profile, layoutVersion: LAYOUT_VERSION });
       const cached = surfaceCache?.get(cacheKey) ?? memoryCache.get(cacheKey);
       if (cached && isReusableCachedResult(cached) && !force) {
+        if (isCancelled()) return returnCancelled();
         const cachedForSurface: SurfaceResult = { ...cached, surfaceId: task.surfaceId, status: "cached" };
         const result = applyStoredOverrides(cachedForSurface, task.targetLanguage, manualOverrideStore);
         diagnostics.record({ surfaceId: task.surfaceId, status: "cached", providerProfile: provider.profile, inputSource, originalSize: task.naturalSize, providerSize: task.naturalSize, rawRegionCount: cached.regions.length, finalRegionCount: result.regions.length, elapsedMs: Date.now() - started, note: "cache hit" });
-        eventBus.publish({ type: "job.cached", surfaceId: task.surfaceId, result });
-        return { ok: true, surfaceId: task.surfaceId, status: "cached", result };
+        eventBus.publish({ type: "job.cached", surfaceId: task.surfaceId, ...sessionEventFields, result });
+        return { ok: true as const, surfaceId: task.surfaceId, status: "cached" as const, result };
       }
 
-      eventBus.publish({ type: "job.processing", surfaceId: task.surfaceId });
-      const providerOutput = await processImageForProvider(provider, task, imageBuffer, imageHash, {
-        maxLongEdge: options.maxImageLongEdge ?? 1600,
-        jpegQuality: options.jpegQuality ?? 0.75,
+      eventBus.publish({ type: "job.processing", surfaceId: task.surfaceId, ...sessionEventFields });
+      if (isCancelled()) return returnCancelled();
+      const imageMetadataStarted = Date.now();
+      const actualImageSize = await readImageSizeFromBuffer(imageBuffer, task.naturalSize);
+      const imageMetadataMs = Date.now() - imageMetadataStarted;
+      const providerOutput = await processImageForProvider(provider, task, imageBuffer, imageHash, actualImageSize, {
+        maxLongEdge: state.maxImageLongEdge ?? 1600,
+        jpegQuality: state.jpegQuality ?? 0.75,
+        forceRetranslate: force,
       });
+      if (isCancelled()) return returnCancelled();
       const providerRegions = providerOutput.regions;
       const mappedRegions = providerRegions;
       const regions = clampProviderRegionsToImage(mappedRegions, task.naturalSize);
+      const layoutStarted = Date.now();
+      const laidOutRegions = layoutRegions(regions);
+      const layoutMs = Date.now() - layoutStarted;
       const rawResult: SurfaceResult = {
         surfaceId: task.surfaceId,
         imageHash,
         status: regions.length ? "completed" : "empty",
-        regions: layoutRegions(regions),
+        regions: laidOutRegions,
         providerProfile: provider.profile,
         layoutVersion: LAYOUT_VERSION,
         elapsedMs: Date.now() - started,
       };
+      const cacheWriteStarted = Date.now();
       if (rawResult.status === "completed" && rawResult.regions.length > 0) {
         memoryCache.set(cacheKey, rawResult);
         surfaceCache?.save(cacheKey, rawResult);
       }
+      const cacheWriteMs = Date.now() - cacheWriteStarted;
       const result = applyStoredOverrides(rawResult, task.targetLanguage, manualOverrideStore);
-      diagnostics.record({ surfaceId: task.surfaceId, status: result.status, providerProfile: provider.profile, inputSource, originalSize: task.naturalSize, providerSize: providerOutput.providerSize, rawRegionCount: providerRegions.length, finalRegionCount: result.regions.length, filteredRegionCount: Math.max(0, providerRegions.length - regions.length), elapsedMs: rawResult.elapsedMs, ...diagnosticNoteForResult(providerRegions.length, regions.length, providerOutput.tileCount) });
-      eventBus.publish({ type: "job.completed", surfaceId: task.surfaceId, result });
-      return { ok: true, surfaceId: task.surfaceId, status: result.status, result };
+      diagnostics.record({ surfaceId: task.surfaceId, status: result.status, providerProfile: provider.profile, inputSource, originalSize: task.naturalSize, providerSize: providerOutput.providerSize, rawRegionCount: providerRegions.length, finalRegionCount: result.regions.length, filteredRegionCount: Math.max(0, providerRegions.length - regions.length), elapsedMs: rawResult.elapsedMs, imageReadMs, imageMetadataMs, normalizeMs: providerOutput.normalizeMs, providerMs: providerOutput.providerMs, layoutMs, cacheWriteMs, tileCount: providerOutput.tileCount, ...diagnosticOcrNote(provider, diagnosticNoteForResult(providerRegions.length, regions.length, providerOutput.tileCount).note) });
+      eventBus.publish({ type: "job.completed", surfaceId: task.surfaceId, ...sessionEventFields, result });
+      return { ok: true as const, surfaceId: task.surfaceId, status: result.status, result };
     } catch (error) {
       const failed = { surfaceId: task.surfaceId, status: "failed" as const, recoverable: true, error: error instanceof Error ? error.message : String(error) };
       diagnostics.record({ surfaceId: task.surfaceId, status: "failed", providerProfile: provider.profile, inputSource: task.imageData ? "imageData" : "imageUrl", originalSize: task.naturalSize, providerSize: task.naturalSize, rawRegionCount: 0, finalRegionCount: 0, elapsedMs: Date.now() - started, note: failed.error });
-      eventBus.publish({ type: "job.failed", surfaceId: task.surfaceId, result: failed });
-      return { ok: false, error: failed.error, result: failed };
+      eventBus.publish({ type: "job.failed", surfaceId: task.surfaceId, ...sessionEventFields, result: failed });
+      return { ok: false as const, error: failed.error, result: failed };
     }
   };
 
@@ -189,21 +324,21 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
       { name: "backend", ok: true, detail: "HTTP server is reachable" },
       { name: "provider", ok: true, detail: provider.profile },
     ];
-    const submitted = await processSurface(createSelfTestTask(options.targetLanguage), true);
+    const submitted = await processSurface(createSelfTestTask(state.targetLanguage), true);
     const result = submitted.result;
-    const completedResult = result && result.status !== "failed" ? result : undefined;
+    const completedResult = result && "regions" in result ? result : undefined;
     const regionCount = completedResult?.regions.length ?? 0;
-    const submitDetail = submitted.ok ? String(submitted.status) : "error" in submitted ? submitted.error : "unknown error";
+    const submitDetail = "status" in submitted ? String(submitted.status) : "error" in submitted ? submitted.error : "unknown error";
     steps.push({ name: "sample-submit", ok: submitted.ok, detail: submitDetail });
     steps.push({ name: "regions", ok: regionCount > 0, detail: `${regionCount} regions` });
     const report: SelfTestReport = {
       ok: true,
-      provider: options.provider,
+      provider: state.provider,
       providerProfile: provider.profile,
-      targetLanguage: options.targetLanguage,
+      targetLanguage: state.targetLanguage,
       steps,
       sample: {
-        status: result?.status ?? "failed",
+        status: completedResult?.status ?? "failed",
         regionCount,
         elapsedMs: completedResult?.elapsedMs ?? 0,
       },
@@ -211,16 +346,22 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
     return report;
   });
 
-  app.post<{ Body: { task: SurfaceTask } }>("/v1/surfaces/submit", async (request) => {
-    return processSurface(request.body.task);
+  app.post<{ Body: { task: SurfaceTask; jobSessionId?: string } }>("/v1/surfaces/submit", async (request) => {
+    return processSurface(request.body.task, false, request.body.jobSessionId);
   });
 
-  app.post<{ Body: { task: SurfaceTask } }>("/v1/surfaces/retranslate", async (request) => {
-    return processSurface(request.body.task, true);
+  app.post<{ Body: { task: SurfaceTask; jobSessionId?: string } }>("/v1/surfaces/retranslate", async (request) => {
+    return processSurface(request.body.task, true, request.body.jobSessionId);
   });
 
   app.post<{ Body: { surfaceId: string } }>("/v1/surfaces/cancel", async (request) => {
     return { ok: true, surfaceId: request.body.surfaceId, status: "accepted", cancellable: false };
+  });
+
+  app.post<{ Body: { jobSessionId: string } }>("/v1/jobs/cancel-session", async (request) => {
+    const jobSessionId = String(request.body?.jobSessionId ?? "");
+    if (jobSessionId) cancelledSessions.add(jobSessionId);
+    return { ok: true, jobSessionId, status: "cancelled", cancellable: true };
   });
 
   return app;
@@ -234,16 +375,39 @@ interface ProviderImageOutput {
   regions: TextRegion[];
   providerSize: { width: number; height: number };
   tileCount: number;
+  normalizeMs: number;
+  providerMs: number;
 }
 
-async function processImageForProvider(provider: VisionProvider, task: SurfaceTask, imageBuffer: Buffer, imageHash: string, options: { maxLongEdge: number; jpegQuality: number }): Promise<ProviderImageOutput> {
-  if (!shouldTileTallImage(task.naturalSize)) {
+async function readImageSizeFromBuffer(imageBuffer: Buffer, fallback: { width: number; height: number }): Promise<{ width: number; height: number }> {
+  try {
+    const metadata = await sharp(imageBuffer).metadata();
+    const width = metadata.width;
+    const height = metadata.height;
+    return typeof width === "number" && width > 0 && typeof height === "number" && height > 0 ? { width, height } : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+async function processImageForProvider(provider: VisionProvider, task: SurfaceTask, imageBuffer: Buffer, imageHash: string, actualImageSize: { width: number; height: number }, options: { maxLongEdge: number; jpegQuality: number; forceRetranslate?: boolean }): Promise<ProviderImageOutput> {
+  if (!shouldTileTallImage(actualImageSize)) {
+    const normalizeStarted = Date.now();
     const normalized = await normalizeForProvider(imageBuffer, { maxLongEdge: options.maxLongEdge, jpegQuality: Math.round(options.jpegQuality * 100) });
-    const providerRegions = await provider.process({ task, imageBuffer: normalized.buffer, imageHash, width: normalized.width, height: normalized.height });
+    const normalizeMs = Date.now() - normalizeStarted;
+    const providerStarted = Date.now();
+    const providerRegions = await provider.process({ task, imageBuffer: normalized.buffer, imageHash, width: normalized.width, height: normalized.height, forceRetranslate: options.forceRetranslate === true });
+    const providerMs = Date.now() - providerStarted;
     return {
-      regions: mapProviderRegionsToOriginalImage(providerRegions, task.naturalSize, { width: normalized.width, height: normalized.height }),
+      regions: mapProviderRegionsToOriginalImage(
+        mapProviderRegionsToOriginalImage(providerRegions, actualImageSize, { width: normalized.width, height: normalized.height }),
+        task.naturalSize,
+        actualImageSize,
+      ),
       providerSize: { width: normalized.width, height: normalized.height },
       tileCount: 1,
+      normalizeMs,
+      providerMs,
     };
   }
 
@@ -251,30 +415,42 @@ async function processImageForProvider(provider: VisionProvider, task: SurfaceTa
   const overlap = 80;
   const regions: TextRegion[] = [];
   let tileCount = 0;
-  for (let top = 0; top < task.naturalSize.height; top += tileHeight - overlap) {
-    const height = Math.min(tileHeight, task.naturalSize.height - top);
+  let normalizeMs = 0;
+  let providerMs = 0;
+  for (let top = 0; top < actualImageSize.height; top += tileHeight - overlap) {
+    const height = Math.min(tileHeight, actualImageSize.height - top);
     if (height < 80) break;
     tileCount += 1;
+    const normalizeStarted = Date.now();
     const tileBuffer = await sharp(imageBuffer)
-      .extract({ left: 0, top, width: task.naturalSize.width, height })
+      .extract({ left: 0, top, width: actualImageSize.width, height })
       .jpeg({ quality: Math.round(options.jpegQuality * 100) })
       .toBuffer();
+    normalizeMs += Date.now() - normalizeStarted;
     const tileTask: SurfaceTask = {
       ...task,
       surfaceId: `${task.surfaceId}:tile:${tileCount}`,
-      naturalSize: { width: task.naturalSize.width, height },
-      renderSize: { width: task.renderSize.width, height: Math.round((height / task.naturalSize.height) * task.renderSize.height) },
-      surfaceRect: { ...task.surfaceRect, height: Math.round((height / task.naturalSize.height) * task.surfaceRect.height) },
+      naturalSize: { width: actualImageSize.width, height },
+      renderSize: { width: task.renderSize.width, height: Math.round((height / actualImageSize.height) * task.renderSize.height) },
+      surfaceRect: { ...task.surfaceRect, height: Math.round((height / actualImageSize.height) * task.surfaceRect.height) },
     };
-    const tileRegions = await provider.process({ task: tileTask, imageBuffer: tileBuffer, imageHash: `${imageHash}:tile:${tileCount}`, width: task.naturalSize.width, height });
+    const providerStarted = Date.now();
+    const tileRegions = await provider.process({ task: tileTask, imageBuffer: tileBuffer, imageHash: `${imageHash}:tile:${tileCount}`, width: actualImageSize.width, height, forceRetranslate: options.forceRetranslate === true });
+    providerMs += Date.now() - providerStarted;
     regions.push(...tileRegions.map((region) => ({
       ...region,
       id: `${region.id}:t${tileCount}`,
       box: { ...region.box, y: region.box.y + top },
     })));
-    if (top + height >= task.naturalSize.height) break;
+    if (top + height >= actualImageSize.height) break;
   }
-  return { regions: dedupeOverlappingRegions(regions), providerSize: { width: task.naturalSize.width, height: tileHeight }, tileCount };
+  return {
+    regions: mapProviderRegionsToOriginalImage(dedupeOverlappingRegions(regions), task.naturalSize, actualImageSize),
+    providerSize: { width: actualImageSize.width, height: tileHeight },
+    tileCount,
+    normalizeMs,
+    providerMs,
+  };
 }
 
 function shouldTileTallImage(size: { width: number; height: number }): boolean {
@@ -337,3 +513,16 @@ function isReusableCachedResult(result: SurfaceResult): boolean {
   return result.status !== "empty" && result.regions.length > 0;
 }
 
+
+function diagnosticOcrNote(provider: VisionProvider, base?: string): { note?: string } {
+  const cacheStatus = (provider as unknown as { lastOcrCacheStatus?: unknown }).lastOcrCacheStatus;
+  const status = typeof cacheStatus === "string" ? `ocr-cache-${cacheStatus}` : "";
+  const keyStatus = provider.keyStatus?.();
+  const keyText = keyStatus ? `keys:${keyStatus.available}/${keyStatus.count}` : "";
+  return joinDiagnosticNotes(base, status, keyText);
+}
+
+function joinDiagnosticNotes(...notes: Array<string | undefined>): { note?: string } {
+  const joined = notes.filter((note): note is string => Boolean(note)).join(" | ");
+  return joined ? { note: joined } : {};
+}

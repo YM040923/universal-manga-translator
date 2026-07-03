@@ -13,6 +13,13 @@ export interface SubmitDiagnosticsRecord {
   finalRegionCount: number;
   filteredRegionCount?: number;
   elapsedMs: number;
+  imageReadMs?: number;
+  imageMetadataMs?: number;
+  normalizeMs?: number;
+  providerMs?: number;
+  layoutMs?: number;
+  cacheWriteMs?: number;
+  tileCount?: number;
   note?: string;
 }
 
@@ -42,6 +49,13 @@ export class FileDiagnosticsWriter implements DiagnosticsWriter {
       finalRegionCount: record.finalRegionCount,
       filteredRegionCount: record.filteredRegionCount,
       elapsedMs: record.elapsedMs,
+      imageReadMs: record.imageReadMs,
+      imageMetadataMs: record.imageMetadataMs,
+      normalizeMs: record.normalizeMs,
+      providerMs: record.providerMs,
+      layoutMs: record.layoutMs,
+      cacheWriteMs: record.cacheWriteMs,
+      tileCount: record.tileCount,
       note: sanitizeNote(record.note),
     };
     appendFileSync(this.path, `${JSON.stringify(safe)}\n`, "utf8");

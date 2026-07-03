@@ -2,9 +2,12 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   DEFAULT_SETTINGS,
+  enableSiteForUrl,
   getEffectiveSiteSettings,
+  isSiteEnabled,
   loadSettings,
   normalizeSettings,
+  primaryDomainFromUrl,
   saveSettings,
   type ExtensionSettings,
   type SettingsStorageArea,
@@ -21,6 +24,7 @@ test("loadSettings merges old saved settings for backward compatibility", async 
   assert.equal(settings.targetLanguage, "en");
   assert.equal(settings.autoTranslateDefault, false);
   assert.equal(settings.floatingButtonEnabled, true);
+  assert.equal(settings.progressWidgetEnabled, true);
   assert.equal(settings.imageRange, "viewport");
 });
 
@@ -47,6 +51,7 @@ test("saveSettings normalizes and persists extended settings", async () => {
     imageRange: "fullPage",
     pretranslateNextPage: true,
     floatingButtonEnabled: false,
+    progressWidgetEnabled: false,
     siteSettings: {
       "https://example.com": { autoTranslate: true, scope: "similarPath", pathPrefix: "/comic" },
     },
@@ -61,6 +66,7 @@ test("saveSettings normalizes and persists extended settings", async () => {
     imageRange: "fullPage",
     pretranslateNextPage: true,
     floatingButtonEnabled: false,
+    progressWidgetEnabled: false,
     siteSettings: {
       "https://example.com": { autoTranslate: true, scope: "similarPath", pathPrefix: "/comic" },
     },
@@ -70,12 +76,75 @@ test("saveSettings normalizes and persists extended settings", async () => {
 
 test("loadSettings includes backend and performance defaults", async () => {
   const settings = await loadSettings(fakeStorage());
-  assert.equal(settings.providerProfile, "mock");
+  assert.equal(settings.runMode, "direct");
+  assert.equal(settings.providerProfile, "network-ocr-openai-compatible");
+  assert.equal(settings.translationModel, "gpt-5.4-mini");
   assert.equal(settings.openAICompatibleBaseUrl, "");
   assert.equal(settings.requestTimeoutMs, 60000);
   assert.equal(settings.maxConcurrentSubmissions, 2);
   assert.equal(settings.maxFullPageSurfaces, 80);
   assert.equal(settings.retryCount, 1);
+});
+
+test("loadSettings includes plugin-only direct API defaults", async () => {
+  const settings = await loadSettings(fakeStorage());
+
+  assert.deepEqual(settings.directOcr, {
+    apiUrl: "",
+    apiKeys: [],
+    inputMode: "image_base64",
+    imageField: "image_base64",
+    staticFieldsText: "{}",
+    regionsPaths: ["words_result", "data.words_result", "data.result", "data.regions", "result", "regions"],
+    textPaths: ["words", "text", "content"],
+    boxPaths: ["location", "box", "bbox", "vertexes_location"],
+    confidencePaths: ["score", "confidence"],
+  });
+  assert.deepEqual(settings.directTranslator, {
+    baseUrl: "",
+    apiKey: "",
+    model: "gpt-5.4-mini",
+  });
+});
+
+test("normalizeSettings accepts direct mode API configuration", () => {
+  const settings = normalizeSettings({
+    runMode: "backend",
+    directOcr: {
+      apiUrl: "https://ocr.example.com/v1/ocr/",
+      apiKeys: [" key-a ", "", "key-b"],
+      inputMode: "file",
+      imageField: " image ",
+      staticFieldsText: "{\"lang\":\"en\"}",
+      regionsPaths: [" data.items ", ""],
+      textPaths: [" text "],
+      boxPaths: [" box "],
+      confidencePaths: [" score "],
+    },
+    directTranslator: {
+      baseUrl: "https://api.example.com/v1/",
+      apiKey: " sk-test ",
+      model: " gpt-test ",
+    },
+  });
+
+  assert.equal(settings.runMode, "backend");
+  assert.deepEqual(settings.directOcr, {
+    apiUrl: "https://ocr.example.com/v1/ocr",
+    apiKeys: ["key-a", "key-b"],
+    inputMode: "file",
+    imageField: "image",
+    staticFieldsText: "{\"lang\":\"en\"}",
+    regionsPaths: ["data.items"],
+    textPaths: ["text"],
+    boxPaths: ["box"],
+    confidencePaths: ["score"],
+  });
+  assert.deepEqual(settings.directTranslator, {
+    baseUrl: "https://api.example.com/v1",
+    apiKey: "sk-test",
+    model: "gpt-test",
+  });
 });
 
 test("normalizeSettings clamps invalid backend and performance fields", () => {
@@ -168,4 +237,85 @@ test("saveSettings persists debug overlay setting", async () => {
   await saveSettings({ debugOverlayEnabled: true }, storage);
   const saved = storage.saved as ExtensionSettings;
   assert.equal(saved.debugOverlayEnabled, true);
+});
+
+
+test("new sites do not auto translate by default to avoid localhost permission prompts", async () => {
+  const settings = await loadSettings(fakeStorage({}));
+  const effective = getEffectiveSiteSettings(settings, "https://auth.huaweicloud.com/login");
+
+  assert.equal(effective.autoTranslate, false);
+});
+
+
+test("primaryDomainFromUrl normalizes subdomains to a main site key", () => {
+  assert.equal(primaryDomainFromUrl("https://www.asurascans.com/comics/a"), "asurascans.com");
+  assert.equal(primaryDomainFromUrl("https://reader.manga.example.co.uk/chapter/1"), "example.co.uk");
+  assert.equal(primaryDomainFromUrl("chrome://extensions"), null);
+});
+
+test("sites are disabled until explicitly enabled by primary domain", () => {
+  const settings = normalizeSettings({});
+  assert.equal(isSiteEnabled(settings, "https://asurascans.com/comics/a"), false);
+
+  const enabled = enableSiteForUrl(settings, "https://www.asurascans.com/comics/a");
+
+  assert.equal(isSiteEnabled(enabled, "https://asurascans.com/other/chapter"), true);
+  assert.equal(isSiteEnabled(enabled, "https://cdn.asurascans.com/assets/page.webp"), true);
+  assert.deepEqual(enabled.enabledSites, { "asurascans.com": true });
+});
+
+test("loadSettings includes site activation and overlay visibility defaults", async () => {
+  const settings = await loadSettings(fakeStorage());
+  assert.deepEqual(settings.enabledSites, {});
+  assert.equal(settings.translationOverlayVisible, true);
+});
+
+test("loadSettings includes overlay appearance defaults", async () => {
+  const settings = await loadSettings(fakeStorage());
+  assert.deepEqual(settings.overlayAppearance, {
+    maskShape: "auto",
+    fontScale: 1,
+    maskScale: 1,
+    ellipseX: 50,
+    ellipseY: 42,
+    opacity: 1,
+  });
+});
+
+test("normalizeSettings clamps overlay appearance fields", () => {
+  const settings = normalizeSettings({
+    overlayAppearance: {
+      maskShape: "bad" as never,
+      fontScale: 9,
+      maskScale: 9,
+      ellipseX: 99,
+      ellipseY: 1,
+      opacity: 2,
+    },
+  });
+
+  assert.deepEqual(settings.overlayAppearance, {
+    maskShape: "auto",
+    fontScale: 1.3,
+    maskScale: 2,
+    ellipseX: 55,
+    ellipseY: 30,
+    opacity: 1,
+  });
+});
+
+test("normalizeSettings allows a much smaller overlay mask scale", () => {
+  const settings = normalizeSettings({
+    overlayAppearance: {
+      maskShape: "auto",
+      fontScale: 1,
+      maskScale: 0.2,
+      ellipseX: 50,
+      ellipseY: 42,
+      opacity: 1,
+    },
+  });
+
+  assert.equal(settings.overlayAppearance.maskScale, 0.2);
 });

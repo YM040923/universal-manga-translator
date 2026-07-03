@@ -19,7 +19,7 @@ const task = {
 
 test("websocket receives submit lifecycle events", async () => {
   const eventBus = new EventBus();
-  const app = await buildServer({ provider: "mock", targetLanguage: "zh-CN", eventBus });
+  const app = await buildServer({ provider: "test-pipeline", targetLanguage: "zh-CN", eventBus, visionProvider: { profile: "test-pipeline", process: async () => [{ id: "r1", box: { x: 1, y: 1, width: 4, height: 4 }, sourceText: "Hello", translatedText: "测试译文", confidence: 1, orientation: "horizontal", kind: "dialogue" }] } });
   let ws: WebSocket | null = null;
   try {
     await app.listen({ host: "127.0.0.1", port: 0 });
@@ -39,4 +39,5 @@ test("websocket receives submit lifecycle events", async () => {
     await app.close();
   }
 });
+
 

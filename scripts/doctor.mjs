@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+﻿import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -15,15 +15,15 @@ export function parseEnvText(text) {
 }
 
 export function validateDoctorState(state) {
-  const provider = state.env.VISION_PROVIDER || "mock";
+  const provider = state.env.TRANSLATION_PIPELINE || state.env.VISION_PROVIDER || "network-ocr-openai-compatible";
   const checks = [
-    { id: "provider", ok: provider === "mock" || provider === "openai-compatible", message: `VISION_PROVIDER=${provider}` },
+    { id: "provider", ok: provider === "network-ocr-openai-compatible", message: `TRANSLATION_PIPELINE=${provider}` },
     { id: "extension-built", ok: state.extensionBuilt, message: state.extensionBuilt ? "extension dist exists" : "run pnpm --filter @umt/extension build" },
     { id: "server-data", ok: state.serverDataDirExists, message: state.serverDataDirExists ? "server data dir exists or can be created" : "server data dir missing" },
+    { id: "openai-api-key", ok: Boolean(state.env.OPENAI_API_KEY), message: state.env.OPENAI_API_KEY ? "OPENAI_API_KEY is set" : "OPENAI_API_KEY is required for translation" },
+    { id: "ocr-api-url", ok: Boolean(state.env.OCR_API_URL || "https://uapis.cn/api/v1/image/ocr"), message: `OCR_API_URL=${state.env.OCR_API_URL || "https://uapis.cn/api/v1/image/ocr"}` },
+    { id: "ocr-api-keys", ok: Boolean(state.env.OCR_API_KEYS || state.env.OCR_API_KEY), message: (state.env.OCR_API_KEYS || state.env.OCR_API_KEY) ? "OCR API key pool is set" : "OCR_API_KEYS is required for network OCR" },
   ];
-  if (provider === "openai-compatible") {
-    checks.push({ id: "openai-api-key", ok: Boolean(state.env.OPENAI_API_KEY), message: state.env.OPENAI_API_KEY ? "OPENAI_API_KEY is set" : "OPENAI_API_KEY is required for openai-compatible provider" });
-  }
   return { ok: checks.every((check) => check.ok), checks };
 }
 
@@ -45,8 +45,6 @@ export function readDoctorState(root = resolve(fileURLToPath(new URL("..", impor
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const result = validateDoctorState(readDoctorState());
   console.log("Universal Manga Translator doctor");
-  for (const check of result.checks) {
-    console.log(`${check.ok ? "OK" : "FAIL"} ${check.id}: ${check.message}`);
-  }
+  for (const check of result.checks) console.log(`${check.ok ? "OK" : "FAIL"} ${check.id}: ${check.message}`);
   process.exitCode = result.ok ? 0 : 1;
 }

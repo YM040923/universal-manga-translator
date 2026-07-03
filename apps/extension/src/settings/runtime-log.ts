@@ -1,5 +1,5 @@
 ﻿export type RuntimeLogLevel = "info" | "warn" | "error";
-export type RuntimeLogSource = "popup" | "options" | "content" | "backend";
+export type RuntimeLogSource = "popup" | "content" | "backend";
 
 export interface RuntimeLogEntry {
   ts: number;
@@ -60,6 +60,6 @@ function isRuntimeLogEntry(value: unknown): value is RuntimeLogEntry {
   const candidate = value as Partial<RuntimeLogEntry>;
   return typeof candidate.ts === "number"
     && (candidate.level === "info" || candidate.level === "warn" || candidate.level === "error")
-    && (candidate.source === "popup" || candidate.source === "options" || candidate.source === "content" || candidate.source === "backend")
+    && (candidate.source === "popup" || candidate.source === "content" || candidate.source === "backend")
     && typeof candidate.message === "string";
 }

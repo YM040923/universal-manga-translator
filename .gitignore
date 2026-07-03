@@ -1,6 +1,8 @@
 ﻿node_modules/
 dist/
 .env
+.env.*
+!.env.example
 apps/server/data/
 coverage/
 .playwright/
@@ -9,10 +11,22 @@ test-results/
 
 apps/extension/dist-test/
 apps/extension/dist/
-packages/shared/dist/
 packages/shared/src/*.js
 packages/shared/src/*.js.map
 packages/shared/src/*.d.ts
 packages/shared/src/*.d.ts.map
-apps/server/dist/
 .superpowers/
+docs/superpowers/
+
+apps/desktop/dist-app/
+qa-output/
+server-runtime*.log
+*.log
+*.tmp
+.DS_Store
+Thumbs.db
+
+apps/desktop/dist-server/
+apps/desktop/.tmp-deploy-server/
+packages/*/dist/
+apps/*/dist/

@@ -1,44 +1,100 @@
-import { BackendClient, SurfaceSubmitTracker } from "./client/backend-client";
-import { createSurfaceTask } from "./capture/surface-capture";
+﻿import { BackendClient, SurfaceSubmitTracker } from "./client/backend-client";
+import { DirectClient } from "./client/direct-client";
+import { supportsEventStream, type TranslatorClient } from "./client/translator-client";
+import { ChapterResultCache, type ChapterResultCacheContext } from "./cache/chapter-result-cache";
+import { createSurfaceTask, createSurfaceTaskWithImageData } from "./capture/surface-capture";
 import { createScreenshotSurface, readImageSize } from "./capture/screenshot-crop";
 import { requestVisibleTabScreenshot } from "./capture/screenshot-request";
 import { DebugOverlayRenderer } from "./debug-overlay-renderer";
-import { detectImageSurfaces } from "./detector/surface-detector";
+import type { ServerEvent } from "@umt/shared/protocol";
+import type { DetectedSurface } from "./detector/surface-detector";
+import { EventResultRouter } from "./events/event-result-router";
 import { isUmtContentCommand } from "./messages";
 import { OverlayRenderer } from "./overlay/overlay-renderer";
 import { createRectOverlayAnchor } from "./overlay/rect-anchor";
-import { FloatingPanel, type FloatingPanelState } from "./panel/floating-panel";
-import { AutoScheduler } from "./scheduler/auto-scheduler";
+import { ChapterProgress } from "./progress/chapter-progress";
+import { FloatingPanel } from "./panel/floating-panel";
 import { ManualSelectionController } from "./selection/manual-selection";
-import { PageChangeObserver } from "./scheduler/page-change-observer";
-import { prioritizeSurfaces, selectSurfacesForMode, type PrioritizedSurface } from "./scheduler/viewport-scheduler";
-import { TranslationStatusCounter } from "./status/job-status-counter";
+import { TranslationQueue } from "./queue/translation-queue";
+import type { SurfaceStatus } from "./surface/surface-state";
+import { SurfaceControl } from "./surface/surface-control";
+import { SurfaceRegistry, type RegisteredSurface } from "./surface/surface-registry";
 import { isRenderableSurfaceResult } from "./translation-result";
-import { getEffectiveSiteSettings, loadSettings, type ExtensionSettings } from "../settings/settings";
+import { getEffectiveSiteSettings, isSiteEnabled, loadSettings, saveSettings, setSiteSettings, setTranslationOverlayVisible, type ExtensionSettings } from "../settings/settings";
 import { appendRuntimeLog } from "../settings/runtime-log";
 
-void bootstrap();
+const bootstrapWindow = window as Window & { __umtContentBootstrapState?: "starting" | "running" | undefined };
+if (bootstrapWindow.__umtContentBootstrapState !== "starting" && bootstrapWindow.__umtContentBootstrapState !== "running") {
+  bootstrapWindow.__umtContentBootstrapState = "starting";
+  void bootstrap().then((started) => { bootstrapWindow.__umtContentBootstrapState = started ? "running" : undefined; }).catch((error) => {
+    console.error("Universal Manga Translator bootstrap failed", error);
+    bootstrapWindow.__umtContentBootstrapState = undefined;
+  });
+}
 
-async function bootstrap(): Promise<void> {
+async function bootstrap(): Promise<boolean> {
   let settings = await loadSettings();
+  if (!isSiteEnabled(settings, window.location.href)) return false;
   let client = createClient(settings);
   let renderer = createRenderer(settings, client);
-  const submitTracker = new SurfaceSubmitTracker();
-  const statusCounter = new TranslationStatusCounter();
   const debugRenderer = new DebugOverlayRenderer();
-  let overlaysVisible = true;
   debugRenderer.setEnabled(settings.debugOverlayEnabled);
+  const submitTracker = new SurfaceSubmitTracker();
+  const progress = new ChapterProgress();
+  const chapterCache = new ChapterResultCache();
+  let floatingPanel: FloatingPanel;
+  if (settings.progressWidgetEnabled) await progress.mount();
 
-  function createClient(current: ExtensionSettings): BackendClient {
-    return new BackendClient(current.backendUrl, { timeoutMs: current.requestTimeoutMs, retryCount: current.retryCount });
+  let jobSessionId = createJobSessionId();
+  let eventSocket: WebSocket | null = null;
+  let eventsConnected = false;
+  let registry: SurfaceRegistry = SurfaceRegistry.scan(document);
+  let controls = new Map<string, SurfaceControl>();
+
+  let queue = createQueue();
+  let eventResultRouter = createEventResultRouter(renderer);
+  eventResultRouter.setSession(jobSessionId);
+
+  function createClient(current: ExtensionSettings): TranslatorClient {
+    return current.runMode === "backend"
+      ? new BackendClient(current.backendUrl, { timeoutMs: current.requestTimeoutMs, retryCount: current.retryCount, backendHttp: requestBackendHttp })
+      : new DirectClient(current);
   }
 
-  function createRenderer(current: ExtensionSettings, backend: BackendClient): OverlayRenderer {
-    return new OverlayRenderer({ targetLanguage: current.targetLanguage, onManualEdit: (override) => void backend.saveManualOverride(override) });
+  function createRenderer(current: ExtensionSettings, translator: TranslatorClient): OverlayRenderer {
+    return new OverlayRenderer({ targetLanguage: current.targetLanguage, appearance: current.overlayAppearance, onManualEdit: (override) => void translator.saveManualOverride(override) });
   }
 
-  function setPanelStatus(text: string, state: FloatingPanelState = "idle"): void {
-    panel.setStatus(text, state);
+  function createEventResultRouter(currentRenderer: OverlayRenderer): EventResultRouter {
+    return new EventResultRouter({
+      render: (element, naturalSize, result) => {
+        logInfo("render event result", `${result.surfaceId} | status=${result.status} | regions=${result.regions.length}`);
+        currentRenderer.render(element, naturalSize, result);
+        currentRenderer.setVisible(settings.translationOverlayVisible);
+        debugRenderer.markResult(element, naturalSize, result);
+        markSurface(result.surfaceId, result.status === "cached" ? "cached" : result.status === "empty" ? "empty" : "completed");
+      },
+    });
+  }
+
+  function createQueue(): TranslationQueue {
+    return new TranslationQueue({
+      concurrency: Math.max(1, Math.min(settings.maxConcurrentSubmissions, 2)),
+      worker: translateRegisteredSurface,
+      onStatusChange: (surfaceId, status) => {
+        controls.get(surfaceId)?.setStatus(status);
+        updateProgress();
+      },
+    });
+  }
+
+  function site() {
+    return getEffectiveSiteSettings(settings, window.location.href);
+  }
+
+  function shouldAutoTranslate(): boolean {
+    const effective = site();
+    return !effective.unsupported && effective.autoTranslate;
   }
 
   function logInfo(message: string, detail?: string): void {
@@ -53,175 +109,172 @@ async function bootstrap(): Promise<void> {
     void appendRuntimeLog({ level: "error", source: "content", message, detail: formatShortError(error) });
   }
 
-  function setCountersStatus(): void {
-    panel.setStatus(statusCounter.format(), "done");
-  }
-
-  function viewportRect() {
-    return { x: 0, y: 0, width: window.innerWidth, height: window.innerHeight };
-  }
-
-  function site() {
-    return getEffectiveSiteSettings(settings, window.location.href);
-  }
-
-  function shouldAutoTranslate(): boolean {
-    const effective = site();
-    return !effective.unsupported && effective.autoTranslate;
-  }
-
-  function selectedSurfaces(): PrioritizedSurface[] {
-    const prioritized = prioritizeSurfaces(detectImageSurfaces(document), viewportRect());
-    const selected = selectSurfacesForMode(prioritized, { imageRange: settings.imageRange, maxFullPageSurfaces: settings.maxFullPageSurfaces, pretranslateNextPage: settings.pretranslateNextPage });
-    logInfo("surfaces selected", `detected=${prioritized.length}, selected=${selected.length}, range=${settings.imageRange}, pretranslate=${settings.pretranslateNextPage}`);
-    for (const item of selected) debugRenderer.markSurface(item.surface.surfaceId, item.surface.element, "detected", `${item.priority} ${item.surface.kind}`);
-    return selected;
-  }
-
-  async function translateSelectedSurfaces(): Promise<void> {
-    const fresh = selectedSurfaces().filter((item) => submitTracker.shouldSubmit(item.surface.surfaceId));
-    if (!fresh.length) {
-      setPanelStatus("UMT: no new surfaces", "done");
-      logWarn("no new surfaces to submit");
-      return;
-    }
-    setPanelStatus(`UMT: submitting ${fresh.length}`, "busy");
-    await runWithConcurrency(fresh, settings.maxConcurrentSubmissions, async (item) => {
-      submitTracker.markSubmitted(item.surface.surfaceId);
-      logInfo("submit surface", `${item.surface.surfaceId} | ${item.surface.kind} | ${Math.round(item.surface.naturalSize.width)}x${Math.round(item.surface.naturalSize.height)} | ${item.priority}`);
-      debugRenderer.markSurface(item.surface.surfaceId, item.surface.element, "submitting", `${item.priority} ${item.surface.kind}`);
-      try {
-        const response = await client.submit(createSurfaceTask(item.surface, item.priority, settings.targetLanguage));
-        if (response.ok && isRenderableSurfaceResult(response.result)) {
-          logInfo("render result", `${item.surface.surfaceId} | status=${response.result.status} | regions=${response.result.regions.length}`);
-          renderer.render(item.surface.element, item.surface.naturalSize, response.result);
-          debugRenderer.markResult(item.surface.element, item.surface.naturalSize, response.result);
-        } else {
-          logWarn("direct submit not renderable", `${item.surface.surfaceId} | ok=${response.ok} | status=${response.ok ? response.result?.status : response.error}`);
-          debugRenderer.markSurface(item.surface.surfaceId, item.surface.element, response.ok ? "empty" : "failed", "trying screenshot fallback");
-          const fallbackRendered = await submitScreenshotFallback(item);
-          if (!fallbackRendered && item.screenshotFallbackEligible) {
-            statusCounter.recordFailedResponse(item.surface.surfaceId);
-            setCountersStatus();
-          }
-        }
-      } catch (error) {
-        logError("direct submit failed", error);
-        const fallbackRendered = await submitScreenshotFallback(item);
-        if (!fallbackRendered && item.screenshotFallbackEligible) {
-          statusCounter.recordFailedResponse(item.surface.surfaceId);
-          setCountersStatus();
-        }
-      }
-    });
-  }
-
-  async function retranslateSelectedSurfaces(): Promise<void> {
-    submitTracker.clear();
-    const fresh = selectedSurfaces();
-    if (!fresh.length) {
-      setPanelStatus("UMT: no surfaces to retranslate", "done");
-      return;
-    }
-    setPanelStatus(`UMT: retranslating ${fresh.length}`, "busy");
-    await runWithConcurrency(fresh, settings.maxConcurrentSubmissions, async (item) => {
-      try {
-        const response = await client.retranslate(createSurfaceTask(item.surface, item.priority, settings.targetLanguage));
-        if (response.ok && response.result) renderer.render(item.surface.element, item.surface.naturalSize, response.result);
-      } catch {
-        statusCounter.recordFailedResponse(item.surface.surfaceId);
-        setCountersStatus();
-      }
-    });
-  }
-
-
-  async function submitScreenshotFallback(item: PrioritizedSurface): Promise<boolean> {
-    if (!item.screenshotFallbackEligible) {
-      submitTracker.release(item.surface.surfaceId);
-      logWarn("screenshot fallback deferred until visible", `${item.surface.surfaceId} | priority=${item.priority}`);
-      return false;
-    }
+  function ensureEventStream(): void {
+    if (eventsConnected) return;
+    if (!supportsEventStream(client)) return;
     try {
-      const screenshotDataUrl = await requestVisibleTabScreenshot();
-      const screenshotSize = await readImageSize(screenshotDataUrl);
-      return await submitScreenshotFallbackAttempt(item, screenshotDataUrl, screenshotSize, 1)
-        || await submitScreenshotFallbackAttempt(item, screenshotDataUrl, screenshotSize, 2);
+      eventSocket = client.connectEvents(handleServerEvent);
+      eventsConnected = true;
     } catch (error) {
-      logError("screenshot fallback failed", error);
-      return false;
+      logError("event stream unavailable", error);
     }
   }
 
-  async function submitScreenshotFallbackAttempt(item: PrioritizedSurface, screenshotDataUrl: string, screenshotSize: { width: number; height: number }, upscale: 1 | 2): Promise<boolean> {
-    const screenshotSurface = await createScreenshotSurface({
-      screenshotDataUrl,
-      viewportRect: item.surface.rect,
-      viewportSize: { width: window.innerWidth, height: window.innerHeight },
-      screenshotSize,
-      surfaceId: `${upscale === 1 ? "screenshot" : "screenshot2x"}:${item.surface.surfaceId}`,
-      element: item.surface.element,
-      upscale,
-    });
-    debugRenderer.markSurface(item.surface.surfaceId, item.surface.element, "fallback", `${upscale}x screenshot`);
-    logInfo("submit screenshot fallback", `${item.surface.surfaceId} | upscale=${upscale} | crop=${Math.round(screenshotSurface.naturalSize.width)}x${Math.round(screenshotSurface.naturalSize.height)}`);
-    const retry = await client.submit(createSurfaceTask(screenshotSurface, item.priority, settings.targetLanguage));
-    if (retry.ok && isRenderableSurfaceResult(retry.result)) {
-      logInfo("render screenshot fallback", `${item.surface.surfaceId} | regions=${retry.result.regions.length}`);
-      const anchor = createRectOverlayAnchor(screenshotSurface.rect);
-      renderer.render(anchor, screenshotSurface.naturalSize, retry.result);
-      debugRenderer.markResult(anchor, screenshotSurface.naturalSize, retry.result);
-      return true;
-    }
-    if (retry.ok && retry.result?.status === "empty") {
-      logWarn("screenshot fallback empty", `${item.surface.surfaceId} | upscale=${upscale}`);
-      debugRenderer.markSurface(item.surface.surfaceId, item.surface.element, "empty", `${upscale}x fallback empty`);
-    }
-    return false;
-  }
-  function scan(): void {
-    const prioritized = prioritizeSurfaces(detectImageSurfaces(document), viewportRect());
-    setPanelStatus(`UMT: found ${prioritized.length} manga surfaces`);
-    logInfo("scan page", `found=${prioritized.length}`);
+  function handleServerEvent(event: ServerEvent): void {
+    const eventSessionId = "jobSessionId" in event ? event.jobSessionId : undefined;
+    if (eventSessionId && eventSessionId !== jobSessionId) return;
+    if (event.type === "job.queued") markSurface(event.surfaceId, "queued");
+    if (event.type === "job.processing") markSurface(event.surfaceId, "translating");
+    if (event.type === "job.failed") markSurface(event.surfaceId, "failed");
+    if (event.type === "job.cancelled") markSurface(event.surfaceId, "cancelled");
+    eventResultRouter.handle(event);
   }
 
-  function togglePause(): void {
-    if (autoScheduler.isPaused()) {
-      autoScheduler.resume();
-      setPanelStatus("UMT: resumed");
-      autoScheduler.requestRun("resume");
+  async function restoreCachedChapterResults(surfaces: RegisteredSurface[]): Promise<void> {
+    const doc = await chapterCache.read(cacheContext());
+    for (const surface of surfaces) {
+      const entry = doc.entries[surface.imageUrl];
+      if (!entry) continue;
+      const result = { ...entry.result, surfaceId: surface.surfaceId, status: "cached" as const };
+      renderer.render(surface.element, surface.naturalSize, result);
+      renderer.setVisible(settings.translationOverlayVisible);
+      eventResultRouter.track(surface.surfaceId, surface.element, surface.naturalSize);
+      markSurface(surface.surfaceId, "cached");
+    }
+  }
+
+  function cacheContext(): ChapterResultCacheContext {
+    return { pageUrl: window.location.href, targetLanguage: settings.targetLanguage, providerProfile: currentProviderProfile() };
+  }
+
+  function currentProviderProfile(): string {
+    if (typeof client.providerProfile === "function") return client.providerProfile();
+    return settings.providerProfile;
+  }
+
+  function scanAndMountControls(reason: string): RegisteredSurface[] {
+    registry = SurfaceRegistry.scan(document);
+    const surfaces = registry.surfaces.slice(0, settings.maxFullPageSurfaces);
+    const activeIds = new Set(surfaces.map((surface) => surface.surfaceId));
+    for (const [surfaceId, control] of controls) {
+      if (!activeIds.has(surfaceId)) {
+        control.remove();
+        controls.delete(surfaceId);
+      }
+    }
+    for (const surface of surfaces) {
+      let control = controls.get(surface.surfaceId);
+      if (!control) {
+        control = new SurfaceControl({
+          surfaceId: surface.surfaceId,
+          image: surface.element,
+          index: surface.index,
+          onAction: (surfaceId) => void translateSingleSurface(surfaceId, true),
+        });
+        controls.set(surface.surfaceId, control);
+        control.mount();
+        control.setStatus(queue.getStatus(surface.surfaceId));
+      } else {
+        control.updateIndex(surface.index);
+        control.refreshPosition();
+        control.setStatus(queue.getStatus(surface.surfaceId));
+      }
+      debugRenderer.markSurface(surface.surfaceId, surface.element, "detected", `#${surface.index}`);
+    }
+    queue.setSurfaces(surfaces);
+    updateProgress();
+    logInfo("surface registry scan", `${reason} | found=${surfaces.length}`);
+    void restoreCachedChapterResults(surfaces).catch((error) => logError("restore chapter cache failed", error));
+    return surfaces;
+  }
+
+  function markSurface(surfaceId: string, status: SurfaceStatus): void {
+    if (!queue.mark(surfaceId, status)) return;
+    controls.get(surfaceId)?.setStatus(status);
+    updateProgress();
+  }
+
+  function updateProgress(): void {
+    if (settings.progressWidgetEnabled) progress.update(queue.snapshot());
+  }
+
+  function resetProgress(message = "等待开始"): void {
+    if (settings.progressWidgetEnabled) progress.reset(message);
+  }
+
+  async function setProgressWidgetEnabled(enabled: boolean): Promise<void> {
+    settings = { ...settings, progressWidgetEnabled: enabled };
+    if (enabled) {
+      await progress.mount();
+      progress.update(queue.snapshot());
     } else {
-      autoScheduler.pause();
-      setPanelStatus("UMT: paused", "paused");
+      progress.remove();
     }
   }
 
-  function refreshPage(): void {
-    submitTracker.clear();
-    renderer.refreshAll();
-    debugRenderer.clear();
-    scan();
-    autoScheduler.requestRun("popup-refresh");
+  function setFloatingButtonEnabled(enabled: boolean): void {
+    settings = { ...settings, floatingButtonEnabled: enabled };
+    floatingPanel?.setEnabled(enabled);
   }
 
-  function clearCurrentPage(): void {
-    submitTracker.clear();
-    overlaysVisible = false;
-    renderer.setVisible(false);
-    debugRenderer.clear();
-    setPanelStatus("UMT: page cleared", "idle");
+  async function translateRegisteredSurface(surface: RegisteredSurface, force = false): Promise<SurfaceStatus> {
+    ensureEventStream();
+    if (!force && !submitTracker.shouldSubmit(surface.surfaceId)) return queue.getStatus(surface.surfaceId);
+    submitTracker.markSubmitted(surface.surfaceId);
+    markSurface(surface.surfaceId, "fetching");
+    try {
+      const detected = toDetectedSurface(surface);
+      eventResultRouter.track(surface.surfaceId, surface.element, surface.naturalSize);
+      const task = await createSurfaceTaskWithImageData(detected, "p2", settings.targetLanguage, { allowImageUrlFallback: settings.runMode !== "direct" });
+      logInfo("submit surface", `${surface.surfaceId} | #${surface.index} | ${task.imageData ? "imageData" : "imageUrl"}`);
+      markSurface(surface.surfaceId, "ocr");
+      const response = force ? await client.retranslate(task, jobSessionId) : await client.submit(task, jobSessionId);
+      if (response.ok && isRenderableSurfaceResult(response.result)) {
+        renderer.render(surface.element, surface.naturalSize, response.result);
+        renderer.setVisible(settings.translationOverlayVisible);
+        debugRenderer.markResult(surface.element, surface.naturalSize, response.result);
+        void chapterCache.save(cacheContext(), surface.imageUrl, response.result).catch((error) => logError("save chapter cache failed", error));
+        return response.result.status === "cached" ? "cached" : "completed";
+      }
+      if (response.ok && response.result?.status === "empty") return "empty";
+      if (response.ok && response.status === "cancelled") return "cancelled";
+      logWarn("submit not renderable", `${surface.surfaceId} | ${response.ok ? response.status : response.error}`);
+      return "failed";
+    } catch (error) {
+      logError("submit failed", error);
+      submitTracker.release(surface.surfaceId);
+      return "failed";
+    }
+  }
+
+  async function translateSingleSurface(surfaceId: string, force = false): Promise<void> {
+    const surface = registry.surfaces.find((item) => item.surfaceId === surfaceId) ?? scanAndMountControls("single-click").find((item) => item.surfaceId === surfaceId);
+    if (!surface) return;
+    const status = await translateRegisteredSurface(surface, force || queue.getStatus(surfaceId) === "failed");
+    markSurface(surfaceId, status);
+  }
+
+  async function translatePage(force = false): Promise<void> {
+    scanAndMountControls(force ? "retranslate" : "translate");
+    ensureEventStream();
+    if (force) {
+      submitTracker.clear();
+      for (const surface of registry.surfaces.slice(0, settings.maxFullPageSurfaces)) queue.mark(surface.surfaceId, "idle");
+    }
+    await queue.startAuto();
+    updateProgress();
   }
 
   function startManualSelection(): void {
-    setPanelStatus("UMT: select region", "busy");
     const controller = new ManualSelectionController({
       onSelect: (rect) => void translateManualRect(rect),
-      onCancel: () => setPanelStatus("UMT: selection cancelled", "idle"),
+      onCancel: () => logInfo("manual selection cancelled"),
     });
     controller.start();
   }
 
   async function translateManualRect(rect: { x: number; y: number; width: number; height: number }): Promise<void> {
+    ensureEventStream();
     try {
       const screenshotDataUrl = await requestVisibleTabScreenshot();
       const screenshotSize = await readImageSize(screenshotDataUrl);
@@ -233,135 +286,213 @@ async function bootstrap(): Promise<void> {
         surfaceId: `manual:${Date.now()}:${Math.round(rect.x)}:${Math.round(rect.y)}`,
         element: document.body,
       });
-      logInfo("submit manual region", `${Math.round(rect.width)}x${Math.round(rect.height)}`);
-      const response = await client.submit(createSurfaceTask(surface, "p0", settings.targetLanguage));
+      const response = await client.submit(createSurfaceTask(surface, "p0", settings.targetLanguage), jobSessionId);
       if (response.ok && isRenderableSurfaceResult(response.result)) {
         renderer.render(createRectOverlayAnchor(rect), surface.naturalSize, response.result);
+        renderer.setVisible(settings.translationOverlayVisible);
         logInfo("render manual region", `regions=${response.result.regions.length}`);
-        setPanelStatus("UMT: manual region translated", "done");
-      } else if (response.ok && response.result?.status === "empty") {
-        logWarn("manual region empty");
-        setPanelStatus("UMT: manual region has no readable text", "done");
       } else {
-        setPanelStatus("UMT: manual region failed", "error");
+        logWarn("manual region not renderable", response.ok ? response.status : response.error);
       }
     } catch (error) {
       logError("manual region failed", error);
-      setPanelStatus(`UMT: screenshot failed: ${formatShortError(error)}`, "error");
     }
   }
 
-  function updatePanelForSettings(): void {
-    panel.setEnabled(settings.floatingButtonEnabled);
-    const effective = site();
-    if (effective.unsupported) {
-      setPanelStatus("UMT: unsupported page", "offline");
-    } else if (!effective.autoTranslate) {
-      setPanelStatus(`UMT: auto off | ${settings.targetLanguage}`);
-    } else {
-      setPanelStatus(`UMT: ready | ${settings.targetLanguage}`);
+  async function setOverlayVisibility(visible: boolean): Promise<void> {
+    settings = setTranslationOverlayVisible(settings, visible);
+    renderer.setVisible(visible);
+    floatingPanel?.setOverlayVisible(visible);
+    await saveSettings(settings).catch((error) => logError("save overlay visibility failed", error));
+  }
+
+  async function toggleOverlayVisibility(): Promise<void> {
+    await setOverlayVisibility(!settings.translationOverlayVisible);
+  }
+
+  async function cancelCurrentQueue(reason: string): Promise<void> {
+    const previousSession = jobSessionId;
+    queue.pause();
+    for (const surface of registry.surfaces) {
+      const status = queue.getStatus(surface.surfaceId);
+      if (status === "queued" || status === "fetching" || status === "ocr" || status === "translating" || status === "rendering") markSurface(surface.surfaceId, "cancelled");
     }
+    jobSessionId = createJobSessionId();
+    eventResultRouter.setSession(jobSessionId);
+    submitTracker.clear();
+    await client.cancelJobSession(previousSession).catch((error) => logError("cancel session failed", error));
+    queue.resume();
+    updateProgress();
+    logInfo("queue cancelled", reason);
+  }
+
+  async function resetPageState(reason: string, clearOverlay = true): Promise<void> {
+    await cancelCurrentQueue(reason);
+    submitTracker.clear();
+    eventResultRouter.clear();
+    queue.clear(reason);
+    resetProgress("等待开始");
+    if (clearOverlay) {
+      renderer.clearAll();
+      await chapterCache.clear(cacheContext()).catch((error) => logError("clear chapter cache failed", error));
+    }
+    debugRenderer.clear();
+    for (const control of controls.values()) control.remove();
+    controls.clear();
+    scanAndMountControls(reason);
   }
 
   async function reloadSettings(): Promise<void> {
     const previousBackendUrl = settings.backendUrl;
+    const previousRunMode = settings.runMode;
+    const previousDirectOcr = JSON.stringify(settings.directOcr);
+    const previousDirectTranslator = JSON.stringify(settings.directTranslator);
     const previousTargetLanguage = settings.targetLanguage;
-    const previousTimeoutMs = settings.requestTimeoutMs;
-    const previousRetryCount = settings.retryCount;
     settings = await loadSettings();
-    logInfo("settings reloaded", `backend=${settings.backendUrl}, target=${settings.targetLanguage}, debug=${settings.debugOverlayEnabled}`);
+    if (!isSiteEnabled(settings, window.location.href)) return;
     debugRenderer.setEnabled(settings.debugOverlayEnabled);
-    if (settings.backendUrl !== previousBackendUrl || settings.requestTimeoutMs !== previousTimeoutMs || settings.retryCount !== previousRetryCount) client = createClient(settings);
-    if (settings.targetLanguage !== previousTargetLanguage || settings.backendUrl !== previousBackendUrl) renderer = createRenderer(settings, client);
-    updatePanelForSettings();
-    if (shouldAutoTranslate()) autoScheduler.requestRun("settings");
+    renderer.setVisible(settings.translationOverlayVisible);
+    floatingPanel?.setOverlayVisible(settings.translationOverlayVisible);
+    setFloatingButtonEnabled(settings.floatingButtonEnabled);
+    await setProgressWidgetEnabled(settings.progressWidgetEnabled);
+    renderer.setAppearance(settings.overlayAppearance);
+    const directChanged = previousDirectOcr !== JSON.stringify(settings.directOcr) || previousDirectTranslator !== JSON.stringify(settings.directTranslator);
+    if (settings.backendUrl !== previousBackendUrl || settings.runMode !== previousRunMode || directChanged) {
+      eventSocket?.close();
+      eventSocket = null;
+      eventsConnected = false;
+      client = createClient(settings);
+    }
+    if (settings.targetLanguage !== previousTargetLanguage || settings.backendUrl !== previousBackendUrl || settings.runMode !== previousRunMode || directChanged) {
+      renderer = createRenderer(settings, client);
+      eventResultRouter = createEventResultRouter(renderer);
+      eventResultRouter.setSession(jobSessionId);
+    }
+    queue = createQueue();
+    scanAndMountControls("settings");
+    if (shouldAutoTranslate()) void translatePage(false);
   }
 
-  const autoScheduler = new AutoScheduler(() => translateSelectedSurfaces(), 350);
-
-  const panel = new FloatingPanel({
-    onTranslateCurrent: () => void translateSelectedSurfaces(),
-    onSelectRegion: startManualSelection,
-  });
-
-  panel.mount();
-  logInfo("content script started", `${location.hostname} | backend=${settings.backendUrl} | target=${settings.targetLanguage}`);
-  updatePanelForSettings();
-
-  const pageChangeObserver = new PageChangeObserver(document, {
-    onChange: (reason) => {
-      renderer.refreshAll();
-      if (settings.debugOverlayEnabled) scan();
-      if (shouldAutoTranslate()) autoScheduler.requestRun(reason);
-    },
-  });
-  pageChangeObserver.start();
-
-  try {
-    client.connectEvents((event) => {
-      statusCounter.recordEvent(event);
-      setCountersStatus();
-    });
-  } catch (error) {
-    logError("event stream unavailable", error);
-    setPanelStatus("UMT: event stream unavailable", "error");
+  function refreshControls(): void {
+    for (const control of controls.values()) control.refreshPosition();
   }
 
-  void client.health().then((ok) => {
-    setPanelStatus(ok ? settingsStatus(settings, shouldAutoTranslate()) : "UMT: backend offline", ok ? "idle" : "offline");
-    logInfo("backend health", ok ? "connected" : "offline");
-    if (ok && shouldAutoTranslate()) autoScheduler.requestRun("load");
-  });
-
-  window.addEventListener("scroll", () => {
+  function refreshLayout(): void {
+    refreshControls();
     renderer.refreshAll();
-    if (settings.debugOverlayEnabled) scan();
-    if (shouldAutoTranslate()) autoScheduler.requestRun("scroll");
-  }, { passive: true });
+  }
 
-  window.addEventListener("resize", () => {
-    renderer.refreshAll();
-    if (settings.debugOverlayEnabled) scan();
-    if (shouldAutoTranslate()) autoScheduler.requestRun("resize");
+  function toDetectedSurface(surface: RegisteredSurface): DetectedSurface {
+    const rect = surface.element.getBoundingClientRect();
+    return {
+      surfaceId: surface.surfaceId,
+      kind: "image",
+      element: surface.element,
+      imageUrl: surface.imageUrl,
+      rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+      naturalSize: surface.naturalSize,
+      score: 10,
+    };
+  }
+
+  floatingPanel = new FloatingPanel({
+    onRetranslatePage: () => void translatePage(true),
+    onSelectRegion: () => startManualSelection(),
+    onToggleOverlayVisibility: (visible) => void setOverlayVisibility(visible),
   });
+  floatingPanel.mount();
+  floatingPanel.setOverlayVisible(settings.translationOverlayVisible);
+  floatingPanel.setEnabled(settings.floatingButtonEnabled);
+  renderer.setVisible(settings.translationOverlayVisible);
+
+  logInfo("content script started", `${location.hostname} | mode=${settings.runMode} | target=${settings.targetLanguage}`);
+  scanAndMountControls("load");
+  if (shouldAutoTranslate()) void translatePage(false);
+
+  const rescan = debounce((reason: string) => {
+    scanAndMountControls(reason);
+    if (shouldAutoTranslate()) void translatePage(false);
+  }, 600);
+
+  const observer = new MutationObserver((mutations) => {
+    if (mutations.every(isUmtOwnedMutation)) return;
+    rescan("mutation");
+  });
+  observer.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ["src", "srcset", "data-src", "data-original", "style"] });
+
+  window.addEventListener("scroll", () => refreshControls(), { passive: true });
+  window.addEventListener("resize", () => refreshLayout());
 
   chrome.storage?.onChanged?.addListener((changes, areaName) => {
     if (areaName !== "sync") return;
-    const relevant = ["backendUrl", "targetLanguage", "translationModel", "autoTranslateDefault", "imageRange", "pretranslateNextPage", "floatingButtonEnabled", "siteSettings", "providerProfile", "openAICompatibleBaseUrl", "requestTimeoutMs", "maxConcurrentSubmissions", "maxFullPageSurfaces", "retryCount", "autoTranslate", "debugOverlayEnabled"];
+    const relevant = ["runMode", "backendUrl", "directOcr", "directTranslator", "targetLanguage", "maxConcurrentSubmissions", "maxFullPageSurfaces", "siteSettings", "enabledSites", "translationOverlayVisible", "overlayAppearance", "autoTranslateDefault", "debugOverlayEnabled", "requestTimeoutMs", "retryCount", "floatingButtonEnabled", "progressWidgetEnabled"];
     if (relevant.some((key) => Object.prototype.hasOwnProperty.call(changes, key))) void reloadSettings();
   });
 
   chrome.runtime?.onMessage?.addListener((message) => {
     if (!isUmtContentCommand(message)) return false;
-    if (message.command === "translate") void translateSelectedSurfaces();
-    if (message.command === "refresh") refreshPage();
-    if (message.command === "togglePause") togglePause();
-    if (message.command === "clearPage") clearCurrentPage();
+    if (message.command === "translate") void translatePage(false);
+    if (message.command === "refresh") void resetPageState("popup-refresh", false);
+    if (message.command === "togglePause") {
+      if (queue.snapshot().paused) { queue.resume(); void translatePage(false); }
+      else queue.pause();
+      updateProgress();
+    }
+    if (message.command === "clearPage") void resetPageState("popup-clear", true);
     if (message.command === "selectRegion") startManualSelection();
-    if (message.command === "retranslate") void retranslateSelectedSurfaces();
+    if (message.command === "retranslate") void translatePage(true);
+    if (message.command === "cancelQueue") void cancelCurrentQueue("popup-cancel");
+    if (message.command === "setOverlayVisibility") void setOverlayVisibility(message.visible !== false);
+    if (message.command === "toggleOverlayVisibility") void toggleOverlayVisibility();
+    if (message.command === "applySiteSettings") {
+      settings = setSiteSettings(settings, window.location.href, { autoTranslate: message.autoTranslate === true });
+      if (message.autoTranslate === true) void translatePage(false);
+      else void cancelCurrentQueue("auto-off");
+    }
+    if (message.command === "applyOverlayAppearance") {
+      settings = { ...settings, overlayAppearance: message.appearance ? { ...settings.overlayAppearance, ...message.appearance } : settings.overlayAppearance };
+      renderer.setAppearance(settings.overlayAppearance);
+    }
+    if (message.command === "applyWidgetSettings") {
+      if (typeof message.floatingButtonEnabled === "boolean") setFloatingButtonEnabled(message.floatingButtonEnabled);
+      if (typeof message.progressWidgetEnabled === "boolean") void setProgressWidgetEnabled(message.progressWidgetEnabled);
+    }
     return false;
   });
+  return true;
 }
 
-function settingsStatus(settings: ExtensionSettings, autoTranslate: boolean): string {
-  return autoTranslate ? `UMT: backend connected | ${settings.targetLanguage}` : `UMT: backend connected | auto off | ${settings.targetLanguage}`;
-}
-async function runWithConcurrency<T>(items: T[], concurrency: number, worker: (item: T) => Promise<void>): Promise<void> {
-  const limit = Math.max(1, Math.min(Math.trunc(concurrency), 8));
-  let index = 0;
-  async function runNext(): Promise<void> {
-    while (index < items.length) {
-      const item = items[index++];
-      if (item !== undefined) await worker(item);
-    }
+function isUmtOwnedMutation(mutation: MutationRecord): boolean {
+  const target = mutation.target instanceof HTMLElement ? mutation.target : mutation.target.parentElement;
+  if (target?.closest("[data-umt-overlay-root], [data-umt-chapter-progress], [data-umt-surface-button], [data-umt-panel], [data-umt-debug-root], [data-umt-selection-layer]")) return true;
+  for (const node of [...mutation.addedNodes, ...mutation.removedNodes]) {
+    if (node instanceof HTMLElement && node.matches("[data-umt-overlay-root], [data-umt-chapter-progress], [data-umt-surface-button], [data-umt-panel], [data-umt-debug-root], [data-umt-selection-layer]")) return true;
   }
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, () => runNext()));
+  return false;
 }
 
+function createJobSessionId(): string {
+  return `session:${Date.now()}:${Math.random().toString(36).slice(2)}`;
+}
 
-
+function debounce<T extends (...args: never[]) => void>(fn: T, delayMs: number): T {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return ((...args: Parameters<T>) => {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => fn(...args), delayMs);
+  }) as T;
+}
 
 function formatShortError(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
-  return message.length > 96 ? `${message.slice(0, 93)}...` : message;
+  return message.length > 120 ? `${message.slice(0, 117)}...` : message;
 }
+
+async function requestBackendHttp(request: { url: string; init?: import("./messages.js").UmtBackendHttpRequest["init"] }): Promise<import("./messages.js").UmtBackendHttpResponse> {
+  return await chrome.runtime.sendMessage({ source: "umt-content", command: "backendHttp", ...request });
+}
+
+
+
+
+

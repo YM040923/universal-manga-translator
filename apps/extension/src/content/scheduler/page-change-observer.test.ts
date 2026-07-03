@@ -17,6 +17,25 @@ test("PageChangeObserver schedules when manga nodes are appended", async () => {
   observer.stop();
 });
 
+test("PageChangeObserver ignores UMT overlay mutations to avoid refresh loops", async () => {
+  const dom = new JSDOM(`<body><main id="reader"></main></body>`, { url: "https://example.test" });
+  installDom(dom);
+  const reasons: string[] = [];
+  const observer = new PageChangeObserver(document, { onChange: (reason: string) => reasons.push(reason), debounceMs: 0 });
+  observer.start();
+
+  const overlay = document.createElement("div");
+  overlay.dataset.umtOverlayRoot = "true";
+  const child = document.createElement("div");
+  child.dataset.umtRegionId = "r1";
+  overlay.append(child);
+  document.documentElement.append(overlay);
+  await tick();
+
+  assert.deepEqual(reasons, []);
+  observer.stop();
+});
+
 test("PageChangeObserver schedules on captured image load", async () => {
   const dom = new JSDOM(`<body><img id="page" /></body>`, { url: "https://example.test" });
   installDom(dom);

@@ -1,0 +1,290 @@
+import { GenericNetworkOcrClient, OpenAICompatibleTextTranslator, OcrTranslatePipeline } from "@umt/core";
+import type {
+  ApiResponse,
+  AvailableModelsResponse,
+  CacheStatsResponse,
+  CancelJobSessionResponse,
+  CancelSurfaceResponse,
+  ClearCacheResponse,
+  ClearDiagnosticsResponse,
+  ConfigStatusResponse,
+  ManualOverridePayload,
+  SaveManualOverrideResponse,
+  SubmitSurfaceResponse,
+} from "@umt/shared/protocol";
+import type { OverlayRegion, SurfaceResult, SurfaceTask, TextRegion } from "@umt/shared/types";
+import type { ExtensionSettings } from "../../settings/settings.js";
+import { DirectOcrCache } from "../cache/direct-ocr-cache.js";
+import type { DiagnosticsResponse, SelfTestResponse } from "./backend-client.js";
+import type { TranslatorClient } from "./translator-client.js";
+
+type FetchLike = typeof fetch;
+
+interface DirectClientSettings extends ExtensionSettings {
+  __testFetch?: FetchLike;
+  __testOcrCache?: DirectOcrCache;
+}
+
+export class DirectClient implements TranslatorClient {
+  private readonly fetchImpl: FetchLike;
+  private readonly ocrCache: DirectOcrCache;
+
+  constructor(private readonly settings: DirectClientSettings) {
+    this.fetchImpl = settings.__testFetch ?? createExtensionProxyFetch();
+    this.ocrCache = settings.__testOcrCache ?? new DirectOcrCache();
+  }
+
+  async health(): Promise<boolean> {
+    return this.isConfigured();
+  }
+
+  async configStatus(): Promise<ApiResponse<ConfigStatusResponse>> {
+    return {
+      ok: true,
+      provider: "extension-direct",
+      targetLanguage: this.settings.targetLanguage,
+      providerProfile: this.providerProfile(),
+      openAICompatible: {
+        baseUrl: this.settings.directTranslator.baseUrl,
+        model: this.settings.directTranslator.model,
+        apiKeyConfigured: this.settings.directTranslator.apiKey.length > 0,
+      },
+      ocr: {
+        provider: "direct-network-ocr",
+        apiKeyConfigured: this.settings.directOcr.apiKeys.length > 0,
+        apiUrl: this.settings.directOcr.apiUrl,
+        endpoint: this.settings.directOcr.apiUrl,
+        inputMode: this.settings.directOcr.inputMode,
+        input: this.settings.directOcr.inputMode,
+        imageField: this.settings.directOcr.imageField,
+        regionsPaths: this.settings.directOcr.regionsPaths,
+        textPaths: this.settings.directOcr.textPaths,
+        boxPaths: this.settings.directOcr.boxPaths,
+        confidencePaths: this.settings.directOcr.confidencePaths,
+      },
+      configWritable: false,
+    };
+  }
+
+  async models(): Promise<ApiResponse<AvailableModelsResponse>> {
+    if (!this.settings.directTranslator.baseUrl || !this.settings.directTranslator.apiKey) {
+      return { ok: true, models: [this.settings.directTranslator.model], currentModel: this.settings.directTranslator.model };
+    }
+    const models = await this.createTranslator().listModels();
+    return { ok: true, models, currentModel: this.settings.directTranslator.model };
+  }
+
+  async selfTest(): Promise<ApiResponse<SelfTestResponse>> {
+    const steps = [
+      { name: "ocr-config", ok: Boolean(this.settings.directOcr.apiUrl && this.settings.directOcr.apiKeys.length), detail: this.settings.directOcr.apiUrl ? "OCR API URL configured" : "OCR API URL missing" },
+      { name: "translator-config", ok: Boolean(this.settings.directTranslator.baseUrl && this.settings.directTranslator.apiKey && this.settings.directTranslator.model), detail: this.settings.directTranslator.baseUrl ? "Translator API configured" : "Translator API missing" },
+    ];
+    return {
+      ok: true,
+      provider: "extension-direct",
+      providerProfile: this.providerProfile(),
+      targetLanguage: this.settings.targetLanguage,
+      steps,
+      sample: { status: steps.every((step) => step.ok) ? "ready" : "not-configured", regionCount: 0, elapsedMs: 0 },
+    };
+  }
+
+  async submit(task: SurfaceTask, _jobSessionId?: string): Promise<ApiResponse<SubmitSurfaceResponse>> {
+    return this.processTask(task, false);
+  }
+
+  async retranslate(task: SurfaceTask, _jobSessionId?: string): Promise<ApiResponse<SubmitSurfaceResponse>> {
+    return this.processTask(task, true);
+  }
+
+  async cancelSurface(surfaceId: string): Promise<ApiResponse<CancelSurfaceResponse>> {
+    return { ok: true, surfaceId, status: "accepted", cancellable: false };
+  }
+
+  async cancelJobSession(jobSessionId: string): Promise<ApiResponse<CancelJobSessionResponse>> {
+    return { ok: true, jobSessionId, status: "cancelled", cancellable: false };
+  }
+
+  async cacheStats(): Promise<ApiResponse<CacheStatsResponse>> {
+    return { ok: true, stats: await this.ocrCache.stats() };
+  }
+
+  async clearCache(): Promise<ApiResponse<ClearCacheResponse>> {
+    return { ok: true, deleted: await this.ocrCache.clearAll() };
+  }
+
+  async recentDiagnostics(): Promise<ApiResponse<DiagnosticsResponse>> {
+    return { ok: true, records: [] };
+  }
+
+  async clearDiagnostics(): Promise<ApiResponse<ClearDiagnosticsResponse>> {
+    return { ok: true, deleted: 0 };
+  }
+
+  async saveManualOverride(override: ManualOverridePayload): Promise<ApiResponse<SaveManualOverrideResponse>> {
+    return { ok: true, override };
+  }
+
+  private async processTask(task: SurfaceTask, retranslate: boolean): Promise<ApiResponse<SubmitSurfaceResponse>> {
+    try {
+      if (!task.imageData) return { ok: false, error: "Direct plugin mode imageData is required. Enable extension image-data capture or use backend mode for imageUrl fallback." };
+      if (!this.isConfigured()) return { ok: false, error: "Direct plugin mode is not configured. Please set OCR API URL/key and translator API URL/key/model." };
+      const startedAt = Date.now();
+      const imageBytes = dataUrlToBytes(task.imageData);
+      const imageHash = await sha256Hex(imageBytes);
+      const pipeline = new OcrTranslatePipeline({
+        profile: this.providerProfile(),
+        ocr: this.createOcr(),
+        translator: this.createTranslator(),
+        ocrCache: this.ocrCache,
+      });
+      const result = await pipeline.process({
+        imageBytes,
+        imageHash,
+        width: task.naturalSize.width,
+        height: task.naturalSize.height,
+        targetLanguage: task.targetLanguage,
+        sourceLanguage: task.sourceLanguage,
+        retranslate,
+      });
+      const regions = result.regions.map((region) => toOverlayRegion(region));
+      const surfaceResult: SurfaceResult = {
+        surfaceId: task.surfaceId,
+        imageHash,
+        status: regions.length > 0 ? "completed" : "empty",
+        regions,
+        providerProfile: this.providerProfile(),
+        layoutVersion: 1,
+        elapsedMs: Date.now() - startedAt,
+      };
+      return { ok: true, surfaceId: task.surfaceId, status: surfaceResult.status, result: surfaceResult };
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  }
+
+  private createOcr(): GenericNetworkOcrClient {
+    return new GenericNetworkOcrClient({
+      endpoint: this.settings.directOcr.apiUrl,
+      apiKeys: this.settings.directOcr.apiKeys,
+      inputMode: this.settings.directOcr.inputMode,
+      imageFieldName: this.settings.directOcr.imageField,
+      staticFields: parseStaticFields(this.settings.directOcr.staticFieldsText),
+      regionsPathCandidates: this.settings.directOcr.regionsPaths,
+      textPathCandidates: this.settings.directOcr.textPaths,
+      boxPathCandidates: this.settings.directOcr.boxPaths,
+      confidencePathCandidates: this.settings.directOcr.confidencePaths,
+      fetch: this.fetchImpl,
+    });
+  }
+
+  private createTranslator(): OpenAICompatibleTextTranslator {
+    return new OpenAICompatibleTextTranslator({
+      baseUrl: this.settings.directTranslator.baseUrl,
+      apiKey: this.settings.directTranslator.apiKey,
+      model: this.settings.directTranslator.model,
+      fetch: this.fetchImpl,
+    });
+  }
+
+  private isConfigured(): boolean {
+    return Boolean(this.settings.directOcr.apiUrl && this.settings.directOcr.apiKeys.length && this.settings.directTranslator.baseUrl && this.settings.directTranslator.apiKey && this.settings.directTranslator.model);
+  }
+
+  providerProfile(): string {
+    return `direct:${this.settings.directOcr.inputMode}+openai-compatible:${this.settings.directTranslator.model}`;
+  }
+}
+
+function toOverlayRegion(region: TextRegion): OverlayRegion {
+  return {
+    ...region,
+    style: {
+      fontSize: Math.max(14, Math.min(28, Math.round(region.box.height * 0.52))),
+      writingMode: region.orientation === "vertical" ? "vertical-rl" : "horizontal-tb",
+      align: "center",
+      background: "rgba(255,255,255,0.96)",
+      color: "#111",
+    },
+  };
+}
+
+function dataUrlToBytes(dataUrl: string): Uint8Array {
+  const comma = dataUrl.indexOf(",");
+  if (comma < 0) throw new Error("Invalid imageData data URL.");
+  const meta = dataUrl.slice(0, comma);
+  const data = dataUrl.slice(comma + 1);
+  if (!/;base64/i.test(meta)) throw new Error("Direct plugin mode requires base64 imageData.");
+  const binary = atob(data);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
+async function sha256Hex(bytes: Uint8Array): Promise<string> {
+  const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+  const digest = await crypto.subtle.digest("SHA-256", buffer);
+  return Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function parseStaticFields(text: string): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(text);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+  } catch {
+    return {};
+  }
+}
+
+function createExtensionProxyFetch(): FetchLike {
+  if (typeof chrome !== "undefined" && chrome.runtime?.sendMessage) {
+    return (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = await serializeDirectHttpRequest(input, init);
+      const proxied = await chrome.runtime.sendMessage({ source: "umt-content", command: "directHttp", ...request }) as import("../messages.js").UmtDirectHttpResponse;
+      const headers = new Headers(proxied.headers ?? {});
+      if (!proxied.ok) {
+        return new Response(proxied.bodyText ?? JSON.stringify({ error: proxied.error }), { status: proxied.status ?? 599, statusText: proxied.statusText ?? proxied.error, headers });
+      }
+      return new Response(proxied.bodyText, { status: proxied.status, statusText: proxied.statusText, headers });
+    }) as FetchLike;
+  }
+  return globalThis.fetch;
+}
+
+async function serializeDirectHttpRequest(input: RequestInfo | URL, init?: RequestInit): Promise<{ url: string; init: import("../messages.js").UmtDirectHttpRequest["init"] }> {
+  const url = typeof input === "string" || input instanceof URL ? String(input) : input.url;
+  const headers = headersToRecord(init?.headers);
+  const body = init?.body;
+  const serialized: NonNullable<import("../messages.js").UmtDirectHttpRequest["init"]> = { headers };
+  if (init?.method) serialized.method = init.method;
+  if (init?.cache) serialized.cache = init.cache;
+  if (body instanceof FormData) {
+    serialized.formFields = [];
+    for (const [name, value] of body.entries()) {
+      if (typeof value === "string") serialized.formFields.push({ type: "text", name, value });
+      else {
+        const bytes = new Uint8Array(await value.arrayBuffer());
+        serialized.formFields.push({ type: "file", name, fileName: value.name || "file.bin", mimeType: value.type || "application/octet-stream", base64: bytesToBase64(bytes) });
+      }
+    }
+  } else if (typeof body === "string") {
+    serialized.bodyText = body;
+  } else if (body) {
+    serialized.bodyText = String(body);
+  }
+  return { url, init: serialized };
+}
+
+function headersToRecord(headers: HeadersInit | undefined): Record<string, string> {
+  const result: Record<string, string> = {};
+  if (!headers) return result;
+  new Headers(headers).forEach((value, key) => { result[key] = value; });
+  return result;
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+  return btoa(binary);
+}

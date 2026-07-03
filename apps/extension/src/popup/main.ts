@@ -1,14 +1,19 @@
 ﻿import type { ApiResponse, ConfigStatusResponse } from "@umt/shared/protocol";
 import {
-  getEffectiveSiteSettings,
+  DEFAULT_SETTINGS,
+  enableSiteForUrl,
+  isSiteEnabled,
   loadSettings,
+  primaryDomainFromUrl,
+  getEffectiveSiteSettings,
   saveSettings,
+  setTranslationOverlayVisible,
   setSiteSettings,
+  normalizeSettings,
   type ExtensionSettings,
   type SettingsStorageArea,
-  type SiteScope,
 } from "../settings/settings.js";
-import type { UmtContentCommand, UmtContentCommandName } from "../content/messages.js";
+import type { UmtActivateSiteResponse, UmtContentCommand, UmtContentCommandName } from "../content/messages.js";
 
 export interface PopupTab { id?: number; url?: string; }
 
@@ -18,144 +23,302 @@ export interface PopupDeps {
   checkBackend?: (backendUrl: string) => Promise<boolean>;
   configStatus?: (backendUrl: string) => Promise<ApiResponse<ConfigStatusResponse>>;
   sendMessageToTab?: (tabId: number, message: UmtContentCommand) => Promise<void> | void;
-  openOptionsPage?: () => void;
+  activateSite?: (tabId: number, url: string) => Promise<UmtActivateSiteResponse>;
 }
 
 const TEXT = {
-  brand: "漫译",
-  auto: "本站自动翻译",
-  backendOk: "后端已连接",
-  backendBad: "后端离线",
-  unsupported: "当前页面不支持翻译控制",
-  unsupportedPill: "不支持",
-  wholeSite: "全站页面",
-  similarPath: "仅与本页相似路径",
-  target: "翻译至",
-  model: "后端模型",
-  provider: "提供商",
-  range: "翻译图片范围",
-  viewport: "窗口范围",
-  fullPage: "整页",
-  pretranslate: "预翻译下一页",
-  floating: "悬浮翻译按钮",
-  debug: "调试覆盖层",
-  upload: "⇧ 上传翻译",
-  later: "以后支持",
-  translate: "翻译本页",
-  selectRegion: "框选",
-  retranslate: "重翻",
-  refresh: "刷新显示",
-  pause: "暂停",
-  clear: "清理",
-  confirm: "再点确认",
-  settings: "设置",
+  brand: "\u6f2b\u8bd1",
+  enabled: "\u5df2\u542f\u7528",
+  disabled: "\u6b64\u7f51\u7ad9\u672a\u542f\u7528",
+  unsupported: "\u5f53\u524d\u9875\u9762\u4e0d\u652f\u6301",
+  backendOk: "\u540e\u7aef\u5df2\u8fde\u63a5",
+  backendBad: "\u540e\u7aef\u79bb\u7ebf",
+  backendChecking: "\u6b63\u5728\u68c0\u6d4b\u540e\u7aef",
+  directMode: "插件直连",
+  backendMode: "本地后端",
+  apiReady: "API 已配置",
+  apiMissing: "API 未配置",
+  selfTest: "自检",
+  activate: "\u542f\u7528\u6b64\u7f51\u7ad9",
+  translate: "\u7ffb\u8bd1\u672c\u9875",
+  retranslate: "\u91cd\u7ffb\u672c\u9875",
+  pause: "\u6682\u505c",
+  clear: "\u6e05\u9664\u8986\u76d6",
+  cancel: "\u53d6\u6d88\u961f\u5217",
+  select: "\u6846\u9009\u7ffb\u8bd1",
+  overlay: "\u663e\u793a\u7ffb\u8bd1\u6c14\u6ce1",
+  auto: "\u81ea\u52a8\u7ffb\u8bd1\u672c\u7f51\u7ad9",
+  floatingButton: "\u53f3\u4e0b\u89d2\u663e\u793a/\u9690\u85cf\u6309\u94ae",
+  progressWidget: "\u7ffb\u8bd1\u8fdb\u5ea6\u6761",
+  appearance: "\u663e\u793a\u8c03\u6821",
+  manual: "\u624b\u52a8\u64cd\u4f5c",
+  switches: "\u5f00\u5173",
+  maskShape: "\u906e\u7f69\u5f62\u72b6",
+  fontScale: "\u5b57\u4f53",
+  maskScale: "\u906e\u7f69",
+  ellipseX: "\u692d\u5706\u5bbd",
+  ellipseY: "\u692d\u5706\u9ad8",
+  opacity: "\u900f\u660e",
+  resetAppearance: "\u6062\u590d\u9ed8\u8ba4\u663e\u793a",
 };
-
-const LANGUAGE_OPTIONS: Array<[string, string]> = [["zh-CN", "简体中文"], ["zh-TW", "繁體中文"], ["en", "English"], ["ja", "日本語"], ["ko", "한국어"]];
 
 export async function mountPopupPage(root: HTMLElement, deps: PopupDeps = {}): Promise<void> {
   const storage = deps.storage;
   let settings = await loadSettings(storage);
   const tab = await queryActiveTab(deps);
-  let backendOnline = false;
-  let backendConfig: ConfigStatusResponse | null = null;
-  try {
-    backendOnline = await (deps.checkBackend ?? defaultCheckBackend)(settings.backendUrl);
-    if (backendOnline) {
-      const status = await (deps.configStatus ?? defaultConfigStatus)(settings.backendUrl);
-      backendConfig = status.ok ? status : null;
-    }
-  } catch { backendOnline = false; backendConfig = null; }
+  let backendOnline: boolean | null = null;
+  let selfTestSummary = "";
 
   const render = (): void => {
-    const site = getEffectiveSiteSettings(settings, tab?.url ?? "");
-    root.innerHTML = markup(settings, site, backendOnline, backendConfig);
-    bind(site.unsupported);
+    const url = tab?.url ?? "";
+    const domain = primaryDomainFromUrl(url);
+    const unsupported = !domain || !tab?.id;
+    const enabled = !unsupported && isSiteEnabled(settings, url);
+    const effectiveSite = getEffectiveSiteSettings(settings, url);
+    root.innerHTML = markup({ settings, backendOnline, domain, unsupported, enabled, autoTranslate: effectiveSite.autoTranslate, selfTestSummary });
+    bind({ unsupported, enabled });
   };
 
-  const persist = async (next: Partial<ExtensionSettings>): Promise<void> => {
-    settings = { ...settings, ...next };
+  const refreshBackendStatus = async (): Promise<void> => {
+    if (settings.runMode !== "backend") return;
+    try { backendOnline = await (deps.checkBackend ?? defaultCheckBackend)(settings.backendUrl); }
+    catch { backendOnline = false; }
+    render();
+  };
+
+  const persist = async (next: ExtensionSettings): Promise<void> => {
+    settings = next;
     render();
     settings = await saveSettings(settings, storage);
   };
 
-  const persistSite = async (patch: { autoTranslate?: boolean; scope?: SiteScope }): Promise<void> => {
-    if (!tab?.url) return;
-    settings = setSiteSettings(settings, tab.url, patch);
-    render();
-    settings = await saveSettings(settings, storage);
-  };
-
-  const sendCommand = async (command: UmtContentCommandName): Promise<void> => {
+  const sendCommand = async (command: UmtContentCommandName, extra: Partial<UmtContentCommand> = {}): Promise<void> => {
     if (!tab?.id) return;
-    await (deps.sendMessageToTab ?? defaultSendMessageToTab)(tab.id, { source: "umt-popup", command });
+    const message: UmtContentCommand = { source: "umt-popup", command, ...extra };
+    try {
+      await (deps.sendMessageToTab ?? defaultSendMessageToTab)(tab.id, message);
+    } catch (error) {
+      if (!tab.url) throw error;
+      const response = await (deps.activateSite ?? defaultActivateSite)(tab.id, tab.url);
+      if (!response.ok) throw error;
+      await (deps.sendMessageToTab ?? defaultSendMessageToTab)(tab.id, message);
+    }
   };
 
-  const bind = (unsupported: boolean): void => {
-    root.querySelector<HTMLButtonElement>("[data-action='options']")?.addEventListener("click", () => (deps.openOptionsPage ?? defaultOpenOptionsPage)());
-    root.querySelector<HTMLInputElement>("[data-field='site-auto']")?.addEventListener("change", (event) => void persistSite({ autoTranslate: (event.currentTarget as HTMLInputElement).checked }));
-    root.querySelector<HTMLButtonElement>("[data-action='scope-origin']")?.addEventListener("click", () => void persistSite({ scope: "origin" }));
-    root.querySelector<HTMLButtonElement>("[data-action='scope-similarPath']")?.addEventListener("click", () => void persistSite({ scope: "similarPath" }));
-    root.querySelector<HTMLSelectElement>("[data-field='target-language']")?.addEventListener("change", (event) => void persist({ targetLanguage: (event.currentTarget as HTMLSelectElement).value }));
-    root.querySelector<HTMLButtonElement>("[data-action='range-viewport']")?.addEventListener("click", () => void persist({ imageRange: "viewport" }));
-    root.querySelector<HTMLButtonElement>("[data-action='range-fullPage']")?.addEventListener("click", () => void persist({ imageRange: "fullPage" }));
-    root.querySelector<HTMLInputElement>("[data-field='pretranslate']")?.addEventListener("change", (event) => void persist({ pretranslateNextPage: (event.currentTarget as HTMLInputElement).checked }));
-    root.querySelector<HTMLInputElement>("[data-field='floating-button']")?.addEventListener("change", (event) => void persist({ floatingButtonEnabled: (event.currentTarget as HTMLInputElement).checked }));
-    root.querySelector<HTMLInputElement>("[data-field='debug-overlay']")?.addEventListener("change", (event) => void persist({ debugOverlayEnabled: (event.currentTarget as HTMLInputElement).checked }));
-    root.querySelector<HTMLButtonElement>("[data-action='translate']")?.addEventListener("click", () => void sendCommand("translate"));
-    root.querySelector<HTMLButtonElement>("[data-action='select-region']")?.addEventListener("click", () => void sendCommand("selectRegion"));
-    root.querySelector<HTMLButtonElement>("[data-action='retranslate']")?.addEventListener("click", () => void sendCommand("retranslate"));
-    root.querySelector<HTMLButtonElement>("[data-action='refresh']")?.addEventListener("click", () => void sendCommand("refresh"));
-    root.querySelector<HTMLButtonElement>("[data-action='pause']")?.addEventListener("click", () => void sendCommand("togglePause"));
-    root.querySelector<HTMLButtonElement>("[data-action='clear']")?.addEventListener("click", (event) => {
-      const button = event.currentTarget as HTMLButtonElement;
-      if (button.dataset.confirm === "true") { void sendCommand("clearPage"); button.dataset.confirm = "false"; button.textContent = TEXT.clear; }
-      else { button.dataset.confirm = "true"; button.textContent = TEXT.confirm; }
+  const bind = ({ unsupported, enabled }: { unsupported: boolean; enabled: boolean }): void => {
+    root.querySelector<HTMLButtonElement>("[data-action='activate-site']")?.addEventListener("click", async () => {
+      if (!tab?.id || !tab.url) return;
+      const response = await (deps.activateSite ?? defaultActivateSite)(tab.id, tab.url);
+      if (!response.ok) return;
+      settings = enableSiteForUrl(settings, tab.url);
+      settings = await saveSettings(settings, storage);
+      render();
     });
-    if (unsupported) root.querySelectorAll<HTMLInputElement | HTMLButtonElement | HTMLSelectElement>("[data-site-control]").forEach((node) => { node.disabled = true; });
+    root.querySelector<HTMLSelectElement>("[data-field='run-mode']")?.addEventListener("change", (event) => {
+      const runMode = (event.currentTarget as HTMLSelectElement).value === "backend" ? "backend" : "direct";
+      backendOnline = null;
+      selfTestSummary = "";
+      void persist(normalizeSettings({ ...settings, runMode }));
+      if (runMode === "backend") void refreshBackendStatus();
+    });
+    root.querySelector<HTMLButtonElement>("[data-action='self-test']")?.addEventListener("click", () => {
+      selfTestSummary = buildSelfTestSummary(settings);
+      render();
+    });
+    for (const field of DIRECT_CONFIG_FIELDS) {
+      root.querySelector<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>(`[data-field='${field}']`)?.addEventListener("change", () => {
+        void persist(readDirectConfigFromDom(root, settings));
+      });
+    }
+    root.querySelector<HTMLButtonElement>("[data-action='translate']")?.addEventListener("click", () => void sendCommand("translate"));
+    root.querySelector<HTMLButtonElement>("[data-action='retranslate']")?.addEventListener("click", () => void sendCommand("retranslate"));
+    root.querySelector<HTMLButtonElement>("[data-action='pause']")?.addEventListener("click", () => void sendCommand("togglePause"));
+    root.querySelector<HTMLButtonElement>("[data-action='clear']")?.addEventListener("click", () => void sendCommand("clearPage"));
+    root.querySelector<HTMLButtonElement>("[data-action='cancel']")?.addEventListener("click", () => void sendCommand("cancelQueue"));
+    root.querySelector<HTMLButtonElement>("[data-action='select-region']")?.addEventListener("click", () => void sendCommand("selectRegion"));
+    root.querySelector<HTMLInputElement>("[data-field='overlay-visible']")?.addEventListener("change", (event) => {
+      const visible = (event.currentTarget as HTMLInputElement).checked;
+      void persist(setTranslationOverlayVisible(settings, visible));
+      void sendCommand("setOverlayVisibility", { visible });
+    });
+    root.querySelector<HTMLInputElement>("[data-field='auto-translate']")?.addEventListener("change", (event) => {
+      if (!tab?.url) return;
+      const autoTranslate = (event.currentTarget as HTMLInputElement).checked;
+      const next = setSiteSettings(settings, tab.url, { autoTranslate });
+      void persist(next);
+      void sendCommand("applySiteSettings", { autoTranslate });
+    });
+    root.querySelector<HTMLInputElement>("[data-field='floating-button-enabled']")?.addEventListener("change", (event) => {
+      const floatingButtonEnabled = (event.currentTarget as HTMLInputElement).checked;
+      const next = normalizeSettings({ ...settings, floatingButtonEnabled });
+      void persist(next);
+      void sendCommand("applyWidgetSettings", { floatingButtonEnabled });
+    });
+    root.querySelector<HTMLInputElement>("[data-field='progress-widget-enabled']")?.addEventListener("change", (event) => {
+      const progressWidgetEnabled = (event.currentTarget as HTMLInputElement).checked;
+      const next = normalizeSettings({ ...settings, progressWidgetEnabled });
+      void persist(next);
+      void sendCommand("applyWidgetSettings", { progressWidgetEnabled });
+    });
+    root.querySelector<HTMLSelectElement>("[data-field='overlay-mask-shape']")?.addEventListener("change", (event) => {
+      const next = normalizeSettings({ ...settings, overlayAppearance: { ...settings.overlayAppearance, maskShape: (event.currentTarget as HTMLSelectElement).value as never } });
+      void persist(next);
+      void sendCommand("applyOverlayAppearance", { appearance: next.overlayAppearance });
+    });
+    root.querySelector<HTMLButtonElement>("[data-action='reset-appearance']")?.addEventListener("click", () => {
+      const next = normalizeSettings({ ...settings, overlayAppearance: DEFAULT_SETTINGS.overlayAppearance });
+      void persist(next);
+      void sendCommand("applyOverlayAppearance", { appearance: next.overlayAppearance });
+    });
+    for (const field of ["overlay-font-scale", "overlay-mask-scale", "overlay-ellipse-x", "overlay-ellipse-y", "overlay-opacity"] as const) {
+      root.querySelector<HTMLInputElement>(`[data-field='${field}']`)?.addEventListener("input", (event) => {
+        const key = field === "overlay-font-scale" ? "fontScale"
+          : field === "overlay-mask-scale" ? "maskScale"
+            : field === "overlay-ellipse-x" ? "ellipseX"
+              : field === "overlay-ellipse-y" ? "ellipseY"
+                : "opacity";
+        const next = normalizeSettings({ ...settings, overlayAppearance: { ...settings.overlayAppearance, [key]: Number((event.currentTarget as HTMLInputElement).value) } });
+        void persist(next);
+        void sendCommand("applyOverlayAppearance", { appearance: next.overlayAppearance });
+      });
+    }
+    if (unsupported || !enabled) root.querySelectorAll<HTMLButtonElement | HTMLInputElement | HTMLSelectElement>("[data-requires-enabled]").forEach((node) => { node.disabled = true; });
   };
 
   render();
+  void refreshBackendStatus();
 }
 
-function markup(settings: ExtensionSettings, site: ReturnType<typeof getEffectiveSiteSettings>, backendOnline: boolean, backendConfig: ConfigStatusResponse | null): string {
-  const siteStatus = site.unsupported ? TEXT.unsupportedPill : site.autoTranslate ? "ON" : "OFF";
-  const model = backendConfig?.openAICompatible.model || backendConfig?.providerProfile || (backendOnline ? "后端未返回模型" : "后端离线");
-  const provider = backendConfig?.provider ?? (backendOnline ? "unknown" : "offline");
-  return `
-    <style>${styles()}</style>
-    <section class="umt-popup" data-density="compact">
-      <header class="header">
-        <div><div class="brand">${TEXT.brand}</div><div class="subtitle">Universal Manga Translator</div></div>
-        <div class="header-actions"><span class="health ${backendOnline ? "ok" : "bad"}">${backendOnline ? TEXT.backendOk : TEXT.backendBad}</span><button data-action="options" title="${TEXT.settings}">&#9881;</button></div>
-      </header>
-      <section class="card site-card">
-        <div class="row strong"><span>${TEXT.auto} <b class="pill">${siteStatus}</b></span><label class="switch"><input data-field="site-auto" data-site-control type="checkbox" ${site.autoTranslate ? "checked" : ""}><span></span></label></div>
-        <div class="segmented"><button data-action="scope-origin" data-site-control class="${site.scope === "origin" ? "active" : ""}">${TEXT.wholeSite}</button><button data-action="scope-similarPath" data-site-control class="${site.scope === "similarPath" ? "active" : ""}">${TEXT.similarPath}</button></div>
-        ${site.unsupported ? `<div class="unsupported-note">${TEXT.unsupported}</div>` : ""}
-      </section>
-      <section class="card settings-card">
-        ${selectRow(TEXT.target, "target-language", settings.targetLanguage, LANGUAGE_OPTIONS)}
-        <div class="row readonly-row"><span>${TEXT.model}</span><b>${escapeHtml(model)}</b></div>
-        <div class="row readonly-row"><span>${TEXT.provider}</span><b>${escapeHtml(provider)}</b></div>
-        <div class="row compact-row"><span>${TEXT.range}</span><div class="segmented compact"><button data-action="range-viewport" class="${settings.imageRange === "viewport" ? "active" : ""}">${TEXT.viewport}</button><button data-action="range-fullPage" class="${settings.imageRange === "fullPage" ? "active" : ""}">${TEXT.fullPage}</button></div></div>
-        <div class="toggle-grid" data-section="quick-toggles">${toggleRow(TEXT.pretranslate, "pretranslate", settings.pretranslateNextPage)}${toggleRow(TEXT.floating, "floating-button", settings.floatingButtonEnabled)}${toggleRow(TEXT.debug, "debug-overlay", settings.debugOverlayEnabled)}</div>
-      </section>
-      <section class="card upload disabled"><span>${TEXT.upload}</span><span>${TEXT.later}</span></section>
-      <footer class="actions compact-actions"><button data-action="translate">${TEXT.translate}</button><button data-action="select-region">${TEXT.selectRegion}</button><button data-action="retranslate">${TEXT.retranslate}</button><button data-action="refresh">${TEXT.refresh}</button><button data-action="pause">${TEXT.pause}</button><button data-action="clear" title="${TEXT.clear}">${TEXT.clear}</button></footer>
-    </section>`;
+function markup(input: { settings: ExtensionSettings; backendOnline: boolean | null; domain: string | null; unsupported: boolean; enabled: boolean; autoTranslate: boolean; selfTestSummary: string }): string {
+  const { settings, backendOnline, domain, unsupported, enabled, autoTranslate, selfTestSummary } = input;
+  const status = unsupported ? TEXT.unsupported : enabled ? TEXT.enabled : TEXT.disabled;
+  const directReady = Boolean(settings.directOcr.apiUrl && settings.directOcr.apiKeys.length && settings.directTranslator.baseUrl && settings.directTranslator.apiKey && settings.directTranslator.model);
+  const healthClass = settings.runMode === "direct" ? directReady ? "ok" : "bad" : backendOnline === true ? "ok" : backendOnline === null ? "checking" : "bad";
+  const healthText = settings.runMode === "direct" ? `${TEXT.directMode} · ${directReady ? TEXT.apiReady : TEXT.apiMissing}` : backendOnline === true ? TEXT.backendOk : backendOnline === null ? TEXT.backendChecking : TEXT.backendBad;
+  const directStatus = `OCR ${settings.directOcr.apiKeys.length} key · ${escapeHtml(settings.directTranslator.model || "未选模型")}`;
+  return `<style>${styles()}</style><section class="umt-popup">
+    <header class="topbar"><div class="brand"><span class="logo">译</span><div><b>${TEXT.brand}</b><small>${escapeHtml(domain ?? "\u975e\u7f51\u9875")}</small></div></div><span class="health ${healthClass}">${healthText}</span></header>
+    <main class="card site-card"><div><div class="site-state ${enabled ? "on" : "off"}">${status}</div><small>${enabled ? "此网站已允许插件运行" : "启用后才会在该网站注入功能"}</small></div>${!enabled && !unsupported ? `<button class="primary" data-action="activate-site">${TEXT.activate}</button>` : ""}</main>
+    <section class="card mode-card"><label><span>运行模式</span><select data-field="run-mode"><option value="direct" ${settings.runMode === "direct" ? "selected" : ""}>${TEXT.directMode}</option><option value="backend" ${settings.runMode === "backend" ? "selected" : ""}>${TEXT.backendMode}</option></select></label><small>${settings.runMode === "direct" ? directStatus : escapeHtml(settings.backendUrl)}</small><button class="muted" data-action="self-test">${TEXT.selfTest}</button>${selfTestSummary ? `<div class="self-test">${escapeHtml(selfTestSummary)}</div>` : ""}</section>
+    ${settings.runMode === "direct" ? directConfigMarkup(settings) : ""}
+    <section class="card controls">
+      <button class="primary wide" data-action="translate" data-requires-enabled>${TEXT.translate}</button>
+      <button data-action="retranslate" data-requires-enabled>${TEXT.retranslate}</button>
+      <button data-action="select-region" data-requires-enabled>${TEXT.select}</button>
+      <button data-action="pause" data-requires-enabled>${TEXT.pause}</button>
+      <button class="muted" data-action="clear" data-requires-enabled>${TEXT.clear}</button>
+      <button class="danger" data-action="cancel" data-requires-enabled>${TEXT.cancel}</button>
+    </section>
+    <section class="card toggles"><b>${TEXT.switches}</b>
+      ${toggle(TEXT.overlay, "overlay-visible", settings.translationOverlayVisible, true)}
+      ${toggle(TEXT.auto, "auto-translate", autoTranslate, true)}
+      ${toggle(TEXT.floatingButton, "floating-button-enabled", settings.floatingButtonEnabled, true)}
+      ${toggle(TEXT.progressWidget, "progress-widget-enabled", settings.progressWidgetEnabled, true)}
+    </section>
+    <section class="card appearance" data-requires-enabled>
+      <b>${TEXT.appearance}</b>
+      <label><span>${TEXT.maskShape}</span><select data-field="overlay-mask-shape" data-requires-enabled>${shapeOptions(settings.overlayAppearance.maskShape)}</select></label>
+      ${range(TEXT.fontScale, "overlay-font-scale", settings.overlayAppearance.fontScale, 0.75, 1.3)}
+      ${range(TEXT.maskScale, "overlay-mask-scale", settings.overlayAppearance.maskScale, 0.2, 2)}
+      ${range(TEXT.ellipseX, "overlay-ellipse-x", settings.overlayAppearance.ellipseX, 35, 55, 1)}
+      ${range(TEXT.ellipseY, "overlay-ellipse-y", settings.overlayAppearance.ellipseY, 30, 55, 1)}
+      ${range(TEXT.opacity, "overlay-opacity", settings.overlayAppearance.opacity, 0.35, 1)}
+      <button class="muted wide" data-action="reset-appearance" data-requires-enabled>${TEXT.resetAppearance}</button>
+    </section>
+  </section>`;
 }
 
-function selectRow(label: string, field: string, value: string, options: Array<[string, string]>): string {
-  return `<label class="row"><span>${label}</span><select data-field="${field}">${options.map(([optionValue, text]) => `<option value="${optionValue}" ${optionValue === value ? "selected" : ""}>${text}</option>`).join("")}</select></label>`;
+function toggle(label: string, field: string, checked: boolean, requiresEnabled: boolean): string {
+  return `<label class="toggle"><span>${label}</span><input data-field="${field}" ${requiresEnabled ? "data-requires-enabled" : ""} type="checkbox" ${checked ? "checked" : ""}></label>`;
 }
 
-function toggleRow(label: string, field: string, checked: boolean): string {
-  return `<label class="row"><span>${label}</span><span class="switch"><input data-field="${field}" type="checkbox" ${checked ? "checked" : ""}><span></span></span></label>`;
+function shapeOptions(selected: string): string {
+  const items = [["auto", "自动"], ["ellipse", "椭圆"], ["rounded", "圆角"], ["transparent", "透明"]];
+  return items.map(([value, label]) => `<option value="${value}" ${value === selected ? "selected" : ""}>${label}</option>`).join("");
+}
+
+function range(label: string, field: string, value: number, min: number, max: number, step = 0.05): string {
+  return `<label class="range"><span>${label}<em>${value.toFixed(step >= 1 ? 0 : 2)}</em></span><input data-field="${field}" data-requires-enabled type="range" min="${min}" max="${max}" step="${step}" value="${value}"></label>`;
+}
+
+const DIRECT_CONFIG_FIELDS = [
+  "direct-ocr-url",
+  "direct-ocr-keys",
+  "direct-ocr-input-mode",
+  "direct-ocr-image-field",
+  "direct-translator-base-url",
+  "direct-translator-api-key",
+  "direct-translator-model",
+  "direct-ocr-regions-paths",
+  "direct-ocr-text-paths",
+  "direct-ocr-box-paths",
+  "direct-ocr-confidence-paths",
+  "direct-ocr-static-fields",
+] as const;
+
+function directConfigMarkup(settings: ExtensionSettings): string {
+  return `<details class="card direct-config" open>
+    <summary>直连 API 配置</summary>
+    <label><span>OCR API URL</span><input data-field="direct-ocr-url" type="url" placeholder="https://example.com/ocr" value="${escapeAttr(settings.directOcr.apiUrl)}"></label>
+    <label><span>OCR API Keys</span><textarea data-field="direct-ocr-keys" rows="2" placeholder="一行一个 key">${escapeHtml(settings.directOcr.apiKeys.join("\n"))}</textarea></label>
+    <div class="config-grid">
+      <label><span>OCR 输入</span><select data-field="direct-ocr-input-mode"><option value="image_base64" ${settings.directOcr.inputMode === "image_base64" ? "selected" : ""}>image_base64</option><option value="file" ${settings.directOcr.inputMode === "file" ? "selected" : ""}>file</option></select></label>
+      <label><span>图片字段</span><input data-field="direct-ocr-image-field" value="${escapeAttr(settings.directOcr.imageField)}"></label>
+    </div>
+    <label><span>翻译 Base URL</span><input data-field="direct-translator-base-url" type="url" placeholder="https://api.openai.com/v1" value="${escapeAttr(settings.directTranslator.baseUrl)}"></label>
+    <div class="config-grid">
+      <label><span>翻译 API Key</span><input data-field="direct-translator-api-key" type="password" autocomplete="off" placeholder="sk-..." value="${escapeAttr(settings.directTranslator.apiKey)}"></label>
+      <label><span>模型</span><input data-field="direct-translator-model" placeholder="gpt-5.4-mini" value="${escapeAttr(settings.directTranslator.model)}"></label>
+    </div>
+    <details class="advanced-config"><summary>高级字段映射</summary>
+      <label><span>regionsPaths</span><textarea data-field="direct-ocr-regions-paths" rows="2">${escapeHtml(settings.directOcr.regionsPaths.join("\n"))}</textarea></label>
+      <label><span>textPaths</span><textarea data-field="direct-ocr-text-paths" rows="2">${escapeHtml(settings.directOcr.textPaths.join("\n"))}</textarea></label>
+      <label><span>boxPaths</span><textarea data-field="direct-ocr-box-paths" rows="2">${escapeHtml(settings.directOcr.boxPaths.join("\n"))}</textarea></label>
+      <label><span>confidencePaths</span><textarea data-field="direct-ocr-confidence-paths" rows="2">${escapeHtml(settings.directOcr.confidencePaths.join("\n"))}</textarea></label>
+      <label><span>staticFields JSON</span><textarea data-field="direct-ocr-static-fields" rows="2">${escapeHtml(settings.directOcr.staticFieldsText)}</textarea></label>
+    </details>
+  </details>`;
+}
+
+function readDirectConfigFromDom(root: HTMLElement, settings: ExtensionSettings): ExtensionSettings {
+  const value = (field: string) => root.querySelector<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>(`[data-field='${field}']`)?.value ?? "";
+  return normalizeSettings({
+    ...settings,
+    directOcr: {
+      ...settings.directOcr,
+      apiUrl: value("direct-ocr-url"),
+      apiKeys: splitLines(value("direct-ocr-keys")),
+      inputMode: value("direct-ocr-input-mode") === "file" ? "file" : "image_base64",
+      imageField: value("direct-ocr-image-field"),
+      regionsPaths: splitLines(value("direct-ocr-regions-paths")),
+      textPaths: splitLines(value("direct-ocr-text-paths")),
+      boxPaths: splitLines(value("direct-ocr-box-paths")),
+      confidencePaths: splitLines(value("direct-ocr-confidence-paths")),
+      staticFieldsText: value("direct-ocr-static-fields"),
+    },
+    directTranslator: {
+      baseUrl: value("direct-translator-base-url"),
+      apiKey: value("direct-translator-api-key"),
+      model: value("direct-translator-model"),
+    },
+  });
+}
+
+function splitLines(value: string): string[] {
+  return value.split(/[\n,;]+/).map((item) => item.trim()).filter(Boolean);
+}
+
+function buildSelfTestSummary(settings: ExtensionSettings): string {
+  if (settings.runMode === "backend") return "后端模式：请在桌面软件里查看完整自检。";
+  const parts = [
+    settings.directOcr.apiUrl && settings.directOcr.apiKeys.length ? `OCR 已配置（${settings.directOcr.apiKeys.length} 个）` : "OCR 未配置",
+    settings.directTranslator.baseUrl && settings.directTranslator.apiKey && settings.directTranslator.model ? `翻译 API 已配置（${settings.directTranslator.model}）` : "翻译 API 未配置",
+  ];
+  return parts.join("；");
 }
 
 function styles(): string {
-  return `.umt-popup{box-sizing:border-box;width:350px;padding:10px;background:linear-gradient(180deg,#f8fbff,#eef5fb);color:#071833}.header{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}.brand{font-size:20px;font-weight:900;color:#ff6a1a}.subtitle{font-size:10px;color:#607086}.header-actions{display:flex;gap:6px;align-items:center}.header button,.actions button,.segmented button{border:1px solid #c8d5e5;background:#fff;border-radius:10px;padding:6px 9px;color:#10223b;box-shadow:0 1px 5px rgba(30,55,90,.07);cursor:pointer}.health{font-size:11px;border-radius:999px;padding:4px 7px;background:#e8eef6;color:#52657d}.health.ok{background:#e9f8ef;color:#19703b}.health.bad{background:#fff1ed;color:#b64215}.card{background:rgba(255,255,255,.94);border:1px solid #cbd8e8;border-radius:14px;margin:8px 0;box-shadow:0 5px 16px rgba(25,54,89,.08);overflow:hidden}.site-card{padding:10px}.unsupported-note{font-size:12px;color:#b64215;margin-top:7px;font-weight:700}.row{min-height:38px;padding:8px 10px;display:flex;align-items:center;justify-content:space-between;gap:10px;border-bottom:1px solid #e3ebf4;font-size:13px}.row:last-child{border-bottom:0}.readonly-row b{font-size:12px;max-width:178px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#0f172a}.strong{font-size:16px;font-weight:900;border-bottom:0;padding:0 0 9px}.pill{font-size:11px;color:#61738a;background:#eef3f8;border-radius:999px;padding:4px 9px;margin-left:6px}.segmented{display:grid;grid-template-columns:1fr 1.25fr;gap:6px;align-items:center}.segmented.compact{display:flex;gap:0;background:#edf3f9;border:1px solid #c8d5e5;border-radius:999px;padding:2px}.segmented.compact button{box-shadow:none;border:0;border-radius:999px;background:transparent;padding:5px 8px}.segmented button.active{border-color:#ff7a1a;color:#d84f00;background:#fff7f1}.segmented.compact button.active{background:#ff6a1a;color:#fff}.settings-card select{max-width:154px}.compact-row{min-height:36px}select{min-width:138px;border:1px solid #bdcbe0;border-radius:10px;background:#f8fbff;padding:6px 8px}.switch{position:relative;display:inline-flex}.switch input{position:absolute;opacity:0}.switch span{width:42px;height:24px;border-radius:999px;background:#c8d2df;display:block;position:relative}.switch span::after{content:"";position:absolute;width:20px;height:20px;left:2px;top:2px;background:#fff;border-radius:50%;box-shadow:0 2px 6px rgba(0,0,0,.18);transition:.15s}.switch input:checked+span{background:#ff6a1a}.switch input:checked+span::after{transform:translateX(18px)}.toggle-grid{display:grid;grid-template-columns:1fr 1fr 1fr}.toggle-grid .row{border-bottom:0}.upload{padding:10px 12px;display:flex;justify-content:space-between;font-size:13px;font-weight:800}.upload.disabled{color:#607086}.actions{display:grid;grid-template-columns:1fr .65fr .65fr .8fr .65fr 42px;gap:5px;margin-top:8px}.actions button:first-child{background:#ff6a1a;color:#fff;border-color:#ff6a1a;font-weight:900}button:disabled,select:disabled,input:disabled+span{opacity:.55;cursor:not-allowed}`;
+  return `.umt-popup{box-sizing:border-box;width:320px;max-height:600px;overflow:auto;padding:12px;background:linear-gradient(180deg,#fff7ed 0,#f8fbff 44px,#f8fbff 100%);color:#10223b;font:13px system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.topbar{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}.brand{display:flex;align-items:center;gap:8px}.logo{display:grid;place-items:center;width:32px;height:32px;border-radius:12px;background:linear-gradient(135deg,#ff7a1a,#ff4d00);color:#fff;font-weight:900;box-shadow:0 8px 18px rgba(255,96,20,.24)}header b{display:block;color:#172033;font-size:18px;line-height:1}header small{display:block;max-width:155px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#64748b;margin-top:3px}.health{border-radius:999px;padding:5px 8px;background:#fee2e2;color:#991b1b;font-size:12px;font-weight:800;white-space:nowrap}.health.ok{background:#dcfce7;color:#166534}.health.checking{background:#e0f2fe;color:#075985}.card{background:rgba(255,255,255,.95);border:1px solid #dbe6f3;border-radius:16px;padding:10px;margin:8px 0;box-shadow:0 8px 22px rgba(30,55,90,.08)}.site-card{display:flex;justify-content:space-between;align-items:center;gap:10px}.site-card small{color:#64748b}.site-state{font-weight:900;margin-bottom:3px}.site-state.on{color:#15803d}.site-state.off{color:#b45309}button{border:1px solid #cbd5e1;border-radius:12px;background:#fff;padding:8px 9px;cursor:pointer;font-weight:850;color:#10223b;transition:transform .12s ease,box-shadow .12s ease,background .12s ease}button:hover:not(:disabled){transform:translateY(-1px);box-shadow:0 6px 14px rgba(15,23,42,.10)}.primary{background:linear-gradient(135deg,#ff7a1a,#ff4d00);border-color:#ff6a1a;color:#fff}.wide{grid-column:1/-1}.muted{background:#f8fafc;color:#475569}.danger{background:#fff1f2;border-color:#fecdd3;color:#be123c}.controls{display:grid;grid-template-columns:1fr 1fr;gap:7px}.toggles,.appearance,.mode-card,.direct-config,.advanced-config{display:grid;gap:9px}.toggles>b,.appearance>b,summary{font-size:13px;color:#0f172a;font-weight:900;cursor:pointer}.toggle{display:flex;align-items:center;justify-content:space-between;font-weight:800}.toggle input{width:34px;height:19px;accent-color:#ff6a1a}.appearance label,.mode-card label,.direct-config label,.advanced-config label{display:grid;gap:4px;font-weight:750}.appearance label>span,.range>span,.direct-config label>span{display:flex;justify-content:space-between;color:#334155}.appearance em{font-style:normal;color:#64748b}select,input[type=url],input[type=password],input:not([type]),textarea{box-sizing:border-box;width:100%;border:1px solid #cbd5e1;border-radius:10px;padding:7px;background:#fff;color:#10223b;font-weight:750}textarea{resize:vertical;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:12px}.config-grid{display:grid;grid-template-columns:1fr 1fr;gap:7px}input[type=range]{width:100%;accent-color:#ff6a1a}button:disabled,input:disabled,select:disabled{opacity:.42;cursor:not-allowed;transform:none;box-shadow:none}`;
 }
 
 async function queryActiveTab(deps: PopupDeps): Promise<PopupTab | null> {
@@ -163,25 +326,24 @@ async function queryActiveTab(deps: PopupDeps): Promise<PopupTab | null> {
   const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
   const tab = tabs[0];
   if (!tab) return null;
-  const result: PopupTab = {};
-  if (typeof tab.id === "number") result.id = tab.id;
-  if (typeof tab.url === "string") result.url = tab.url;
-  return result;
+  return { ...(typeof tab.id === "number" ? { id: tab.id } : {}), ...(typeof tab.url === "string" ? { url: tab.url } : {}) };
 }
 
 async function defaultCheckBackend(backendUrl: string): Promise<boolean> {
-  const response = await fetch(`${backendUrl}/health`, { cache: "no-store" });
-  return response.ok;
-}
-
-async function defaultConfigStatus(backendUrl: string): Promise<ApiResponse<ConfigStatusResponse>> {
-  const response = await fetch(`${backendUrl.replace(/\/$/, "")}/v1/config/status`, { cache: "no-store" });
-  return (await response.json()) as ApiResponse<ConfigStatusResponse>;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 900);
+  try {
+    const response = await fetch(`${backendUrl}/health`, { cache: "no-store", signal: controller.signal });
+    return response.ok;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 async function defaultSendMessageToTab(tabId: number, message: UmtContentCommand): Promise<void> { await chrome.tabs.sendMessage(tabId, message); }
-function defaultOpenOptionsPage(): void { chrome.runtime.openOptionsPage(); }
+async function defaultActivateSite(tabId: number, url: string): Promise<UmtActivateSiteResponse> { return await chrome.runtime.sendMessage({ source: "umt-popup", command: "activateSite", tabId, url }); }
 function escapeHtml(value: string): string { return value.replace(/[&<>"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;" })[char] ?? char); }
+function escapeAttr(value: string): string { return escapeHtml(value); }
 
 if (typeof document !== "undefined") {
   document.addEventListener("DOMContentLoaded", () => {
@@ -189,3 +351,7 @@ if (typeof document !== "undefined") {
     if (root) void mountPopupPage(root);
   });
 }
+
+
+
+

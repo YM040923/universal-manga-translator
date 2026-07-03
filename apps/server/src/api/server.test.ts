@@ -1,4 +1,4 @@
-import test from "node:test";
+﻿import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -6,8 +6,35 @@ import { join } from "node:path";
 import { ManualOverrideStore } from "../cache/manual-overrides.js";
 import { openDatabase } from "../cache/db.js";
 import { SurfaceCache } from "../cache/surface-cache.js";
+import { OcrCache } from "../cache/ocr-cache.js";
 import { buildServer } from "./server.js";
+import type { VisionProvider } from "../providers/provider.js";
 
+
+function testServerOptions(overrides: Partial<{ provider: string; targetLanguage: string; visionProvider: VisionProvider }> = {}) {
+  return {
+    provider: overrides.provider ?? "test-pipeline",
+    targetLanguage: overrides.targetLanguage ?? "zh-CN",
+    visionProvider: overrides.visionProvider ?? testProvider(),
+  };
+}
+
+function testProvider(): VisionProvider {
+  return {
+    profile: "test-pipeline",
+    async process(input) {
+      return [{
+        id: "r1",
+        box: { x: Math.round(input.width * 0.2), y: Math.round(input.height * 0.1), width: Math.round(input.width * 0.45), height: Math.round(input.height * 0.18) },
+        sourceText: "Hello",
+        translatedText: "测试译文",
+        confidence: 0.99,
+        orientation: "horizontal",
+        kind: "dialogue",
+      }];
+    },
+  };
+}
 const task = {
   surfaceId: "surface-1",
   pageUrl: "https://example.test/chapter/1",
@@ -23,15 +50,40 @@ const task = {
 } as const;
 
 test("returns health information", async () => {
-  const app = await buildServer({ provider: "mock", targetLanguage: "zh-CN" });
+  const app = await buildServer(testServerOptions());
   const response = await app.inject({ method: "GET", url: "/health" });
   assert.equal(response.statusCode, 200);
-  assert.deepEqual(response.json(), { ok: true, provider: "mock", targetLanguage: "zh-CN" });
+  assert.deepEqual(response.json(), { ok: true, provider: "test-pipeline", targetLanguage: "zh-CN" });
+  await app.close();
+});
+
+test("backend no longer exposes a duplicate web admin console", async () => {
+  const app = await buildServer(testServerOptions());
+
+  const html = await app.inject({ method: "GET", url: "/admin" });
+  const script = await app.inject({ method: "GET", url: "/admin/app.js" });
+
+  assert.equal(html.statusCode, 404);
+  assert.equal(script.statusCode, 404);
+  await app.close();
+});
+
+test("server accepts large imageData JSON bodies from extension background proxy", async () => {
+  const app = await buildServer({
+    provider: "large-body",
+    targetLanguage: "zh-CN",
+    visionProvider: { profile: "large-body", process: async () => [] },
+  });
+  const largeTask = { ...task, imageData: `data:image/png;base64,${"a".repeat(2_000_000)}` };
+
+  const response = await app.inject({ method: "POST", url: "/v1/surfaces/submit", payload: { task: largeTask } });
+
+  assert.notEqual(response.statusCode, 413);
   await app.close();
 });
 
 test("processes a submitted surface with mock provider", async () => {
-  const app = await buildServer({ provider: "mock", targetLanguage: "zh-CN" });
+  const app = await buildServer(testServerOptions());
   const response = await app.inject({ method: "POST", url: "/v1/surfaces/submit", payload: { task } });
   assert.equal(response.statusCode, 200);
   assert.equal(response.json().result.regions[0].translatedText.length > 0, true);
@@ -45,7 +97,7 @@ test("second identical submit is served from persistent cache", async () => {
   try {
     db = openDatabase(join(dir, "cache.sqlite"));
     const surfaceCache = new SurfaceCache(db);
-    app = await buildServer({ provider: "mock", targetLanguage: "zh-CN", surfaceCache });
+    app = await buildServer({ ...testServerOptions(), surfaceCache });
     const first = await app.inject({ method: "POST", url: "/v1/surfaces/submit", payload: { task } });
     const second = await app.inject({ method: "POST", url: "/v1/surfaces/submit", payload: { task: { ...task, surfaceId: "surface-2" } } });
     assert.equal(first.json().status, "completed");
@@ -120,7 +172,7 @@ test("manual override API saves and applies edited text to submit results", asyn
   let app: Awaited<ReturnType<typeof buildServer>> | undefined;
   try {
     db = openDatabase(join(dir, "cache.sqlite"));
-    app = await buildServer({ provider: "mock", targetLanguage: "zh-CN", surfaceCache: new SurfaceCache(db), manualOverrideStore: new ManualOverrideStore(db) });
+    app = await buildServer({ ...testServerOptions(), surfaceCache: new SurfaceCache(db), manualOverrideStore: new ManualOverrideStore(db) });
     const first = await app.inject({ method: "POST", url: "/v1/surfaces/submit", payload: { task } });
     const imageHash = first.json().result.imageHash;
 
@@ -136,49 +188,66 @@ test("manual override API saves and applies edited text to submit results", asyn
     rmSync(dir, { recursive: true, force: true });
   }
 });
-test("config status exposes provider details without leaking API key", async () => {
+test("config status exposes generic network OCR details without leaking API keys", async () => {
   const app = await buildServer({
-    provider: "openai-compatible",
+    provider: "network-ocr-openai-compatible",
     targetLanguage: "zh-CN",
-    visionProvider: { profile: "openai-compatible:gpt-4.1-mini", process: async () => [] },
-    openAICompatibleBaseUrl: "https://api.openai.com/v1",
-    openAIModel: "gpt-4.1-mini",
-    openAIImageInputFormat: "image-field",
+    visionProvider: { profile: "network-ocr:image_base64+openai-compatible:gpt-5.4-mini", process: async () => [] },
+    openAICompatibleBaseUrl: "https://api.example.com/v1",
+    openAIModel: "gpt-5.4-mini",
+    openAIApiKeyConfigured: true,
+    ocrProvider: "network-ocr",
+    ocrApiKeyConfigured: true,
+    ocrApiUrl: "https://uapis.cn/api/v1/image/ocr",
+    ocrInputMode: "image_base64",
+    ocrImageField: "image_base64",
+    ocrStaticFields: { need_location: true },
+    ocrRegionsPaths: ["words_result", "data.words_result"],
+    ocrTextPaths: ["words", "text"],
+    ocrBoxPaths: ["location", "box"],
+    ocrConfidencePaths: ["score", "confidence"],
+    ocrKeyStatus: {
+      count: 2,
+      available: 1,
+      keys: [
+        { label: "key#1", state: "blocked", failures: 1, lastError: "quota exhausted" },
+        { label: "key#2", state: "ready", failures: 0 },
+      ],
+    },
     maxImageLongEdge: 1600,
     jpegQuality: 0.75,
-    openAIApiKeyConfigured: true,
   });
 
   const response = await app.inject({ method: "GET", url: "/v1/config/status" });
 
   assert.equal(response.statusCode, 200);
-  assert.deepEqual(response.json(), {
-    ok: true,
-    provider: "openai-compatible",
-    targetLanguage: "zh-CN",
-    providerProfile: "openai-compatible:gpt-4.1-mini",
-    openAICompatible: {
-      baseUrl: "https://api.openai.com/v1",
-      model: "gpt-4.1-mini",
-      apiKeyConfigured: true,
-      imageInputFormat: "image-field",
-    },
-    image: {
-      maxLongEdge: 1600,
-      jpegQuality: 0.75,
-    },
-    configWritable: false,
+  const body = response.json();
+  assert.equal(body.provider, "network-ocr-openai-compatible");
+  assert.equal(body.providerProfile, "network-ocr:image_base64+openai-compatible:gpt-5.4-mini");
+  assert.equal(body.ocr.provider, "network-ocr");
+  assert.equal(body.ocr.apiUrl, "https://uapis.cn/api/v1/image/ocr");
+  assert.equal(body.ocr.inputMode, "image_base64");
+  assert.equal(body.ocr.imageField, "image_base64");
+  assert.deepEqual(body.ocr.staticFields, { need_location: true });
+  assert.deepEqual(body.ocr.keyPool, {
+    count: 2,
+    available: 1,
+    keys: [
+      { label: "key#1", state: "blocked", failures: 1, lastError: "quota exhausted" },
+      { label: "key#2", state: "ready", failures: 0 },
+    ],
   });
-  assert.equal(JSON.stringify(response.json()).includes("sk-"), false);
+  assert.equal(JSON.stringify(body).includes("uapi-"), false);
+  assert.equal(JSON.stringify(body).includes("sk-"), false);
   await app.close();
 });
 
 test("models endpoint exposes provider model list and current model", async () => {
   const app = await buildServer({
-    provider: "openai-compatible",
+    provider: "network-ocr-openai-compatible",
     targetLanguage: "zh-CN",
     openAIModel: "gpt-5.4-mini",
-    visionProvider: { profile: "openai-compatible:gpt-5.4-mini", listModels: async () => ["gpt-5.4-mini", "gpt-5.5"], process: async () => [] },
+    visionProvider: { profile: "network-ocr:image_base64+openai-compatible:gpt-5.4-mini", listModels: async () => ["gpt-5.4-mini", "gpt-5.5"], process: async () => [] },
   });
 
   const response = await app.inject({ method: "GET", url: "/v1/models" });
@@ -188,11 +257,92 @@ test("models endpoint exposes provider model list and current model", async () =
   await app.close();
 });
 
+test("config endpoint can update writable generic OCR runtime and provider state", async () => {
+  let activeProvider = {
+    profile: "network-ocr:image_base64+openai-compatible:gpt-5.4-mini",
+    listModels: async () => ["gpt-5.4-mini", "gpt-5.5"],
+    process: async () => [],
+  };
+  const app = await buildServer({
+    provider: "network-ocr-openai-compatible",
+    targetLanguage: "zh-CN",
+    openAICompatibleBaseUrl: "https://old.example/v1",
+    openAIModel: "gpt-5.4-mini",
+    openAIApiKeyConfigured: true,
+    visionProvider: activeProvider,
+    ocrProvider: "network-ocr",
+    ocrApiUrl: "https://old-ocr.example/ocr",
+    ocrInputMode: "image_base64",
+    ocrImageField: "image_base64",
+    ocrStaticFields: {},
+    ocrRegionsPaths: ["words_result"],
+    ocrTextPaths: ["words"],
+    ocrBoxPaths: ["location"],
+    ocrConfidencePaths: ["score"],
+    updateConfig: async (patch) => {
+      assert.equal(patch.provider, "network-ocr-openai-compatible");
+      assert.equal(patch.openAICompatible?.model, "gpt-5.5");
+      assert.equal(patch.ocr?.apiUrl, "https://ocr.example.test/ocr");
+      activeProvider = {
+        profile: "network-ocr:file+openai-compatible:gpt-5.5",
+        listModels: async () => ["gpt-5.4-mini", "gpt-5.5"],
+        process: async () => [],
+      };
+      return {
+        provider: "network-ocr-openai-compatible",
+        targetLanguage: "zh-CN",
+        visionProvider: activeProvider,
+        openAICompatibleBaseUrl: "https://api.example.com/v1",
+        openAIModel: "gpt-5.5",
+        openAIApiKeyConfigured: true,
+        ocrProvider: "network-ocr",
+        ocrApiKeyConfigured: true,
+        ocrApiUrl: "https://ocr.example.test/ocr",
+        ocrEndpoint: "https://ocr.example.test/ocr",
+        ocrInputMode: "file",
+        ocrInput: "file",
+        ocrImageField: "file",
+        ocrStaticFields: { need_location: true },
+        ocrRegionsPaths: ["data.words_result"],
+        ocrTextPaths: ["text"],
+        ocrBoxPaths: ["box"],
+        ocrConfidencePaths: ["confidence"],
+        maxImageLongEdge: 1600,
+        jpegQuality: 0.75,
+        configWritable: true,
+      };
+    },
+  });
+
+  const updated = await app.inject({
+    method: "POST",
+    url: "/v1/config",
+    payload: {
+      provider: "network-ocr-openai-compatible",
+      openAICompatible: { baseUrl: "https://api.example.com/v1", model: "gpt-5.5" },
+      ocr: { apiUrl: "https://ocr.example.test/ocr", inputMode: "file", imageField: "file" },
+    },
+  });
+  const status = await app.inject({ method: "GET", url: "/v1/config/status" });
+  const health = await app.inject({ method: "GET", url: "/health" });
+  const models = await app.inject({ method: "GET", url: "/v1/models" });
+
+  assert.equal(updated.statusCode, 200);
+  assert.equal(updated.json().status.provider, "network-ocr-openai-compatible");
+  assert.equal(updated.json().status.providerProfile, "network-ocr:file+openai-compatible:gpt-5.5");
+  assert.equal(updated.json().status.configWritable, true);
+  assert.equal(status.json().provider, "network-ocr-openai-compatible");
+  assert.equal(status.json().openAICompatible.model, "gpt-5.5");
+  assert.equal(status.json().ocr.apiUrl, "https://ocr.example.test/ocr");
+  assert.deepEqual(health.json(), { ok: true, provider: "network-ocr-openai-compatible", targetLanguage: "zh-CN" });
+  assert.deepEqual(models.json(), { ok: true, models: ["gpt-5.4-mini", "gpt-5.5"], currentModel: "gpt-5.5" });
+  await app.close();
+});
+
 test("clear diagnostics endpoint calls diagnostics clearer", async () => {
   let called = false;
   const app = await buildServer({
-    provider: "mock",
-    targetLanguage: "zh-CN",
+    ...testServerOptions(),
     diagnosticsClearer: () => { called = true; return 123; },
   });
 
@@ -210,7 +360,7 @@ test("cache management API reports stats and clears cache", async () => {
   let app: Awaited<ReturnType<typeof buildServer>> | undefined;
   try {
     db = openDatabase(join(dir, "cache.sqlite"));
-    app = await buildServer({ provider: "mock", targetLanguage: "zh-CN", surfaceCache: new SurfaceCache(db) });
+    app = await buildServer({ ...testServerOptions(), surfaceCache: new SurfaceCache(db) });
     await app.inject({ method: "POST", url: "/v1/surfaces/submit", payload: { task } });
 
     const stats = await app.inject({ method: "GET", url: "/v1/cache/stats" });
@@ -227,6 +377,70 @@ test("cache management API reports stats and clears cache", async () => {
     db?.close();
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("cache management API reports and clears OCR cache together with surface cache", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "umt-ocr-cache-api-"));
+  let db: ReturnType<typeof openDatabase> | undefined;
+  let app: Awaited<ReturnType<typeof buildServer>> | undefined;
+  try {
+    db = openDatabase(join(dir, "cache.sqlite"));
+    const ocrCache = new OcrCache(db);
+    ocrCache.save("ocr-key", [{ id: "r1", box: { x: 1, y: 2, width: 30, height: 40 }, sourceText: "HELLO", confidence: 0.9, orientation: "horizontal", kind: "dialogue" }]);
+    app = await buildServer({ ...testServerOptions(), surfaceCache: new SurfaceCache(db), ocrCache });
+    await app.inject({ method: "POST", url: "/v1/surfaces/submit", payload: { task } });
+
+    const stats = await app.inject({ method: "GET", url: "/v1/cache/stats" });
+    assert.equal(stats.json().stats.entries, 1);
+    assert.equal(stats.json().ocrStats.entries, 1);
+
+    const cleared = await app.inject({ method: "POST", url: "/v1/cache/clear" });
+    assert.equal(cleared.json().surfaceDeleted, 1);
+    assert.equal(cleared.json().ocrDeleted, 1);
+    assert.equal(cleared.json().deleted, 2);
+  } finally {
+    await app?.close();
+    db?.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+
+
+test("cancel-session suppresses stale completion events and cache writes", async () => {
+  const events: any[] = [];
+  const { EventBus } = await import("./events.js");
+  const eventBus = new EventBus();
+  eventBus.subscribe((event) => events.push(event));
+  let releaseProvider!: () => void;
+  const providerReleased = new Promise<void>((resolve) => { releaseProvider = resolve; });
+  const app = await buildServer({
+    provider: "slow",
+    targetLanguage: "zh-CN",
+    eventBus,
+    visionProvider: {
+      profile: "slow-provider",
+      process: async () => {
+        await providerReleased;
+        return [{ id: "r1", box: { x: 10, y: 20, width: 100, height: 50 }, sourceText: "Hello", translatedText: "你好", confidence: 1, orientation: "horizontal", kind: "dialogue" }];
+      },
+    },
+  });
+
+  const submitPromise = app.inject({ method: "POST", url: "/v1/surfaces/submit", payload: { jobSessionId: "session-cancel", task } });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const cancelled = await app.inject({ method: "POST", url: "/v1/jobs/cancel-session", payload: { jobSessionId: "session-cancel" } });
+  releaseProvider();
+  const submitted = await submitPromise;
+  const cachedAfterCancel = await app.inject({ method: "POST", url: "/v1/surfaces/submit", payload: { task: { ...task, surfaceId: "after-cancel" } } });
+
+  assert.equal(cancelled.statusCode, 200);
+  assert.deepEqual(cancelled.json(), { ok: true, jobSessionId: "session-cancel", status: "cancelled", cancellable: true });
+  assert.equal(submitted.json().ok, false);
+  assert.equal(submitted.json().result.status, "cancelled");
+  assert.equal(events.some((event) => event.type === "job.completed" && event.jobSessionId === "session-cancel"), false);
+  assert.equal(cachedAfterCancel.json().status, "completed");
+  await app.close();
 });
 
 test("retranslate bypasses cache and cancel returns accepted status", async () => {
@@ -321,11 +535,44 @@ test("submit tiles very tall webtoon images instead of shrinking text unreadably
   await app.close();
 });
 
+test("submit uses fetched image metadata for tall-image tiling when frontend natural size is stale", async () => {
+  const sharp = await import("sharp");
+  const tallImage = await sharp.default({ create: { width: 900, height: 4000, channels: 3, background: "white" } }).png().toBuffer();
+  const staleNaturalSizeTask = {
+    ...task,
+    imageData: `data:image/png;base64,${tallImage.toString("base64")}`,
+    naturalSize: { width: 90, height: 400 },
+    renderSize: { width: 450, height: 2000 },
+    surfaceRect: { x: 0, y: 0, width: 450, height: 2000 },
+  };
+  const seen: Array<{ width: number; height: number }> = [];
+  const app = await buildServer({
+    provider: "test",
+    targetLanguage: "zh-CN",
+    maxImageLongEdge: 1600,
+    visionProvider: {
+      profile: "metadata-tile-provider",
+      process: async (input) => {
+        seen.push({ width: input.width, height: input.height });
+        return [{ id: `r${seen.length}`, box: { x: 90, y: 100, width: 180, height: 80 }, sourceText: "hi", translatedText: "你好", confidence: 1, orientation: "horizontal", kind: "dialogue" }];
+      },
+    },
+  });
+
+  const response = await app.inject({ method: "POST", url: "/v1/surfaces/submit", payload: { task: staleNaturalSizeTask } });
+
+  assert.equal(response.statusCode, 200);
+  assert.equal(seen.length > 1, true);
+  assert.equal(seen.every((size) => size.width === 900), true);
+  assert.deepEqual(response.json().result.regions[0].box, { x: 9, y: 10, width: 18, height: 8 });
+  assert.equal(response.json().result.regions[1].box.y > response.json().result.regions[0].box.y, true);
+  await app.close();
+});
+
 test("diagnostics API returns recent safe records", async () => {
   const records: unknown[] = [{ surfaceId: "s1", status: "empty" }];
   const app = await buildServer({
-    provider: "mock",
-    targetLanguage: "zh-CN",
+    ...testServerOptions(),
     diagnosticsReader: () => records as Array<Record<string, unknown>>,
   });
 
@@ -345,7 +592,7 @@ test("submit clamps provider boxes to original image bounds and filters unusable
       profile: "bounds-provider",
       process: async () => [
         { id: "r1", box: { x: -10, y: 10, width: 40, height: 30 }, sourceText: "hi", translatedText: "你好", confidence: 1, orientation: "horizontal", kind: "dialogue" },
-        { id: "r2", box: { x: 2000, y: 2000, width: 10, height: 10 }, sourceText: "bad", translatedText: "坏", confidence: 1, orientation: "horizontal", kind: "dialogue" },
+        { id: "r2", box: { x: 2000, y: 2000, width: 10, height: 10 }, sourceText: "bad", translatedText: "bad", confidence: 1, orientation: "horizontal", kind: "dialogue" },
       ],
     },
   });
@@ -359,6 +606,31 @@ test("submit clamps provider boxes to original image bounds and filters unusable
   await app.close();
 });
 
+
+
+test("submit diagnostics include stage timing fields without secrets", async () => {
+  const records: Array<Record<string, unknown>> = [];
+  const app = await buildServer({
+    provider: "test",
+    targetLanguage: "zh-CN",
+    diagnosticsWriter: { record: (record) => records.push(record as unknown as Record<string, unknown>) },
+    visionProvider: {
+      profile: "timed-provider",
+      process: async () => [{ id: "r1", box: { x: 10, y: 20, width: 100, height: 50 }, sourceText: "Hello", translatedText: "??", confidence: 1, orientation: "horizontal", kind: "dialogue" }],
+    },
+  });
+
+  await app.inject({ method: "POST", url: "/v1/surfaces/submit", payload: { task: { ...task, surfaceId: "timed-submit" } } });
+
+  const record = records.at(-1)!;
+  for (const key of ["imageReadMs", "imageMetadataMs", "normalizeMs", "providerMs", "layoutMs", "cacheWriteMs"]) {
+    assert.equal(typeof record[key], "number", key);
+    assert.equal((record[key] as number) >= 0, true, key);
+  }
+  assert.equal(record.tileCount, 1);
+  assert.equal(JSON.stringify(record).includes("sk-"), false);
+  await app.close();
+});
 
 test("diagnostics note distinguishes provider-empty from all boxes filtered", async () => {
   const records: Array<Record<string, unknown>> = [];
@@ -386,7 +658,7 @@ test("diagnostics note marks all provider boxes filtered", async () => {
     diagnosticsWriter: { record: (record) => records.push(record as unknown as Record<string, unknown>) },
     visionProvider: {
       profile: "bad-box-provider",
-      process: async () => [{ id: "r1", box: { x: 9999, y: 9999, width: 10, height: 10 }, sourceText: "bad", translatedText: "坏", confidence: 1, orientation: "horizontal", kind: "dialogue" }],
+      process: async () => [{ id: "r1", box: { x: 9999, y: 9999, width: 10, height: 10 }, sourceText: "bad", translatedText: "bad", confidence: 1, orientation: "horizontal", kind: "dialogue" }],
     },
   });
 
@@ -415,3 +687,8 @@ test("self test endpoint verifies provider submit flow", async () => {
   assert.deepEqual(response.json().steps.map((step: any) => step.name), ["backend", "provider", "sample-submit", "regions"]);
   await app.close();
 });
+
+
+
+
+

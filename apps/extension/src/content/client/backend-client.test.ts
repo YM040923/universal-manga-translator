@@ -76,6 +76,30 @@ test("BackendClient calls cache management and task control endpoints", async ()
   assert.deepEqual(JSON.parse(String(calls[2]?.init.body)), { surfaceId: "s1" });
 });
 
+test("BackendClient submits with a job session and can cancel that session", async () => {
+  const calls: Array<{ url: string; init: RequestInit }> = [];
+  globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+    calls.push({ url: String(url), init: init ?? {} });
+    if (String(url).endsWith("/v1/jobs/cancel-session")) {
+      return new Response(JSON.stringify({ ok: true, jobSessionId: "session-1", status: "cancelled", cancellable: true }), { status: 200 });
+    }
+    return new Response(JSON.stringify({ ok: true, surfaceId: "s1", status: "completed" }), { status: 200 });
+  }) as typeof fetch;
+  const client = new BackendClient("http://127.0.0.1:47831");
+
+  await client.submit(fakeTask(), "session-1");
+  await client.retranslate(fakeTask(), "session-1");
+  const cancelled = await client.cancelJobSession("session-1");
+
+  assert.equal(calls[0]?.url, "http://127.0.0.1:47831/v1/surfaces/submit");
+  assert.deepEqual(JSON.parse(String(calls[0]?.init.body)), { task: fakeTask(), jobSessionId: "session-1" });
+  assert.equal(calls[1]?.url, "http://127.0.0.1:47831/v1/surfaces/retranslate");
+  assert.deepEqual(JSON.parse(String(calls[1]?.init.body)), { task: fakeTask(), jobSessionId: "session-1" });
+  assert.equal(calls[2]?.url, "http://127.0.0.1:47831/v1/jobs/cancel-session");
+  assert.deepEqual(JSON.parse(String(calls[2]?.init.body)), { jobSessionId: "session-1" });
+  assert.equal(cancelled.ok && cancelled.status, "cancelled");
+});
+
 test("BackendClient reads backend model list and clears diagnostics", async () => {
   const calls: Array<{ url: string; init: RequestInit | undefined }> = [];
   globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
@@ -125,6 +149,28 @@ test("BackendClient retries transient submit failures", async () => {
   assert.equal(attempts, 2);
 });
 
+test("BackendClient can proxy submit requests through extension background to avoid page-origin loopback blocking", async () => {
+  const calls: unknown[] = [];
+  const client = new BackendClient("http://127.0.0.1:47831", {
+    backendHttp: async (request) => {
+      calls.push(request);
+      return { ok: true, status: 200, body: { ok: true, surfaceId: "s1", status: "completed" } };
+    },
+  });
+
+  const response = await client.submit(fakeTask(), "session-1");
+
+  assert.equal(response.ok, true);
+  assert.deepEqual(calls, [{
+    url: "http://127.0.0.1:47831/v1/surfaces/submit",
+    init: {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ task: fakeTask(), jobSessionId: "session-1" }),
+    },
+  }]);
+});
+
 test("BackendClient passes an AbortSignal for timed submit requests", async () => {
   let signalSeen = false;
   globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
@@ -136,6 +182,7 @@ test("BackendClient passes an AbortSignal for timed submit requests", async () =
 
   assert.equal(signalSeen, true);
 });
+
 
 function fakeTask() {
   return {

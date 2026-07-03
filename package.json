@@ -1,23 +1,25 @@
 {
-    "name":  "universal-manga-translator",
-    "version":  "0.1.0",
-    "private":  true,
-    "type":  "module",
-    "scripts":  {
-                    "build":  "pnpm --filter @umt/shared build \u0026\u0026 pnpm --filter @umt/server build \u0026\u0026 pnpm --filter @umt/extension build",
-                    "test":  "pnpm --filter @umt/shared test \u0026\u0026 pnpm --filter @umt/server test \u0026\u0026 pnpm --filter @umt/extension test \u0026\u0026 node --test scripts/*.test.mjs",
-                    "typecheck":  "pnpm -r typecheck",
-                    "dev:server":  "pnpm --filter @umt/server dev",
-                    "dev:extension":  "pnpm --filter @umt/extension dev",
-                    "test:e2e":  "playwright test tests/integration",
-                    "doctor":  "node scripts/doctor.mjs",
-                    "scan:sites":  "node scripts/scan-sites.mjs"
-                },
-    "devDependencies":  {
-                            "@playwright/test":  "^1.45.0",
-                            "@types/node":  "^20.14.0",
-                            "typescript":  "^5.5.0",
-                            "vitest":  "^1.6.0",
-                            "http-server":  "^14.1.1"
-                        }
+  "name": "universal-manga-translator",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "pnpm --filter @umt/shared build && pnpm --filter @umt/core build && pnpm --filter @umt/server build && pnpm --filter @umt/extension build && pnpm --filter @umt/desktop build",
+    "test": "pnpm --filter @umt/shared test && pnpm --filter @umt/core test && pnpm --filter @umt/server test && pnpm --filter @umt/extension test && pnpm --filter @umt/desktop test && node --test scripts/*.test.mjs",
+    "typecheck": "pnpm -r typecheck",
+    "dev:server": "pnpm --filter @umt/server dev",
+    "dev:extension": "pnpm --filter @umt/extension dev",
+    "test:e2e": "playwright test tests/integration",
+    "doctor": "node scripts/doctor.mjs",
+    "scan:sites": "node scripts/scan-sites.mjs",
+    "qa:extension": "node scripts/qa-extension-load.mjs",
+    "desktop": "pnpm --filter @umt/desktop dev"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.45.0",
+    "@types/node": "^20.14.0",
+    "typescript": "^5.5.0",
+    "vitest": "^1.6.0",
+    "http-server": "^14.1.1"
+  }
 }

@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
 import type { DetectedSurface } from "../detector/surface-detector.js";
-import { createSurfaceTask } from "./surface-capture.js";
+import { createSurfaceTask, createSurfaceTaskWithImageData } from "./surface-capture.js";
 
 test("createSurfaceTask sends image surfaces by URL", () => {
   installLocation("https://reader.example/chapter/1");
@@ -48,3 +48,73 @@ function installLocation(url: string): void {
   const dom = new JSDOM(``, { url });
   Object.defineProperty(globalThis, "location", { value: dom.window.location, configurable: true });
 }
+
+test("createSurfaceTaskWithImageData prefers extension-fetched image data over backend URL fetch", async () => {
+  installLocation("https://reader.example/chapter/1");
+  const dom = new JSDOM(`<img id="page" />`);
+  const sent: unknown[] = [];
+  globalThis.chrome = {
+    runtime: {
+      sendMessage: async (message: unknown) => {
+        sent.push(message);
+        return { ok: true, imageData: "data:image/webp;base64,abc", contentType: "image/webp" };
+      },
+    },
+  } as unknown as typeof chrome;
+  const surface: DetectedSurface = {
+    surfaceId: "img:1:https://cdn.example/page.webp",
+    kind: "image",
+    element: dom.window.document.querySelector<HTMLElement>("#page")!,
+    imageUrl: "https://cdn.example/page.webp",
+    rect: { x: 1, y: 2, width: 800, height: 1200 },
+    naturalSize: { width: 1000, height: 1500 },
+    score: 10,
+  };
+
+  const task = await createSurfaceTaskWithImageData(surface, "p0", "zh-CN");
+
+  assert.equal(task.imageData, "data:image/webp;base64,abc");
+  assert.equal("imageUrl" in task, false);
+  assert.deepEqual(sent, [{ source: "umt-content", command: "fetchImageData", url: "https://cdn.example/page.webp", referer: "https://reader.example/chapter/1" }]);
+});
+
+test("createSurfaceTaskWithImageData falls back to imageUrl when extension fetch fails", async () => {
+  installLocation("https://reader.example/chapter/1");
+  const dom = new JSDOM(`<img id="page" />`);
+  globalThis.chrome = { runtime: { sendMessage: async () => ({ ok: false, error: "429" }) } } as unknown as typeof chrome;
+  const surface: DetectedSurface = {
+    surfaceId: "img:1:https://cdn.example/page.webp",
+    kind: "image",
+    element: dom.window.document.querySelector<HTMLElement>("#page")!,
+    imageUrl: "https://cdn.example/page.webp",
+    rect: { x: 1, y: 2, width: 800, height: 1200 },
+    naturalSize: { width: 1000, height: 1500 },
+    score: 10,
+  };
+
+  const task = await createSurfaceTaskWithImageData(surface, "p0", "zh-CN");
+
+  assert.equal(task.imageUrl, "https://cdn.example/page.webp");
+  assert.equal("imageData" in task, false);
+});
+
+
+test("createSurfaceTaskWithImageData can reject URL fallback so backend does not hit manga CDN", async () => {
+  installLocation("https://reader.example/chapter/1");
+  const dom = new JSDOM(`<img id="page" />`);
+  globalThis.chrome = { runtime: { sendMessage: async () => ({ ok: false, error: "429" }) } } as unknown as typeof chrome;
+  const surface: DetectedSurface = {
+    surfaceId: "img:1:https://cdn.example/page.webp",
+    kind: "image",
+    element: dom.window.document.querySelector<HTMLElement>("#page")!,
+    imageUrl: "https://cdn.example/page.webp",
+    rect: { x: 1, y: 2, width: 800, height: 1200 },
+    naturalSize: { width: 1000, height: 1500 },
+    score: 10,
+  };
+
+  await assert.rejects(
+    () => createSurfaceTaskWithImageData(surface, "p0", "zh-CN", { allowImageUrlFallback: false }),
+    /image data fetch unavailable|429/,
+  );
+});

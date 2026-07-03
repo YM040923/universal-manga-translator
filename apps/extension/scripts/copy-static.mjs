@@ -1,8 +1,9 @@
-import { copyFileSync, mkdirSync, readdirSync, statSync } from "node:fs";
+import { copyFileSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
 const sourceRoot = resolve("public");
 const targetRoot = resolve("dist");
+removeStaleArtifacts(targetRoot);
 copyDir(sourceRoot, targetRoot);
 
 function copyDir(source, target) {
@@ -17,4 +18,9 @@ function copyDir(source, target) {
       copyFileSync(sourcePath, targetPath);
     }
   }
+}
+
+function removeStaleArtifacts(target) {
+  rmSync(join(target, "options.html"), { force: true });
+  rmSync(join(target, "options.js"), { force: true });
 }

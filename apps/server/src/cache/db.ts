@@ -20,6 +20,12 @@ export function openDatabase(path: string): UmtDatabase {
       updated_at INTEGER NOT NULL,
       PRIMARY KEY (image_hash, target_language, region_id)
     );
+
+    CREATE TABLE IF NOT EXISTS ocr_results (
+      cache_key TEXT PRIMARY KEY,
+      regions_json TEXT NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
   `);
   return db;
 }

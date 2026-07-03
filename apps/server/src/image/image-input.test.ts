@@ -33,3 +33,20 @@ test("readTaskImage fetches image urls", async () => {
     globalThis.fetch = originalFetch;
   }
 });
+
+test("readTaskImage retries transient image url fetch failures", async () => {
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = (async () => {
+    calls += 1;
+    if (calls === 1) throw new Error("socket closed");
+    return new Response(Buffer.from("retried-url"), { status: 200 });
+  }) as typeof fetch;
+  try {
+    const result = await readTaskImage({ ...baseTask, imageUrl: "https://cdn.example.test/1.jpg" }, { retryDelayMs: 1 });
+    assert.equal(result.buffer.toString("utf8"), "retried-url");
+    assert.equal(calls, 2);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

@@ -1,5 +1,5 @@
 ﻿export type Priority = "p0" | "p1" | "p2" | "p3";
-export type JobStatus = "queued" | "processing" | "cached" | "completed" | "empty" | "failed" | "skipped";
+export type JobStatus = "queued" | "processing" | "cached" | "completed" | "empty" | "failed" | "skipped" | "cancelled";
 
 export interface Rect { x: number; y: number; width: number; height: number; }
 export interface Size { width: number; height: number; }
@@ -53,5 +53,12 @@ export interface FailedResult {
   surfaceId: string;
   status: "failed";
   recoverable: boolean;
+  error: string;
+}
+
+export interface CancelledResult {
+  surfaceId: string;
+  status: "cancelled";
+  recoverable: true;
   error: string;
 }
