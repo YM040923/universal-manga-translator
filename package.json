@@ -6,11 +6,13 @@
   "scripts": {
     "build": "pnpm --filter @umt/shared build && pnpm --filter @umt/core build && pnpm --filter @umt/server build && pnpm --filter @umt/extension build && pnpm --filter @umt/desktop build",
     "test": "pnpm --filter @umt/shared test && pnpm --filter @umt/core test && pnpm --filter @umt/server test && pnpm --filter @umt/extension test && pnpm --filter @umt/desktop test && node --test scripts/*.test.mjs",
-    "typecheck": "pnpm -r typecheck",
+    "typecheck": "pnpm --filter @umt/shared build && pnpm --filter @umt/core build && pnpm -r typecheck",
     "dev:server": "pnpm --filter @umt/server dev",
     "dev:extension": "pnpm --filter @umt/extension dev",
     "test:e2e": "playwright test tests/integration",
     "doctor": "node scripts/doctor.mjs",
+    "package:extension": "powershell -ExecutionPolicy Bypass -File .\\scripts\\package-extension.ps1",
+    "verify:release": "powershell -ExecutionPolicy Bypass -File .\\scripts\\verify-release-assets.ps1",
     "scan:sites": "node scripts/scan-sites.mjs",
     "qa:extension": "node scripts/qa-extension-load.mjs",
     "desktop": "pnpm --filter @umt/desktop dev"

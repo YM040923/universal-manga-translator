@@ -211,7 +211,7 @@ test("OpenAICompatibleTextTranslator prompt includes chapter context and stronge
     fetch: async (_url, init) => {
       const body = JSON.parse(String(init?.body));
       prompt = body.messages[0].content;
-      return new Response(JSON.stringify({ choices: [{ message: { content: '{"items":[{"id":"r1","translatedText":"�㵽�����ʲô��"}]}' } }] }), { status: 200, headers: { "content-type": "application/json" } });
+      return new Response(JSON.stringify({ choices: [{ message: { content: '{"items":[{"id":"r1","translatedText":"你到底想要什么？"}]}' } }] }), { status: 200, headers: { "content-type": "application/json" } });
     },
   });
 
@@ -246,7 +246,7 @@ test("OpenAICompatibleTextTranslator prompt keeps Chinese style guidance readabl
   await translator.translate([{ id: "r1", text: "Hello" }], "zh-CN", "auto");
 
   assert.match(prompt, /口语/);
-  assert.doesNotMatch(prompt, /鍙|�/);
+  assert.doesNotMatch(prompt, /鍙|\uFFFD/);
 });
 
 test("OpenAICompatibleTextTranslator prompt includes auto term candidates for stable names", async () => {

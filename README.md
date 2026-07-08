@@ -12,9 +12,11 @@ Universal Manga Translator 是一个网页漫画翻译工具。**主产品形态
 
 ## 快速开始：纯插件版
 
+更完整的普通用户安装流程见 [`docs/quickstart.md`](docs/quickstart.md)。常见错误见 [`docs/troubleshooting.md`](docs/troubleshooting.md)。
+
 ### 给普通用户安装
 
-1. 下载发布包里的 `extension-release.zip`。
+1. 下载发布包里的 `extension-release.zip` 和 `extension-release.zip.sha256`。
 2. 解压到一个固定目录，例如：
 
 ```text
@@ -34,6 +36,14 @@ D:\Apps\UniversalMangaTranslator\extension
    - 翻译模型
    - 可选：人名 / 术语表
 9. 点击“自检”。自检通过后，回到漫画页点“翻译本页”或开启“自动翻译本网站”。
+
+可选校验命令：
+
+```powershell
+$expected = (Get-Content .\extension-release.zip.sha256 -Raw).Split(" ")[0]
+$actual = (Get-FileHash .\extension-release.zip -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($actual -ne $expected) { throw "extension-release.zip 校验失败" }
+```
 
 > 安全提醒：纯插件版会把 API Key 保存在浏览器扩展存储中。不要在不信任的浏览器配置文件里使用真实 key；不要把带有个人 key 的浏览器扩展数据分享给别人。
 
@@ -158,7 +168,7 @@ TARGET_LANGUAGE=zh-CN
 pnpm install
 pnpm --filter @umt/extension build
 pnpm --filter @umt/extension test
-powershell -ExecutionPolicy Bypass -File .\scripts\package-extension.ps1
+pnpm package:extension
 ```
 
 完整工程检查：
@@ -202,7 +212,17 @@ scripts         检查、构建、发布和 QA 脚本
 
 ## 发布与打包
 
-发布前检查见 [`docs/release-checklist.md`](docs/release-checklist.md)。普通用户发布包优先提供 `extension-release.zip`。桌面端和后端只作为 Advanced / Experimental assets，需要时再单独上传。
+发布前检查见 [`docs/release-checklist.md`](docs/release-checklist.md)。GitHub Release 文案可从 [`docs/release-notes-template.md`](docs/release-notes-template.md) 复制。普通用户发布包优先提供 `extension-release.zip`。桌面端和后端只作为 Advanced / Experimental assets，需要时再单独上传。
+
+开发贡献说明见 [`CONTRIBUTING.md`](CONTRIBUTING.md)。
+
+## 隐私、权限与反馈
+
+插件权限、API Key 存储和请求去向见 [`docs/privacy-and-permissions.md`](docs/privacy-and-permissions.md)。提交问题时请使用 `.github/ISSUE_TEMPLATE/` 中的模板，并且不要粘贴完整 API Key。
+
+## 产品路线
+
+产品级优化路线见 [`docs/product-roadmap.md`](docs/product-roadmap.md)。当前主线是纯插件优先：安装配置简单、阅读页边界准确、队列和进度可靠、覆盖渲染稳定、API 自检能直接说明问题。
 
 ## License
 

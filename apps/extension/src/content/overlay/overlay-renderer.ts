@@ -42,12 +42,13 @@ export function clearManualEdits(): void {
 }
 
 export class OverlayRenderer {
-  private readonly root: HTMLDivElement;
+  private readonly roots = new Map<HTMLElement, HTMLDivElement>();
   private readonly rendered = new Map<string, RenderState>();
   private readonly manualSelectionProtection = new Map<string, RenderedRect[]>();
   private readonly targetLanguage: string;
   private readonly onManualEdit: ((override: ManualOverridePayload) => void) | undefined;
   private appearance: OverlayAppearance;
+  private visible = true;
 
   constructor(options: OverlayRendererOptions = {}) {
     this.targetLanguage = options.targetLanguage ?? "zh-CN";
@@ -56,25 +57,25 @@ export class OverlayRenderer {
     if (options.replaceExistingRoot) {
       for (const node of [...document.querySelectorAll("[data-umt-overlay-root='true']")]) node.remove();
     }
-    this.root = document.createElement("div");
-    this.root.dataset.umtOverlayRoot = "true";
-    this.root.style.cssText = "position:absolute;left:0;top:0;width:0;height:0;z-index:2147483646;pointer-events:none;";
-    document.documentElement.append(this.root);
   }
 
   setVisible(visible: boolean): void {
-    this.root.style.display = visible ? "block" : "none";
+    this.visible = visible;
+    for (const root of this.roots.values()) root.style.display = visible ? "block" : "none";
   }
 
   clearSurface(surfaceId: string): void {
     const escaped = typeof CSS !== "undefined" && CSS.escape ? CSS.escape(surfaceId) : surfaceId.replace(/'/g, "\\'");
-    for (const node of [...this.root.querySelectorAll(`[data-umt-surface-id='${escaped}']`)]) node.remove();
+    for (const root of this.roots.values()) {
+      for (const node of [...root.querySelectorAll(`[data-umt-surface-id='${escaped}']`)]) node.remove();
+    }
     this.rendered.delete(surfaceId);
     this.manualSelectionProtection.delete(surfaceId);
   }
 
   clearAll(): void {
-    this.root.replaceChildren();
+    for (const root of this.roots.values()) root.remove();
+    this.roots.clear();
     this.rendered.clear();
     this.manualSelectionProtection.clear();
     clearManualEdits();
@@ -97,8 +98,13 @@ export class OverlayRenderer {
   }
 
   private renderSurface(element: HTMLElement, naturalSize: Size, result: SurfaceResult): void {
+    const host = overlayHostForElement(element);
+    const root = this.rootForHost(host);
     const rect = element.getBoundingClientRect();
-    const renderedRect = { x: rect.x + window.scrollX, y: rect.y + window.scrollY, width: rect.width, height: rect.height };
+    const hostRect = host === document.documentElement ? null : host.getBoundingClientRect();
+    const renderedRect = hostRect
+      ? { x: rect.x - hostRect.x + host.scrollLeft, y: rect.y - hostRect.y + host.scrollTop, width: rect.width, height: rect.height }
+      : { x: rect.x + window.scrollX, y: rect.y + window.scrollY, width: rect.width, height: rect.height };
     const seenRegionIds = new Set<string>();
     const isManualSelection = isManualSelectionSurface(result.surfaceId);
     const currentManualBoxes: RenderedRect[] = [];
@@ -118,7 +124,7 @@ export class OverlayRenderer {
         continue;
       }
       seenRegionIds.add(region.id);
-      const node = this.findOrCreateRegionNode(result.surfaceId, region.id);
+      const node = this.findOrCreateRegionNode(root, result.surfaceId, region.id);
       node.dataset.umtSurfaceId = result.surfaceId;
       node.dataset.umtRegionId = region.id;
       node.dataset.umtManualSelection = isManualSelection ? "true" : "false";
@@ -222,15 +228,26 @@ export class OverlayRenderer {
     this.removeStaleRegionNodes(result.surfaceId, seenRegionIds);
   }
 
-  private findOrCreateRegionNode(surfaceId: string, regionId: string): HTMLDivElement {
+  private rootForHost(host: HTMLElement): HTMLDivElement {
+    const existing = this.roots.get(host);
+    if (existing) return existing;
+    const root = document.createElement("div");
+    root.dataset.umtOverlayRoot = "true";
+    root.style.cssText = `position:absolute;left:0;top:0;width:0;height:0;z-index:2147483646;pointer-events:none;display:${this.visible ? "block" : "none"};`;
+    host.append(root);
+    this.roots.set(host, root);
+    return root;
+  }
+
+  private findOrCreateRegionNode(root: HTMLElement, surfaceId: string, regionId: string): HTMLDivElement {
     const selector = `[data-umt-surface-id='${escapeSelectorValue(surfaceId)}'][data-umt-region-id='${escapeSelectorValue(regionId)}']`;
-    const existing = this.root.querySelector<HTMLDivElement>(selector);
+    const existing = root.querySelector<HTMLDivElement>(selector);
     if (existing) return existing;
     const node = document.createElement("div");
     const chip = document.createElement("span");
     chip.dataset.umtTextChip = "true";
     node.append(chip);
-    this.root.append(node);
+    root.append(node);
     return node;
   }
 
@@ -245,9 +262,11 @@ export class OverlayRenderer {
 
   private removeStaleRegionNodes(surfaceId: string, seenRegionIds: Set<string>): void {
     const selector = `[data-umt-surface-id='${escapeSelectorValue(surfaceId)}']`;
-    for (const node of [...this.root.querySelectorAll<HTMLElement>(selector)]) {
-      const regionId = node.dataset.umtRegionId;
-      if (!regionId || !seenRegionIds.has(regionId)) node.remove();
+    for (const root of this.roots.values()) {
+      for (const node of [...root.querySelectorAll<HTMLElement>(selector)]) {
+        const regionId = node.dataset.umtRegionId;
+        if (!regionId || !seenRegionIds.has(regionId)) node.remove();
+      }
     }
   }
 
@@ -260,10 +279,12 @@ export class OverlayRenderer {
 
   private removeNormalNodesCoveredByManualSelections(protectedBoxes: RenderedRect[]): void {
     if (!protectedBoxes.length) return;
-    for (const node of [...this.root.querySelectorAll<HTMLElement>("[data-umt-region-id]")]) {
-      if (node.dataset.umtManualSelection === "true" || isManualSelectionSurface(node.dataset.umtSurfaceId ?? "")) continue;
-      const box = rectFromStyle(node);
-      if (box && protectedBoxes.some((protectedBox) => rectsOverlapSignificantly(box, protectedBox))) node.remove();
+    for (const root of this.roots.values()) {
+      for (const node of [...root.querySelectorAll<HTMLElement>("[data-umt-region-id]")]) {
+        if (node.dataset.umtManualSelection === "true" || isManualSelectionSurface(node.dataset.umtSurfaceId ?? "")) continue;
+        const box = rectFromStyle(node);
+        if (box && protectedBoxes.some((protectedBox) => rectsOverlapSignificantly(box, protectedBox))) node.remove();
+      }
     }
   }
 }
@@ -430,6 +451,30 @@ function rectFromStyle(node: HTMLElement): RenderedRect | null {
   const height = Number.parseFloat(node.style.height);
   if (![x, y, width, height].every(Number.isFinite) || width <= 0 || height <= 0) return null;
   return { x, y, width, height };
+}
+
+function overlayHostForElement(element: HTMLElement): HTMLElement {
+  for (let node = element.parentElement; node && node !== document.body && node !== document.documentElement; node = node.parentElement) {
+    const style = node.ownerDocument.defaultView?.getComputedStyle(node);
+    if (!style) continue;
+    if (createsOverlayCoordinateSpace(node, style)) {
+      ensureOverlayHostStyle(node, style);
+      return node;
+    }
+  }
+  return document.documentElement;
+}
+
+function createsOverlayCoordinateSpace(element: HTMLElement, style: CSSStyleDeclaration): boolean {
+  const scrollsVertically = /(auto|scroll|overlay)/.test(style.overflowY) && element.scrollHeight > element.clientHeight + 2;
+  const scrollsHorizontally = /(auto|scroll|overlay)/.test(style.overflowX) && element.scrollWidth > element.clientWidth + 2;
+  const transformed = style.transform !== "none" || style.perspective !== "none" || style.filter !== "none" || style.backdropFilter !== "none";
+  const contained = style.contain !== "none" || style.contentVisibility === "auto";
+  return scrollsVertically || scrollsHorizontally || transformed || contained;
+}
+
+function ensureOverlayHostStyle(element: HTMLElement, style: CSSStyleDeclaration): void {
+  if (style.position === "static") element.style.position = "relative";
 }
 
 function isManualSelectionSurface(surfaceId: string): boolean {

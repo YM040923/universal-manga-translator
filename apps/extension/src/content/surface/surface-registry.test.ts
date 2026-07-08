@@ -120,8 +120,64 @@ test("isLikelyReaderPage rejects comic directory pages with cover images", () =>
   assert.equal(isLikelyReaderPage(dom.window.document, surfaces), false);
 });
 
+test("isLikelyReaderPage rejects comic detail pages with stacked large chapter thumbnails", () => {
+  const dom = new JSDOM(`<!doctype html><html><body>
+    <img id="cover" src="https://cdn.example/covers/the-title.webp">
+    <img id="thumb1" src="https://cdn.example/comics/the-title/chapter-1-thumb.webp">
+    <img id="thumb2" src="https://cdn.example/comics/the-title/chapter-2-thumb.webp">
+    <img id="thumb3" src="https://cdn.example/comics/the-title/chapter-3-thumb.webp">
+  </body></html>`, { url: "https://reader.example/comics/the-title" });
+  globalThis.window = dom.window as unknown as Window & typeof globalThis;
+  globalThis.document = dom.window.document;
+  globalThis.HTMLElement = dom.window.HTMLElement;
+  globalThis.HTMLImageElement = dom.window.HTMLImageElement;
+  const rects: Record<string, { x: number; y: number; width: number; height: number }> = {
+    cover: { x: 60, y: 80, width: 620, height: 920 },
+    thumb1: { x: 80, y: 1160, width: 720, height: 980 },
+    thumb2: { x: 80, y: 2240, width: 720, height: 980 },
+    thumb3: { x: 80, y: 3320, width: 720, height: 980 },
+  };
+  for (const img of [...dom.window.document.images]) {
+    const r = rects[img.id]!;
+    Object.defineProperty(img, "naturalWidth", { value: r.width, configurable: true });
+    Object.defineProperty(img, "naturalHeight", { value: r.height, configurable: true });
+    img.getBoundingClientRect = () => ({ x: r.x, y: r.y, left: r.x, top: r.y, right: r.x + r.width, bottom: r.y + r.height, width: r.width, height: r.height, toJSON: () => ({}) });
+  }
+  const surfaces = SurfaceRegistry.scan(dom.window.document).surfaces;
+
+  assert.equal(surfaces.length >= 3, true);
+  assert.equal(isLikelyReaderPage(dom.window.document, surfaces), false);
+});
+
 test("isLikelyReaderPage allows reader URLs before lazy images finish loading", () => {
   const dom = new JSDOM(`<!doctype html><html><body></body></html>`, { url: "https://reader.example/comics/the-title/chapter/60" });
 
   assert.equal(isLikelyReaderPage(dom.window.document, []), true);
+});
+
+test("isLikelyReaderPage accepts stacked manga pages even when CDN image urls are opaque hashes", () => {
+  const dom = new JSDOM(`<!doctype html><html><body>
+    <img id="p1" src="https://cdn.other-site.test/a8f921.webp">
+    <img id="p2" src="https://img.other-site.test/77b311.webp">
+    <img id="p3" src="https://assets.other-site.test/raw/00992.webp">
+  </body></html>`, { url: "https://manga.example/the-title?episode_id=60" });
+  globalThis.window = dom.window as unknown as Window & typeof globalThis;
+  globalThis.document = dom.window.document;
+  globalThis.HTMLElement = dom.window.HTMLElement;
+  globalThis.HTMLImageElement = dom.window.HTMLImageElement;
+  const rects: Record<string, { y: number; width: number; height: number }> = {
+    p1: { y: 100, width: 800, height: 1280 },
+    p2: { y: 1400, width: 800, height: 1260 },
+    p3: { y: 2680, width: 800, height: 1220 },
+  };
+  for (const img of [...dom.window.document.images]) {
+    const r = rects[img.id]!;
+    Object.defineProperty(img, "naturalWidth", { value: r.width, configurable: true });
+    Object.defineProperty(img, "naturalHeight", { value: r.height, configurable: true });
+    img.getBoundingClientRect = () => ({ x: 20, y: r.y, left: 20, top: r.y, right: 20 + r.width, bottom: r.y + r.height, width: r.width, height: r.height, toJSON: () => ({}) });
+  }
+  const surfaces = SurfaceRegistry.scan(dom.window.document).surfaces;
+
+  assert.equal(surfaces.length, 3);
+  assert.equal(isLikelyReaderPage(dom.window.document, surfaces), true);
 });

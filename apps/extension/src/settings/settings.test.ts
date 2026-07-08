@@ -168,13 +168,13 @@ test("normalizeSettings preserves user glossary text and exposes a stable glossa
 test("normalizeSettings adds /v1 to bare OpenAI-compatible translator domains", () => {
   const settings = normalizeSettings({
     directTranslator: {
-      baseUrl: "https://cf.ai-pixel.online/",
+      baseUrl: "https://translator.example.test/",
       apiKey: "sk-test",
       model: "gpt-test",
     },
   });
 
-  assert.equal(settings.directTranslator.baseUrl, "https://cf.ai-pixel.online/v1");
+  assert.equal(settings.directTranslator.baseUrl, "https://translator.example.test/v1");
 });
 
 test("normalizeSettings clamps invalid backend and performance fields", () => {

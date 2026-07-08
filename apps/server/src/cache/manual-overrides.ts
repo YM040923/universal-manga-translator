@@ -43,6 +43,8 @@ export function applyManualOverrides(result: SurfaceResult, overrides: ManualOve
   const byRegion = new Map(overrides.map((override) => [override.regionId, override.translatedText]));
   return {
     ...result,
-    regions: result.regions.map((region) => byRegion.has(region.id) ? { ...region, translatedText: byRegion.get(region.id)! } : region),
+    regions: result.regions
+      .map((region) => byRegion.has(region.id) ? { ...region, translatedText: byRegion.get(region.id)! } : region)
+      .filter((region) => region.translatedText.trim() !== ""),
   };
 }

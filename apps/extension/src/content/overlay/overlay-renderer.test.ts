@@ -80,6 +80,51 @@ test("uses document coordinates so overlays naturally scroll with the manga page
   assert.equal(wrapper.style.top, "263px");
 });
 
+test("anchors overlays inside a transformed scroll container so site-specific scrollers do not need scroll recalculation", () => {
+  const dom = new JSDOM(`<body></body>`, { url: "https://example.test" });
+  globalThis.document = dom.window.document;
+  globalThis.window = dom.window as unknown as Window & typeof globalThis;
+  globalThis.CSS = dom.window.CSS;
+  const scroller = document.createElement("div");
+  scroller.id = "reader-scroller";
+  scroller.style.cssText = "position:relative;overflow-y:auto;transform:translateZ(0);height:600px;";
+  document.body.append(scroller);
+  const img = document.createElement("img");
+  scroller.append(img);
+  img.getBoundingClientRect = () => ({
+    x: 40,
+    y: 120,
+    width: 500,
+    height: 1000,
+    top: 120,
+    left: 40,
+    right: 540,
+    bottom: 1120,
+    toJSON: () => ({}),
+  }) as DOMRect;
+  scroller.getBoundingClientRect = () => ({
+    x: 20,
+    y: 80,
+    width: 540,
+    height: 600,
+    top: 80,
+    left: 20,
+    right: 560,
+    bottom: 680,
+    toJSON: () => ({}),
+  }) as DOMRect;
+
+  const renderer = new OverlayRenderer();
+  renderer.render(img, { width: 1000, height: 2000 }, fakeResult("contained-scroller"));
+
+  const root = document.querySelector<HTMLElement>("[data-umt-overlay-root='true']")!;
+  const wrapper = document.querySelector<HTMLElement>("[data-umt-region-id='r1']")!;
+  assert.equal(root.parentElement, scroller);
+  assert.equal(root.style.position, "absolute");
+  assert.equal(wrapper.style.left, "62px");
+  assert.equal(wrapper.style.top, "83px");
+});
+
 test("uses rounded pill mask instead of square corners for speech bubbles", () => {
   const { img } = setupDomWithImage({ x: 0, y: 0, width: 500, height: 500 });
   const renderer = new OverlayRenderer();

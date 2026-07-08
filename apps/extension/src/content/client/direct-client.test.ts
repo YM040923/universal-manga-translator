@@ -231,7 +231,7 @@ test("DirectClient coalesces concurrent OCR requests for the same image", async 
       await ocrGate;
       return new Response(JSON.stringify({ words_result: [{ words: "HELLO", location: { left: 10, top: 20, width: 60, height: 20 } }] }), { status: 200, headers: { "content-type": "application/json" } });
     }
-    return new Response(JSON.stringify({ choices: [{ message: { content: '{"items":[{"id":"network-ocr-1","translatedText":"���"}]}' } }] }), { status: 200, headers: { "content-type": "application/json" } });
+    return new Response(JSON.stringify({ choices: [{ message: { content: '{"items":[{"id":"network-ocr-1","translatedText":"你好"}]}' } }] }), { status: 200, headers: { "content-type": "application/json" } });
   }) as typeof fetch;
   const client = new DirectClient(settingsWithCache(fetchImpl, cache));
 
@@ -252,11 +252,11 @@ test("DirectClient keeps OCR key status across submissions without exposing keys
       const auth = new Headers(init?.headers).get("authorization") ?? "";
       seenAuth.push(auth);
       if (auth === "Bearer quota-key") {
-        return new Response(JSON.stringify({ code: "INSUFFICIENT_CREDITS", message: "�˻����ֲ���" }), { status: 402, headers: { "content-type": "application/json" } });
+        return new Response(JSON.stringify({ code: "INSUFFICIENT_CREDITS", message: "账户积分不足" }), { status: 402, headers: { "content-type": "application/json" } });
       }
       return new Response(JSON.stringify({ words_result: [{ words: "HELLO", location: { left: 10, top: 20, width: 60, height: 20 } }] }), { status: 200, headers: { "content-type": "application/json" } });
     }
-    return new Response(JSON.stringify({ choices: [{ message: { content: '{"items":[{"id":"network-ocr-1","translatedText":"���"}]}' } }] }), { status: 200, headers: { "content-type": "application/json" } });
+    return new Response(JSON.stringify({ choices: [{ message: { content: '{"items":[{"id":"network-ocr-1","translatedText":"你好"}]}' } }] }), { status: 200, headers: { "content-type": "application/json" } });
   }) as typeof fetch;
   const configured = {
     ...settings(fetchImpl),
@@ -289,7 +289,7 @@ test("DirectClient carries previous chapter translations into later page prompts
     }
     const body = JSON.parse(String(init?.body));
     prompts.push(body.messages[0].content);
-    const translatedText = prompts.length === 1 ? "����������" : "��������";
+    const translatedText = prompts.length === 1 ? "克拉克来了" : "克拉克回来了";
     return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ items: [{ id: "network-ocr-1", translatedText }] }) } }] }), { status: 200, headers: { "content-type": "application/json" } });
   }) as typeof fetch;
   const client = new DirectClient(settingsWithCache(fetchImpl, cache));
@@ -298,7 +298,7 @@ test("DirectClient carries previous chapter translations into later page prompts
   await client.submit(task({ surfaceId: "s2", imageData: "data:image/jpeg;base64,aW1hZ2Uy" }));
 
   assert.match(prompts[1] ?? "", /Chapter context/i);
-  assert.match(prompts[1] ?? "", /����������/);
+  assert.match(prompts[1] ?? "", /克拉克来了/);
 });
 
 test("DirectClient sends previous page translation when retranslating", async () => {
@@ -310,7 +310,7 @@ test("DirectClient sends previous page translation when retranslating", async ()
     }
     const body = JSON.parse(String(init?.body));
     prompts.push(body.messages[0].content);
-    const translatedText = prompts.length === 1 ? "�ҽ�����" : "�һ������";
+    const translatedText = prompts.length === 1 ? "我会回来的" : "我还会回来";
     return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ items: [{ id: "network-ocr-1", translatedText }] }) } }] }), { status: 200, headers: { "content-type": "application/json" } });
   }) as typeof fetch;
   const client = new DirectClient(settingsWithCache(fetchImpl, cache));
@@ -319,7 +319,7 @@ test("DirectClient sends previous page translation when retranslating", async ()
   await client.retranslate(task());
 
   assert.match(prompts[1] ?? "", /Previous translations/i);
-  assert.match(prompts[1] ?? "", /�ҽ�����/);
+  assert.match(prompts[1] ?? "", /我会回来的/);
   assert.match(prompts[1] ?? "", /retranslation/i);
 });
 
@@ -327,6 +327,25 @@ test("DirectClient provider profile includes translation style version for text 
   const client = new DirectClient(settings((async () => { throw new Error("must not fetch"); }) as typeof fetch));
 
   assert.match(client.providerProfile(), /style:manga-v\d+/);
+});
+
+test("DirectClient provider profile changes when OCR endpoint or mapping changes", async () => {
+  const fetchImpl = (async () => { throw new Error("must not fetch"); }) as typeof fetch;
+  const base = settings(fetchImpl);
+  const endpointChanged = {
+    ...base,
+    directOcr: { ...base.directOcr, apiUrl: "https://other-ocr.example/ocr" },
+  };
+  const mappingChanged = {
+    ...base,
+    directOcr: { ...base.directOcr, regionsPaths: ["data.items"] },
+  };
+
+  const baseProfile = new DirectClient(base).providerProfile();
+
+  assert.match(baseProfile, /direct:image_base64:ocr:[a-f0-9]{8}/);
+  assert.notEqual(new DirectClient(endpointChanged).providerProfile(), baseProfile);
+  assert.notEqual(new DirectClient(mappingChanged).providerProfile(), baseProfile);
 });
 
 test("DirectClient carries remembered term candidates into later prompts", async () => {
@@ -339,7 +358,7 @@ test("DirectClient carries remembered term candidates into later prompts", async
     }
     const body = JSON.parse(String(init?.body));
     prompts.push(body.messages[0].content);
-    return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ items: [{ id: "network-ocr-1", translatedText: "����" }] }) } }] }), { status: 200, headers: { "content-type": "application/json" } });
+    return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ items: [{ id: "network-ocr-1", translatedText: "天魔" }] }) } }] }), { status: 200, headers: { "content-type": "application/json" } });
   }) as typeof fetch;
   const client = new DirectClient(settingsWithCache(fetchImpl, cache));
 

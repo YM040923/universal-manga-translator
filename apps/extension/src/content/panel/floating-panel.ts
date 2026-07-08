@@ -128,9 +128,8 @@ export class FloatingPanel {
     if (actions.onRetranslatePage || actions.onSelectRegion) {
       this.menu = document.createElement("div");
       this.menu.dataset.umtFloatingMenu = "true";
-      this.menu.hidden = true;
       this.menu.style.cssText = [
-        "display:flex",
+        "display:none",
         "flex-direction:column",
         "gap:6px",
         "padding:6px",
@@ -207,11 +206,11 @@ export class FloatingPanel {
 
   private toggleMenu(): void {
     if (!this.menu) return;
-    this.menu.hidden = !this.menu.hidden;
+    this.menu.style.display = this.menu.style.display === "none" ? "flex" : "none";
   }
 
   private closeMenu(): void {
-    if (this.menu) this.menu.hidden = true;
+    if (this.menu) this.menu.style.display = "none";
   }
 
   private beginDrag(event: PointerEvent): void {

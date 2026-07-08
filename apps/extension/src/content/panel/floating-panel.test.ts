@@ -68,18 +68,38 @@ test("FloatingPanel right click opens compact menu for retranslate and selection
 
   const menu = document.querySelector<HTMLElement>("[data-umt-floating-menu]")!;
   assert.equal(Boolean(menu), true);
-  assert.equal(menu.hidden, false);
+  assert.equal(menu.style.display, "flex");
   assert.equal(document.querySelector<HTMLButtonElement>("[data-umt-retranslate-button]")?.textContent, "重翻本页");
   assert.equal(document.querySelector<HTMLButtonElement>("[data-umt-select-button]")?.textContent, "框选翻译");
 
   document.querySelector<HTMLButtonElement>("[data-umt-retranslate-button]")!.click();
   assert.equal(retranslates, 1);
-  assert.equal(menu.hidden, true);
+  assert.equal(menu.style.display, "none");
 
   primary.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
   document.querySelector<HTMLButtonElement>("[data-umt-select-button]")!.click();
   assert.equal(selects, 1);
-  assert.equal(menu.hidden, true);
+  assert.equal(menu.style.display, "none");
+});
+
+test("FloatingPanel hides the right-click menu with inline display so page CSS cannot keep it expanded", () => {
+  setupDom();
+  const panel = new FloatingPanel({
+    onToggleOverlayVisibility: () => undefined,
+    onRetranslatePage: () => undefined,
+    onSelectRegion: () => undefined,
+  });
+  panel.mount();
+
+  const primary = document.querySelector<HTMLButtonElement>("[data-umt-floating-button]")!;
+  const menu = document.querySelector<HTMLElement>("[data-umt-floating-menu]")!;
+  assert.equal(menu.style.display, "none");
+
+  primary.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+  assert.equal(menu.style.display, "flex");
+
+  primary.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+  assert.equal(menu.style.display, "none");
 });
 
 test("FloatingPanel updates status and visibility without expanding visible footprint", () => {

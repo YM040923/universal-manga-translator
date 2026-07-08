@@ -15,8 +15,12 @@ $releaseDir = Join-Path $root "release"
 New-Item -ItemType Directory -Force $releaseDir | Out-Null
 
 $zipPath = Join-Path $releaseDir "extension-release.zip"
+$shaPath = Join-Path $releaseDir "extension-release.zip.sha256"
 if (Test-Path $zipPath) {
   Remove-Item -LiteralPath $zipPath -Force
+}
+if (Test-Path $shaPath) {
+  Remove-Item -LiteralPath $shaPath -Force
 }
 
 Write-Host "Packaging extension to $zipPath ..."
@@ -27,16 +31,10 @@ if (-not (Test-Path $zipPath)) {
   throw "Failed to create extension zip: $zipPath"
 }
 
-$zip = [System.IO.Compression.ZipFile]::OpenRead($zipPath)
-try {
-  $manifestEntry = $zip.Entries | Where-Object { $_.FullName -eq "manifest.json" } | Select-Object -First 1
-  if (-not $manifestEntry) {
-    throw "Extension zip is invalid: manifest.json is not at the archive root"
-  }
-}
-finally {
-  $zip.Dispose()
-}
+& (Join-Path $PSScriptRoot "verify-extension-package.ps1") -ZipPath $zipPath
+& (Join-Path $PSScriptRoot "write-extension-checksum.ps1") -ZipPath $zipPath -ShaPath $shaPath
+& (Join-Path $PSScriptRoot "verify-release-assets.ps1") -ZipPath $zipPath -ShaPath $shaPath
 
 Write-Host "Extension release package created:"
 Write-Host $zipPath
+Write-Host $shaPath

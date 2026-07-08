@@ -14,7 +14,7 @@ test("loadConfigFromEnvFile reads generic network OCR config without printing se
       "OPENAI_BASE_URL=https://api.example.com/v1",
       "OPENAI_API_KEY=secret",
       "OPENAI_MODEL=gpt-5.4-mini",
-      "OCR_API_URL=https://uapis.cn/api/v1/image/ocr",
+      "OCR_API_URL=https://ocr.example.test/api/v1/image/ocr",
       "OCR_API_KEYS=ocr-a,ocr-b",
       "OCR_INPUT_MODE=image_base64",
       "OCR_IMAGE_FIELD=image_base64",
@@ -32,7 +32,7 @@ test("loadConfigFromEnvFile reads generic network OCR config without printing se
     assert.equal(config.openaiBaseUrl, "https://api.example.com/v1");
     assert.equal(config.openaiApiKey, "secret");
     assert.equal(config.openaiModel, "gpt-5.4-mini");
-    assert.equal(config.ocrApiUrl, "https://uapis.cn/api/v1/image/ocr");
+    assert.equal(config.ocrApiUrl, "https://ocr.example.test/api/v1/image/ocr");
     assert.deepEqual(config.ocrApiKeys, ["ocr-a", "ocr-b"]);
     assert.equal(config.ocrInputMode, "image_base64");
     assert.equal(config.ocrImageField, "image_base64");
@@ -53,18 +53,25 @@ pool-a` });
   assert.deepEqual(config.ocrApiKeys, ["pool-a", "pool-b"]);
 });
 
+test("loadConfig defaults to generic placeholders instead of a bundled OCR vendor", () => {
+  const config = loadConfig({});
+
+  assert.equal(config.openaiModel, "gpt-4.1-mini");
+  assert.equal(config.ocrApiUrl, "https://example.com/ocr");
+});
+
 test("loadConfig migrates legacy UApi env names to the generic OCR path", () => {
   const config = loadConfig({
     VISION_PROVIDER: "uapis-ocr-openai-compatible",
     UAPIS_API_KEY: "legacy-uapi-key",
-    UAPIS_OCR_URL: "https://uapis.cn/api/v1/image/ocr",
+    UAPIS_OCR_URL: "https://legacy-ocr.example.test/api/v1/image/ocr",
     UAPIS_OCR_INPUT: "image_base64",
     UAPIS_OCR_NEED_LOCATION: "true",
     UAPIS_OCR_ENABLE_CLS: "false",
   });
 
   assert.equal(config.provider, "network-ocr-openai-compatible");
-  assert.equal(config.ocrApiUrl, "https://uapis.cn/api/v1/image/ocr");
+  assert.equal(config.ocrApiUrl, "https://legacy-ocr.example.test/api/v1/image/ocr");
   assert.deepEqual(config.ocrApiKeys, ["legacy-uapi-key"]);
   assert.equal(config.ocrInputMode, "image_base64");
   assert.equal(config.ocrImageField, "image_base64");

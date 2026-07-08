@@ -214,7 +214,7 @@ export class DirectClient implements TranslatorClient {
   }
 
   providerProfile(): string {
-    return `direct:${this.settings.directOcr.inputMode}+openai-compatible:${this.settings.directTranslator.model}+style:${TRANSLATION_STYLE_VERSION}+${effectiveGlossaryHash(this.settings)}`;
+    return `direct:${this.settings.directOcr.inputMode}:${directOcrConfigHash(this.settings)}+openai-compatible:${this.settings.directTranslator.model}+style:${TRANSLATION_STYLE_VERSION}+${effectiveGlossaryHash(this.settings)}`;
   }
 }
 
@@ -309,6 +309,25 @@ function effectiveGlossaryHash(settings: ExtensionSettings): string {
     hash = (hash * prime) & mask;
   }
   return `glossary:${hash.toString(16).padStart(16, "0")}`;
+}
+
+function directOcrConfigHash(settings: ExtensionSettings): string {
+  const canonical = JSON.stringify({
+    apiUrl: settings.directOcr.apiUrl,
+    imageField: settings.directOcr.imageField,
+    inputMode: settings.directOcr.inputMode,
+    staticFieldsText: settings.directOcr.staticFieldsText,
+    regionsPaths: settings.directOcr.regionsPaths,
+    textPaths: settings.directOcr.textPaths,
+    boxPaths: settings.directOcr.boxPaths,
+    confidencePaths: settings.directOcr.confidencePaths,
+  });
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < canonical.length; index += 1) {
+    hash ^= canonical.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return `ocr:${hash.toString(16).padStart(8, "0")}`;
 }
 
 function parseGlossary(text: string): Record<string, string> {

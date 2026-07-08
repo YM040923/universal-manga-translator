@@ -198,7 +198,7 @@ test("config status exposes generic network OCR details without leaking API keys
     openAIApiKeyConfigured: true,
     ocrProvider: "network-ocr",
     ocrApiKeyConfigured: true,
-    ocrApiUrl: "https://uapis.cn/api/v1/image/ocr",
+    ocrApiUrl: "https://ocr.example.test/api/v1/image/ocr",
     ocrInputMode: "image_base64",
     ocrImageField: "image_base64",
     ocrStaticFields: { need_location: true },
@@ -225,7 +225,7 @@ test("config status exposes generic network OCR details without leaking API keys
   assert.equal(body.provider, "network-ocr-openai-compatible");
   assert.equal(body.providerProfile, "network-ocr:image_base64+openai-compatible:gpt-5.4-mini");
   assert.equal(body.ocr.provider, "network-ocr");
-  assert.equal(body.ocr.apiUrl, "https://uapis.cn/api/v1/image/ocr");
+  assert.equal(body.ocr.apiUrl, "https://ocr.example.test/api/v1/image/ocr");
   assert.equal(body.ocr.inputMode, "image_base64");
   assert.equal(body.ocr.imageField, "image_base64");
   assert.deepEqual(body.ocr.staticFields, { need_location: true });

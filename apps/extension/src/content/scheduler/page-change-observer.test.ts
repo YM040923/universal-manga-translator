@@ -11,7 +11,7 @@ test("PageChangeObserver schedules when manga nodes are appended", async () => {
   observer.start();
 
   document.querySelector("#reader")!.append(document.createElement("img"));
-  await tick();
+  await waitFor(() => reasons.includes("mutation"));
 
   assert.equal(reasons.includes("mutation"), true);
   observer.stop();
@@ -44,7 +44,7 @@ test("PageChangeObserver schedules on captured image load", async () => {
   observer.start();
 
   document.querySelector("#page")!.dispatchEvent(new dom.window.Event("load", { bubbles: false }));
-  await tick();
+  await waitFor(() => reasons.includes("image-load"));
 
   assert.equal(reasons.includes("image-load"), true);
   observer.stop();
@@ -58,4 +58,12 @@ function installDom(dom: JSDOM): void {
 
 async function tick(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 30));
+}
+
+async function waitFor(predicate: () => boolean): Promise<void> {
+  const started = Date.now();
+  while (!predicate()) {
+    if (Date.now() - started > 1000) break;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
 }

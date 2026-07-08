@@ -1,6 +1,6 @@
 ﻿import type { OverlayAppearance } from "../settings/settings.js";
 
-export type UmtContentCommandName = "translate" | "refresh" | "togglePause" | "clearPage" | "selectRegion" | "retranslate" | "retranslateVisible" | "cancelQueue" | "setOverlayVisibility" | "toggleOverlayVisibility" | "applyOverlayAppearance" | "applySiteSettings" | "applyWidgetSettings";
+export type UmtContentCommandName = "translate" | "refresh" | "togglePause" | "clearPage" | "selectRegion" | "retranslate" | "retranslateVisible" | "cancelQueue" | "setOverlayVisibility" | "toggleOverlayVisibility" | "applyOverlayAppearance" | "applySiteSettings" | "applyWidgetSettings" | "sampleOcrSelfTest";
 
 export interface UmtContentCommand {
   source: "umt-popup" | "umt-page";
@@ -11,6 +11,10 @@ export interface UmtContentCommand {
   floatingButtonEnabled?: boolean;
   progressWidgetEnabled?: boolean;
 }
+
+export type UmtPageSampleSelfTestResponse =
+  | { ok: true; status: "ok"; surfaceId?: string; surfaceIndex: number; regionCount: number; elapsedMs: number; providerProfile?: string }
+  | { ok: false; status: "no-reader-page" | "no-surface" | "empty" | "failed"; detail: string; surfaceId?: string; surfaceIndex?: number; elapsedMs?: number; providerProfile?: string };
 
 export interface UmtCaptureVisibleTabRequest {
   source: "umt-content";
@@ -128,7 +132,8 @@ export function isUmtContentCommand(value: unknown): value is UmtContentCommand 
     candidate.command === "toggleOverlayVisibility" ||
     candidate.command === "applyOverlayAppearance" ||
     candidate.command === "applySiteSettings" ||
-    candidate.command === "applyWidgetSettings"
+    candidate.command === "applyWidgetSettings" ||
+    candidate.command === "sampleOcrSelfTest"
   );
 }
 

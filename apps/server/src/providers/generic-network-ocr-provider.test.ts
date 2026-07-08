@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import { GenericNetworkOcrProvider, parseGenericOcrRegions, getByPath } from "./generic-network-ocr-provider.js";
 import type { ProviderInput } from "./provider.js";
+import type { GenericOcrRegion } from "@umt/core";
 
 test("getByPath reads nested dot paths and array indexes", () => {
   assert.equal(getByPath({ data: { items: [{ text: "hello" }] } }, "data.items.0.text"), "hello");
@@ -18,7 +19,7 @@ test("parseGenericOcrRegions maps words_result location with configurable paths"
     confidencePathCandidates: ["score"],
   });
 
-  assert.deepEqual(regions.map((region) => ({ text: region.sourceText, box: region.box, confidence: region.confidence })), [
+  assert.deepEqual(regions.map((region: GenericOcrRegion) => ({ text: region.sourceText, box: region.box, confidence: region.confidence })), [
     { text: "HELLO", box: { x: 10, y: 20, width: 90, height: 24 }, confidence: 0.96 },
   ]);
 });

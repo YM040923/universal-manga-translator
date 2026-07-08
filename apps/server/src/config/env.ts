@@ -33,7 +33,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     openaiBaseUrl: env.OPENAI_BASE_URL ?? "https://api.openai.com/v1",
     openaiApiKey: env.OPENAI_API_KEY ?? "",
     openaiModel: env.OPENAI_MODEL ?? "gpt-4.1-mini",
-    ocrApiUrl: env.OCR_API_URL ?? env.UAPIS_OCR_URL ?? "https://uapis.cn/api/v1/image/ocr",
+    ocrApiUrl: env.OCR_API_URL ?? env.UAPIS_OCR_URL ?? "https://example.com/ocr",
     ocrApiKey: ocrApiKeys[0] ?? "",
     ocrApiKeys,
     ocrInputMode,

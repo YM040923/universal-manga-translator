@@ -66,3 +66,12 @@ test("desktop shell no longer exposes legacy backend admin bridge", () => {
   const html = createDesktopShellHtml();
   assert.doesNotMatch(html, /adminUrl|openExternalAdmin|\/admin/);
 });
+
+test("desktop shell uses generic OCR and translator placeholders", () => {
+  const html = createDesktopShellHtml();
+
+  assert.match(html, /https:\/\/example\.com\/ocr/);
+  assert.match(html, /gpt-4\.1-mini/);
+  assert.doesNotMatch(html, /uapis\.cn/);
+  assert.doesNotMatch(html, /gpt-5\.4-mini/);
+});

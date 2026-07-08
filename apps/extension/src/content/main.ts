@@ -11,7 +11,7 @@ import { DebugOverlayRenderer } from "./debug-overlay-renderer";
 import type { ServerEvent } from "@umt/shared/protocol";
 import type { DetectedSurface } from "./detector/surface-detector";
 import { EventResultRouter } from "./events/event-result-router";
-import { isUmtContentCommand } from "./messages";
+import { isUmtContentCommand, type UmtPageSampleSelfTestResponse } from "./messages";
 import { OverlayRenderer } from "./overlay/overlay-renderer";
 import { createDocumentRectOverlayAnchor } from "./overlay/rect-anchor";
 import { ChapterProgress } from "./progress/chapter-progress";
@@ -218,6 +218,7 @@ async function bootstrap(): Promise<boolean> {
       debugRenderer.markSurface(surface.surfaceId, surface.element, "detected", `#${surface.index}`);
     }
     queue.setSurfaces(surfaces);
+    renderer.refreshAll();
     updateProgress();
     logInfo("surface registry scan", `${reason} | found=${surfaces.length}`);
     void restoreCachedChapterResults(surfaces).catch((error) => logError("restore chapter cache failed", error));
@@ -332,6 +333,27 @@ async function bootstrap(): Promise<boolean> {
     };
     await Promise.all(Array.from({ length: Math.min(concurrency, surfaces.length) }, () => runNext()));
     updateProgress();
+  }
+
+  async function sampleOcrSelfTest(): Promise<UmtPageSampleSelfTestResponse> {
+    const startedAt = Date.now();
+    try {
+      const surfaces = scanAndMountControls("self-test");
+      if (!surfaces.length) {
+        return { ok: false, status: isLikelyReaderPage(document, []) ? "no-surface" : "no-reader-page", detail: "当前页没有可用于 OCR 自检的漫画图片", elapsedMs: Date.now() - startedAt, providerProfile: currentProviderProfile() };
+      }
+      const surface = surfaces[0];
+      if (!surface) return { ok: false, status: "no-surface", detail: "当前页没有可用于 OCR 自检的漫画图片", elapsedMs: Date.now() - startedAt, providerProfile: currentProviderProfile() };
+      const task = await createSurfaceTaskWithImageData(toDetectedSurface(surface), "p2", settings.targetLanguage, { allowImageUrlFallback: settings.runMode !== "direct" });
+      const response = await client.submit({ ...task, surfaceId: `selftest:${surface.surfaceId}:${Date.now()}` }, jobSessionId);
+      const elapsedMs = Date.now() - startedAt;
+      if (!response.ok) return { ok: false, status: "failed", detail: response.error, surfaceId: surface.surfaceId, surfaceIndex: surface.index, elapsedMs, providerProfile: currentProviderProfile() };
+      const regionCount = response.result?.regions.length ?? 0;
+      if (regionCount <= 0) return { ok: false, status: "empty", detail: "页面样本未返回文字区域", surfaceId: surface.surfaceId, surfaceIndex: surface.index, elapsedMs, providerProfile: currentProviderProfile() };
+      return { ok: true, status: "ok", surfaceId: surface.surfaceId, surfaceIndex: surface.index, regionCount, elapsedMs, providerProfile: currentProviderProfile() };
+    } catch (error) {
+      return { ok: false, status: "failed", detail: formatShortError(error), elapsedMs: Date.now() - startedAt, providerProfile: currentProviderProfile() };
+    }
   }
 
   function startManualSelection(): void {
@@ -514,8 +536,12 @@ async function bootstrap(): Promise<boolean> {
     if (relevant.some((key) => Object.prototype.hasOwnProperty.call(changes, key))) void reloadSettings();
   });
 
-  chrome.runtime?.onMessage?.addListener((message) => {
+  chrome.runtime?.onMessage?.addListener((message, _sender, sendResponse) => {
     if (!isUmtContentCommand(message)) return false;
+    if (message.command === "sampleOcrSelfTest") {
+      void sampleOcrSelfTest().then(sendResponse);
+      return true;
+    }
     if (message.command === "translate") void translatePage(false);
     if (message.command === "refresh") void resetPageState("popup-refresh", false);
     if (message.command === "togglePause") {

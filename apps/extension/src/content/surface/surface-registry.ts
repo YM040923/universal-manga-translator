@@ -26,6 +26,7 @@ export class SurfaceRegistry {
 }
 
 export function isLikelyReaderPage(root: Document = document, surfaces: RegisteredSurface[] = SurfaceRegistry.scan(root).surfaces): boolean {
+  if (looksLikeComicDirectoryUrl(root.location.href) && !looksLikeChapterUrl(root.location.href)) return false;
   if (looksLikeChapterUrl(root.location.href)) return true;
   if (surfaces.length >= 2 && looksLikeStackedReaderSurfaces(surfaces)) return true;
   if (surfaces.length === 1) {
@@ -64,6 +65,15 @@ function isMainMangaImage(rect: DOMRect | { width: number; height: number }, nat
   return width >= 500 && height >= 600 && height / Math.max(1, width) >= 0.7;
 }
 
+function looksLikeComicDirectoryUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return /\/(?:comics?|manga|series)\/[^/]+\/?$/i.test(parsed.pathname);
+  } catch {
+    return false;
+  }
+}
+
 function looksLikeChapterUrl(url: string): boolean {
   try {
     const parsed = new URL(url);
@@ -79,7 +89,7 @@ function looksLikeChapterImageUrl(url: string): boolean {
 
 function looksLikeStackedReaderSurfaces(surfaces: RegisteredSurface[]): boolean {
   const sorted = [...surfaces].sort((a, b) => a.rect.y - b.rect.y);
-  const readerLike = sorted.filter((surface) => surface.rect.width >= 500 && surface.rect.height >= 600 && looksLikeChapterImageUrl(surface.imageUrl));
+  const readerLike = sorted.filter((surface) => surface.rect.width >= 500 && surface.rect.height >= 600 && (looksLikeChapterImageUrl(surface.imageUrl) || looksLikeTallReaderPanel(surface)));
   if (readerLike.length < 2) return false;
   let stackedPairs = 0;
   for (let i = 1; i < readerLike.length; i += 1) {
@@ -91,6 +101,12 @@ function looksLikeStackedReaderSurfaces(surfaces: RegisteredSurface[]): boolean 
     if (sameReaderColumn && verticalGap >= -40 && verticalGap <= 420) stackedPairs += 1;
   }
   return stackedPairs >= 1;
+}
+
+function looksLikeTallReaderPanel(surface: RegisteredSurface): boolean {
+  const aspect = surface.rect.height / Math.max(1, surface.rect.width);
+  const naturalAspect = surface.naturalSize.height / Math.max(1, surface.naturalSize.width);
+  return aspect >= 1.15 || naturalAspect >= 1.15;
 }
 
 function absoluteImageUrl(value: string, pageUrl: string): string {
