@@ -23,6 +23,7 @@ import { SurfaceControl } from "./surface/surface-control";
 import { selectVisibleSurfaces } from "./surface/visible-surfaces";
 import { isLikelyReaderPage, SurfaceRegistry, type RegisteredSurface } from "./surface/surface-registry";
 import { isRenderableSurfaceResult } from "./translation-result";
+import { createJobSessionId, debounce, formatShortError, isUmtOwnedMutation, requestBackendHttp } from "./utils";
 import { getEffectiveSiteSettings, isSiteEnabled, loadSettings, saveSettings, setSiteSettings, setTranslationOverlayVisible, type ExtensionSettings } from "../settings/settings";
 import { appendRuntimeLog } from "../settings/runtime-log";
 
@@ -572,36 +573,6 @@ async function bootstrap(): Promise<boolean> {
     return false;
   });
   return true;
-}
-
-function isUmtOwnedMutation(mutation: MutationRecord): boolean {
-  const target = mutation.target instanceof HTMLElement ? mutation.target : mutation.target.parentElement;
-  if (target?.closest("[data-umt-overlay-root], [data-umt-chapter-progress], [data-umt-surface-button], [data-umt-panel], [data-umt-debug-root], [data-umt-selection-layer]")) return true;
-  for (const node of [...mutation.addedNodes, ...mutation.removedNodes]) {
-    if (node instanceof HTMLElement && node.matches("[data-umt-overlay-root], [data-umt-chapter-progress], [data-umt-surface-button], [data-umt-panel], [data-umt-debug-root], [data-umt-selection-layer]")) return true;
-  }
-  return false;
-}
-
-function createJobSessionId(): string {
-  return `session:${Date.now()}:${Math.random().toString(36).slice(2)}`;
-}
-
-function debounce<T extends (...args: never[]) => void>(fn: T, delayMs: number): T {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  return ((...args: Parameters<T>) => {
-    if (timer) clearTimeout(timer);
-    timer = setTimeout(() => fn(...args), delayMs);
-  }) as T;
-}
-
-function formatShortError(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error);
-  return message.length > 120 ? `${message.slice(0, 117)}...` : message;
-}
-
-async function requestBackendHttp(request: { url: string; init?: import("./messages.js").UmtBackendHttpRequest["init"] }): Promise<import("./messages.js").UmtBackendHttpResponse> {
-  return await chrome.runtime.sendMessage({ source: "umt-content", command: "backendHttp", ...request });
 }
 
 
