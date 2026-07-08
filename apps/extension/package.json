@@ -1,6 +1,6 @@
 {
   "name": "@umt/extension",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "scripts": {
     "build": "vite build -c vite.content.config.ts && vite build -c vite.app.config.ts && node scripts/copy-static.mjs",
