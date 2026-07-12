@@ -103,7 +103,9 @@ test("extension packaging runs release package verification and checksum workflo
 
   assert.match(packageJson.scripts["package:extension"], /package-extension\.ps1/);
   assert.match(packageJson.scripts["verify:release"], /verify-release-assets\.ps1/);
+  assert.match(packageJson.scripts["release:check"], /pnpm typecheck/);
   assert.match(readme, /pnpm package:extension/);
+  assert.match(readme, /pnpm release:check/);
   assert.match(readme, /release\/extension-release\.zip\.sha256/);
   assert.match(readme, /release\/build-info\.json/);
   assert.equal(exists("scripts/verify-extension-package.ps1"), true);
@@ -122,6 +124,7 @@ test("extension packaging runs release package verification and checksum workflo
   assert.match(read("scripts/verify-release-assets.ps1"), /^param\(/);
   assert.match(checklist, /verify-extension-package\.ps1/);
   assert.match(checklist, /verify-release-assets\.ps1/);
+  assert.match(checklist, /pnpm release:check/);
   assert.match(checklist, /extension-release\.zip\.sha256/);
   assert.match(checklist, /build-info\.json/);
   assert.match(releaseNotes, /extension-release\.zip\.sha256/);
@@ -245,7 +248,7 @@ test("release notes template and contributing guide document safe release workfl
   }
 
   const contributing = read("CONTRIBUTING.md");
-  for (const phrase of ["纯插件优先", "pnpm install", "pnpm typecheck", "pnpm test", "package-extension.ps1", ".env", "release/"]) {
+  for (const phrase of ["纯插件优先", "pnpm install", "pnpm typecheck", "pnpm test", "pnpm release:check", "package-extension.ps1", ".env", "release/"]) {
     assertIncludes(contributing, phrase);
   }
   for (const phrase of ["extension-release.zip", "extension-release.zip.sha256", "build-info.json"]) {
@@ -280,6 +283,7 @@ function publicDocs() {
     "README.md",
     "docs/quickstart.md",
     "docs/troubleshooting.md",
+    "docs/release-checklist.md",
     "docs/release-notes-template.md",
     "docs/privacy-and-permissions.md",
     "docs/product-roadmap.md",

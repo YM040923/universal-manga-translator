@@ -95,3 +95,22 @@ test("release version is consistent across root package, extension package, and 
   assert.equal(extensionPkg.version, rootPkg.version);
   assert.equal(manifest.version, rootPkg.version);
 });
+
+test("root release:check runs the complete local release gate", () => {
+  const pkg = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8"));
+  const script = pkg.scripts?.["release:check"] ?? "";
+
+  for (const command of [
+    "pnpm typecheck",
+    "pnpm test",
+    "pnpm test:e2e",
+    "pnpm package:extension",
+    "pnpm verify:release",
+  ]) {
+    assert.match(script, new RegExp(command.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  }
+  assert.ok(script.indexOf("pnpm typecheck") < script.indexOf("pnpm test"), "typecheck should run before tests");
+  assert.ok(script.indexOf("pnpm test") < script.indexOf("pnpm test:e2e"), "unit tests should run before browser smoke tests");
+  assert.ok(script.indexOf("pnpm test:e2e") < script.indexOf("pnpm package:extension"), "browser smoke tests should run before packaging");
+  assert.ok(script.indexOf("pnpm package:extension") < script.indexOf("pnpm verify:release"), "release assets should be verified after packaging");
+});

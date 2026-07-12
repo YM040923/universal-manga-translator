@@ -74,7 +74,7 @@ release/extension-release.zip.sha256
 release/build-info.json
 ```
 
-?? `.sha256` ???? zip?`build-info.json` ?????commit?dirty ???zip ????SHA256 ??????????????
+其中 `.sha256` 用于校验 zip，`build-info.json` 记录版本、commit、dirty 状态、zip 文件名、SHA256 和构建时间，方便发布后追溯。
 
 ## API 配置说明
 
@@ -182,6 +182,12 @@ pnpm doctor
 pnpm typecheck
 pnpm test
 pnpm build
+```
+
+发布前本地总检查：
+
+```powershell
+pnpm release:check
 ```
 
 高级后端/桌面端开发：

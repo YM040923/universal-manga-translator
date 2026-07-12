@@ -16,6 +16,12 @@ pnpm test
 powershell -ExecutionPolicy Bypass -File .\scripts\package-extension.ps1
 ```
 
+发布前本地总检查：
+
+```powershell
+pnpm release:check
+```
+
 生成的发布资产在：
 
 ```text

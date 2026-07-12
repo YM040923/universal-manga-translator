@@ -1,4 +1,4 @@
-﻿# Release checklist
+# Release checklist
 
 Universal Manga Translator 的普通用户交付物优先是 Chrome 插件包。Desktop/backend are advanced or experimental and should not be presented as the default installation path.
 
@@ -6,12 +6,19 @@ Before publishing a release:
 
 1. Do not commit `.env`, `apps/server/data/`, build output, logs, `release/`, or `node_modules/`.
 2. Verify API examples use placeholder keys only.
-3. Run the local validation suite:
+3. Run the local validation suite. The recommended one-command gate is:
+
+   ```powershell
+   pnpm release:check
+   ```
+
+   If you need to run the checks manually, use:
 
    ```powershell
    pnpm install
    pnpm typecheck
    pnpm test
+   pnpm test:e2e
    pnpm build
    ```
 
