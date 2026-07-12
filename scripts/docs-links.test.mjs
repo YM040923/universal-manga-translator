@@ -66,7 +66,7 @@ test("public user docs are readable UTF-8 without mojibake", () => {
   for (const relative of publicDocs()) {
     const content = read(relative);
     assert.doesNotMatch(content, /[\uE000-\uF8FF\uFFFD]/, relative);
-    assert.doesNotMatch(content, /(?:Ã.|Â.|â€|â€™)/, relative);
+    assert.doesNotMatch(content, mojibakePattern(), relative);
   }
 });
 
@@ -281,4 +281,8 @@ function exists(relative) {
 
 function assertIncludes(content, phrase) {
   assert.equal(content.includes(phrase), true, phrase);
+}
+
+function mojibakePattern() {
+  return /(?:Ã.|Â.|â€|â€™|澶嶅|涓嬭|鏍￠|瀹夎|瑙ｅ|鍚庣|杩為|澶辫|鑷|涓嶈|缈昏|椤甸|鏍锋|鎺ュ|鎻掍欢|鏂囦欢|娴忚|鐢ㄦ埛|闂)/;
 }

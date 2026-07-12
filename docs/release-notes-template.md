@@ -39,6 +39,7 @@
 - OCR 成本由用户选择的服务商决定。
 - 目录页、详情页、搜索页不会作为默认翻译目标。
 - 桌面端和本地后端是 Advanced / Experimental，不是普通用户默认安装路径。
+- 远程 OCR / 翻译 API 必须使用 HTTPS；本机 `http://127.0.0.1`、`http://localhost` 或 `http://[::1]` 可用于本地 OCR。
 
 ## 隐私与 API Key
 
