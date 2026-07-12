@@ -86,6 +86,17 @@ test("extension packaging runs release package verification and checksum workflo
   assert.match(checklist, /manifest\.json/);
 });
 
+test("CI runs the extension browser smoke test before packaging release artifacts", () => {
+  const ciWorkflow = read(".github/workflows/ci.yml");
+
+  assert.match(ciWorkflow, /playwright install chromium/);
+  assert.match(ciWorkflow, /pnpm test:e2e/);
+  assert.ok(
+    ciWorkflow.indexOf("pnpm test:e2e") < ciWorkflow.indexOf("Package extension"),
+    "browser smoke test must run before packaging/uploading release artifacts",
+  );
+});
+
 test("public examples use generic placeholders instead of a bundled OCR vendor", () => {
   const envExample = read(".env.example");
   assert.match(envExample, /OCR_API_URL=https:\/\/example\.com\/ocr/);

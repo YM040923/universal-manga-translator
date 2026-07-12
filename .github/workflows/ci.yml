@@ -32,6 +32,12 @@ jobs:
       - name: Test
         run: pnpm test
 
+      - name: Install Playwright Chromium
+        run: pnpm exec playwright install chromium
+
+      - name: Browser smoke test
+        run: pnpm test:e2e -- --reporter=line
+
       - name: Package extension
         shell: pwsh
         run: powershell -ExecutionPolicy Bypass -File .\scripts\package-extension.ps1
