@@ -9,7 +9,7 @@
     "typecheck": "pnpm --filter @umt/shared build && pnpm --filter @umt/core build && pnpm -r typecheck",
     "dev:server": "pnpm --filter @umt/server dev",
     "dev:extension": "pnpm --filter @umt/extension dev",
-    "test:e2e": "playwright test tests/integration",
+    "test:e2e": "pnpm --filter @umt/extension build && playwright test tests/integration",
     "doctor": "node scripts/doctor.mjs",
     "package:extension": "powershell -ExecutionPolicy Bypass -File .\\scripts\\package-extension.ps1",
     "verify:release": "powershell -ExecutionPolicy Bypass -File .\\scripts\\verify-release-assets.ps1",

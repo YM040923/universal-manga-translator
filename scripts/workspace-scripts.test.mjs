@@ -20,3 +20,15 @@ test("@umt/extension test builds workspace dependencies before compiling tests",
     "core must be built before extension test compilation",
   );
 });
+
+test("root test:e2e builds the extension before launching browser tests", () => {
+  const pkg = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8"));
+  const script = pkg.scripts?.["test:e2e"] ?? "";
+
+  assert.match(script, /pnpm --filter @umt\/extension build/);
+  assert.match(script, /playwright test tests\/integration/);
+  assert.ok(
+    script.indexOf("pnpm --filter @umt/extension build") < script.indexOf("playwright test tests/integration"),
+    "extension build must happen before Playwright loads apps/extension/dist",
+  );
+});
