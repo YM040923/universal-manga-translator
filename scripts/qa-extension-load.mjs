@@ -11,6 +11,7 @@ const args = new Map(process.argv.slice(2).map((arg) => {
 }));
 
 const url = args.get("url") || DEFAULT_URL;
+const runMode = args.get("run-mode") === "backend" ? "backend" : "direct";
 const translateCount = Math.max(0, Math.min(10, Number(args.get("translate") || "0") || 0));
 const timeoutMs = Math.max(10_000, Number(args.get("timeout") || "180000") || 180_000);
 const projectRoot = resolve(import.meta.dirname, "..");
@@ -33,6 +34,7 @@ const context = await chromium.launchPersistentContext(profileDir, {
 const report = {
   ok: false,
   url,
+  runMode,
   translateCount,
   extensionDir,
   checks: [],
@@ -59,14 +61,14 @@ try {
   const worker = context.serviceWorkers()[0];
   if (worker) {
     const ocrKeys = splitKeys(env.OCR_API_KEYS || env.OCR_API_KEY || env.UAPIS_API_KEYS || env.UAPIS_API_KEY);
-    await worker.evaluate(async () => {
-      await chrome.storage.sync.set({ enabledSites: { "asurascans.com": true }, runMode: "direct" });
-    });
+    await worker.evaluate(async (mode) => {
+      await chrome.storage.sync.set({ enabledSites: { "asurascans.com": true }, runMode: mode });
+    }, runMode);
     if (args.get("configure-direct") === "true") {
       await worker.evaluate(async (config) => {
         await chrome.storage.sync.set(config);
       }, {
-        runMode: "direct",
+        runMode,
         directOcr: {
           apiUrl: env.OCR_API_URL || "",
           apiKeys: ocrKeys,
@@ -93,14 +95,15 @@ try {
   await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60_000 });
   await page.waitForTimeout(8_000);
 
-  report.backend = await fetchJsonFromNode("http://127.0.0.1:47831/health");
-
   report.pageState = await readPageState(page);
   check("content-script-injected", report.pageState.overlayRoots >= 1 || report.pageState.progress.length >= 1, JSON.stringify({ overlayRoots: report.pageState.overlayRoots, progress: report.pageState.progress.length }));
   check("manga-images-detected", report.pageState.mangaImages >= 5, `${report.pageState.mangaImages} manga-like images`);
   check("surface-buttons-mounted", report.pageState.buttons.length >= Math.min(5, Math.max(1, report.pageState.mangaImages)), `${report.pageState.buttons.length} buttons`);
   check("progress-mounted", report.pageState.progress.length >= 1, `${report.pageState.progress.length} progress panels`);
-  check("backend-reachable", Boolean(report.backend?.ok), JSON.stringify(report.backend));
+  if (runMode === "backend") {
+    report.backend = await fetchJsonFromNode("http://127.0.0.1:47831/health");
+    check("backend-reachable", Boolean(report.backend?.ok), JSON.stringify(report.backend));
+  }
 
   if (translateCount > 0) {
     for (let index = 0; index < translateCount; index += 1) {
@@ -118,7 +121,7 @@ try {
     check("translation-no-failed-buttons", firstFailed.length === 0, JSON.stringify(firstStatuses));
     check("translation-completed-or-cached-target", firstCompleted.length >= translateCount, `${firstCompleted.length}/${translateCount} completed-or-cached`);
     check("translation-rendered-overlay", report.pageState.renderedRegions >= 1 || report.pageState.cachedOrCompletedButtons >= 1, `${report.pageState.renderedRegions} rendered regions, ${report.pageState.cachedOrCompletedButtons} completed/cached buttons`);
-    report.diagnostics = await fetchJsonFromNode("http://127.0.0.1:47831/v1/diagnostics/recent?limit=20");
+    if (runMode === "backend") report.diagnostics = await fetchJsonFromNode("http://127.0.0.1:47831/v1/diagnostics/recent?limit=20");
     if (worker) report.runtimeLogs = await readRuntimeLogs(worker);
   }
 

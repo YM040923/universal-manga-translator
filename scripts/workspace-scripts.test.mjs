@@ -32,3 +32,14 @@ test("root test:e2e builds the extension before launching browser tests", () => 
     "extension build must happen before Playwright loads apps/extension/dist",
   );
 });
+
+test("QA extension loader does not require backend health in plugin-only mode", () => {
+  const script = readFileSync(path.join(root, "scripts", "qa-extension-load.mjs"), "utf8");
+
+  assert.match(script, /runMode/);
+  assert.match(script, /direct/);
+  assert.ok(
+    script.indexOf('if (runMode === "backend")') < script.indexOf('check("backend-reachable"'),
+    "backend health check must be guarded behind backend run mode",
+  );
+});
