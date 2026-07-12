@@ -70,6 +70,22 @@ test("public user docs are readable UTF-8 without mojibake", () => {
   }
 });
 
+test("extension user-facing source strings do not contain mojibake", () => {
+  for (const relative of [
+    "apps/extension/src/popup/main.ts",
+    "apps/extension/src/popup/self-test.ts",
+    "apps/extension/src/content/main.ts",
+    "apps/extension/src/content/panel/floating-labels.ts",
+    "apps/extension/src/content/progress/chapter-progress.ts",
+    "apps/extension/src/content/surface/surface-state.ts",
+    "apps/extension/src/content/surface/surface-control.ts",
+  ]) {
+    const content = read(relative);
+    assert.doesNotMatch(content, /[\uFFFD]/, relative);
+    assert.doesNotMatch(content, /(?:Ã.|Â.|â€|â€™|鍚庣|杩為|澶辫|鑷|涓嶈|缈昏|椤甸|鏍锋|鎺ュ)/, relative);
+  }
+});
+
 test("extension packaging runs release package verification and checksum workflow", () => {
   const packageJson = JSON.parse(read("package.json"));
   const packageScript = read("scripts/package-extension.ps1");
