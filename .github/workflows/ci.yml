@@ -36,7 +36,7 @@ jobs:
         run: pnpm exec playwright install chromium
 
       - name: Browser smoke test
-        run: pnpm test:e2e -- --reporter=line
+        run: pnpm test:e2e
 
       - name: Package extension
         shell: pwsh
