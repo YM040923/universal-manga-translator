@@ -85,3 +85,13 @@ test("QA extension loader has a help mode that exits before launching Chrome", (
   assert.match(script, /--run-mode=backend/);
   assert.match(script, /qa-output\/extension-qa-report\.json/);
 });
+
+test("release version is consistent across root package, extension package, and manifest", () => {
+  const rootPkg = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8"));
+  const extensionPkg = JSON.parse(readFileSync(path.join(root, "apps", "extension", "package.json"), "utf8"));
+  const manifest = JSON.parse(readFileSync(path.join(root, "apps", "extension", "public", "manifest.json"), "utf8"));
+
+  assert.match(rootPkg.version, /^\d+\.\d+\.\d+$/);
+  assert.equal(extensionPkg.version, rootPkg.version);
+  assert.equal(manifest.version, rootPkg.version);
+});
