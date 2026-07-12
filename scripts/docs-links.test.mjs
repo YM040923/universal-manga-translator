@@ -99,18 +99,24 @@ test("extension packaging runs release package verification and checksum workflo
   assert.match(readme, /pnpm package:extension/);
   assert.equal(exists("scripts/verify-extension-package.ps1"), true);
   assert.equal(exists("scripts/write-extension-checksum.ps1"), true);
+  assert.equal(exists("scripts/write-release-build-info.ps1"), true);
   assert.equal(exists("scripts/verify-release-assets.ps1"), true);
   assert.match(packageScript, /verify-extension-package\.ps1/);
   assert.match(packageScript, /write-extension-checksum\.ps1/);
+  assert.match(packageScript, /write-release-build-info\.ps1/);
   assert.match(packageScript, /verify-release-assets\.ps1/);
   assert.match(packageScript, /extension-release\.zip\.sha256/);
+  assert.match(packageScript, /build-info\.json/);
   assert.match(read("scripts/verify-extension-package.ps1"), /^param\(/);
   assert.match(read("scripts/verify-release-assets.ps1"), /^param\(/);
   assert.match(checklist, /verify-extension-package\.ps1/);
   assert.match(checklist, /verify-release-assets\.ps1/);
   assert.match(checklist, /extension-release\.zip\.sha256/);
+  assert.match(checklist, /build-info\.json/);
   assert.match(releaseNotes, /extension-release\.zip\.sha256/);
+  assert.match(releaseNotes, /build-info\.json/);
   assert.match(ciWorkflow, /release\/extension-release\.zip\.sha256/);
+  assert.match(ciWorkflow, /release\/build-info\.json/);
   assert.match(checklist, /manifest\.json/);
 });
 
@@ -223,7 +229,7 @@ test("release notes template and contributing guide document safe release workfl
   for (const relative of ["docs/release-notes-template.md", "CONTRIBUTING.md"]) assert.equal(exists(relative), true, relative);
 
   const releaseNotes = read("docs/release-notes-template.md");
-  for (const phrase of ["extension-release.zip", "extension-release.zip.sha256", "chrome://extensions", "已知限制", "API Key", "troubleshooting.md"]) {
+  for (const phrase of ["extension-release.zip", "extension-release.zip.sha256", "build-info.json", "chrome://extensions", "已知限制", "API Key", "troubleshooting.md"]) {
     assertIncludes(releaseNotes, phrase);
   }
 

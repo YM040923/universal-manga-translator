@@ -33,8 +33,10 @@ if (-not (Test-Path $zipPath)) {
 
 & (Join-Path $PSScriptRoot "verify-extension-package.ps1") -ZipPath $zipPath
 & (Join-Path $PSScriptRoot "write-extension-checksum.ps1") -ZipPath $zipPath -ShaPath $shaPath
+& (Join-Path $PSScriptRoot "write-release-build-info.ps1") -ZipPath $zipPath -ShaPath $shaPath -OutPath (Join-Path $releaseDir "build-info.json")
 & (Join-Path $PSScriptRoot "verify-release-assets.ps1") -ZipPath $zipPath -ShaPath $shaPath
 
 Write-Host "Extension release package created:"
 Write-Host $zipPath
 Write-Host $shaPath
+Write-Host (Join-Path $releaseDir "build-info.json")

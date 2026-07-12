@@ -6,6 +6,7 @@
 
 - 主下载：`extension-release.zip`
 - 校验文件：`extension-release.zip.sha256`
+- 构建信息：`build-info.json`，包含版本、commit 和 zip SHA256。
 - 安装方式：解压 zip，然后在 Chrome 的 `chrome://extensions` 中选择“加载已解压的扩展程序”，加载解压后的文件夹。
 - 不要直接把 zip 拖进 Chrome。Chrome 开发者模式需要加载解压后的目录。
 

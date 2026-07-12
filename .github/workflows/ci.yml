@@ -49,3 +49,4 @@ jobs:
           path: |
             release/extension-release.zip
             release/extension-release.zip.sha256
+            release/build-info.json

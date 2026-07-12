@@ -69,7 +69,7 @@ qa-output/extension-qa.png
 
 Use `--run-mode=backend` only for advanced backend validation.
 
-7. Upload `release/extension-release.zip` as the primary GitHub Release asset, and upload `release/extension-release.zip.sha256` beside it.
+7. Upload `release/extension-release.zip` as the primary GitHub Release asset, and upload `release/extension-release.zip.sha256` plus `release/build-info.json` beside it.
 8. Copy `docs/release-notes-template.md` into the GitHub Release body and fill in the version-specific changes.
 9. Mention in release notes that users should unzip the package and load the extracted directory through `chrome://extensions`.
 10. Confirm the GitHub Actions CI run passed for the commit being released.
