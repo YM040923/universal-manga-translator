@@ -9,7 +9,6 @@ import { createScreenshotSurface, readImageSize } from "./capture/screenshot-cro
 import { requestVisibleTabScreenshot } from "./capture/screenshot-request";
 import { DebugOverlayRenderer } from "./debug-overlay-renderer";
 import type { ServerEvent } from "@umt/shared/protocol";
-import type { DetectedSurface } from "./detector/surface-detector";
 import { EventResultRouter } from "./events/event-result-router";
 import { isUmtContentCommand, type UmtPageSampleSelfTestResponse } from "./messages";
 import { OverlayRenderer } from "./overlay/overlay-renderer";
@@ -20,6 +19,7 @@ import { ManualSelectionController } from "./selection/manual-selection";
 import { TranslationQueue } from "./queue/translation-queue";
 import type { SurfaceStatus } from "./surface/surface-state";
 import { SurfaceControl } from "./surface/surface-control";
+import { toDetectedSurface } from "./surface/detected-surface";
 import { selectVisibleSurfaces } from "./surface/visible-surfaces";
 import { isLikelyReaderPage, SurfaceRegistry, type RegisteredSurface } from "./surface/surface-registry";
 import { isRenderableSurfaceResult } from "./translation-result";
@@ -492,19 +492,6 @@ async function bootstrap(): Promise<boolean> {
     if (settings.progressWidgetEnabled) void progress.mount();
     renderer.setVisible(settings.translationOverlayVisible);
     readerUiMounted = true;
-  }
-
-  function toDetectedSurface(surface: RegisteredSurface): DetectedSurface {
-    const rect = surface.element.getBoundingClientRect();
-    return {
-      surfaceId: surface.surfaceId,
-      kind: "image",
-      element: surface.element,
-      imageUrl: surface.imageUrl,
-      rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
-      naturalSize: surface.naturalSize,
-      score: 10,
-    };
   }
 
   floatingPanel = new FloatingPanel({
