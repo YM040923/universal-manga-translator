@@ -1,4 +1,4 @@
-﻿# 本地 OCR HTTP 接入说明
+# 本地 OCR HTTP 接入说明
 
 Universal Manga Translator 不在插件里直接运行重型 OCR 模型。原因是浏览器扩展不适合打包大型模型、GPU/CPU 推理依赖和 Python 环境。推荐做法是：你可以把任意本地 OCR 程序封装成 HTTP 服务，然后在插件直连模式或高级后端模式里填写它的 URL。
 
@@ -9,6 +9,10 @@ Universal Manga Translator 不在插件里直接运行重型 OCR 模型。原因
 ```text
 http://127.0.0.1:9000/ocr
 ```
+
+纯插件直连模式允许本机 `http://127.0.0.1`、`http://localhost` 或 `http://[::1]`。远程 OCR 服务请使用 `https://`，不要把 API Key 通过明文 HTTP 发送到外网。
+
+
 
 插件/后端会用 `multipart/form-data` 调用该 URL，输入模式二选一：
 

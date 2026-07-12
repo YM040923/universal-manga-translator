@@ -41,7 +41,8 @@
 1. 确认 OCR API URL 可以访问。
 2. 如果是本地 OCR，确认 `http://127.0.0.1:9000/ocr` 这类服务正在运行。
 3. 如果服务只支持 HTTPS，不要填写 HTTP。
-4. 如果服务商要求特殊字段，把它们填到 `staticFields JSON`。
+4. 远程 OCR / 翻译 API 必须使用 `https://`；`http://` 只支持 `127.0.0.1`、`localhost`、`[::1]` 这类本机地址。
+5. 如果服务商要求特殊字段，把它们填到 `staticFields JSON`。
 
 ## OCR 连通但未解析到文字区域
 

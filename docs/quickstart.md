@@ -38,6 +38,7 @@
 打开 popup 里的“API 设置 / 自检”，填写：
 
 - OCR API URL，例如 `https://example.com/ocr` 或本地 `http://127.0.0.1:9000/ocr`
+  - 远程 OCR 必须使用 `https://`。`http://` 只允许本机地址，例如 `http://127.0.0.1` 或 `http://localhost`。
 - OCR API Keys，一行一个 key
 - 翻译 Base URL，例如 `https://api.openai.com/v1`
 - 翻译 API Key

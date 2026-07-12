@@ -164,6 +164,25 @@ test("first-run docs cover install, self-test, and common setup failures", () =>
   assert.doesNotMatch(`${quickstart}\n${troubleshooting}`, /uapis\.cn|baidu|sk-[A-Za-z0-9_-]{12,}/i);
 });
 
+test("user docs explain that remote API HTTP is blocked except local loopback", () => {
+  const combined = [
+    "docs/quickstart.md",
+    "docs/local-ocr-http.md",
+    "docs/troubleshooting.md",
+    "docs/privacy-and-permissions.md",
+  ].map(read).join("\n");
+
+  for (const phrase of [
+    "https://",
+    "http://127.0.0.1",
+    "localhost",
+    "远程 OCR",
+    "HTTP",
+    "API Key",
+  ]) assertIncludes(combined, phrase);
+  assert.match(combined, /http:\/\/.*(只允许|只支持).*127\.0\.0\.1|只允许本机 loopback 地址使用 HTTP/);
+});
+
 test("publishing trust docs and issue templates exist without secrets", () => {
   const required = [
     "docs/privacy-and-permissions.md",

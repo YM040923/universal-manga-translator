@@ -119,6 +119,8 @@ test("handleBackendHttpMessage reports failed proxied requests with response bod
 test("isUmtDirectHttpRequest accepts generic HTTP API calls from extension contexts", () => {
   assert.equal(isUmtDirectHttpRequest({ source: "umt-content", command: "directHttp", url: "https://ocr.example/ocr" }), true);
   assert.equal(isUmtDirectHttpRequest({ source: "umt-popup", command: "directHttp", url: "http://127.0.0.1:9000/ocr" }), true);
+  assert.equal(isUmtDirectHttpRequest({ source: "umt-popup", command: "directHttp", url: "http://localhost:9000/ocr" }), true);
+  assert.equal(isUmtDirectHttpRequest({ source: "umt-content", command: "directHttp", url: "http://ocr.example/ocr" }), false);
   assert.equal(isUmtDirectHttpRequest({ source: "umt-content", command: "directHttp", url: "file:///etc/passwd" }), false);
   assert.equal(isUmtDirectHttpRequest({ source: "umt-content", command: "backendHttp", url: "https://ocr.example/ocr" }), false);
 });

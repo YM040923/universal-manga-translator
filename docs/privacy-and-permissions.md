@@ -21,6 +21,8 @@ key-a...last4
 - 你填写的 OpenAI-compatible 翻译 API：发送 OCR 得到的文本、上下文和术语表，用于生成译文。
 - 可选本地 OCR HTTP 地址，例如 `http://127.0.0.1:9000/ocr`。
 
+远程 OCR / 翻译 API 建议并要求使用 HTTPS；插件的直连代理只允许本机 loopback 地址使用 HTTP。这样可以避免 API Key 被明文发送到外网。
+
 插件不会上传到项目作者服务器。本项目默认不提供云端代理服务。
 
 ## 为什么需要 `<all_urls>`

@@ -164,10 +164,17 @@ export function isUmtDirectHttpRequest(value: unknown): value is UmtDirectHttpRe
   if ((candidate.source !== "umt-content" && candidate.source !== "umt-popup") || candidate.command !== "directHttp" || typeof candidate.url !== "string") return false;
   try {
     const url = new URL(candidate.url);
-    return url.protocol === "https:" || url.protocol === "http:";
+    if (url.protocol === "https:") return true;
+    if (url.protocol !== "http:") return false;
+    return isLoopbackHost(url.hostname);
   } catch {
     return false;
   }
+}
+
+function isLoopbackHost(hostname: string): boolean {
+  const host = hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  return host === "localhost" || host === "127.0.0.1" || host === "::1";
 }
 
 
