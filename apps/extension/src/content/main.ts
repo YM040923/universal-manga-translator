@@ -1,6 +1,7 @@
 ﻿import { BackendClient, SurfaceSubmitTracker } from "./client/backend-client";
 import { DirectClient } from "./client/direct-client";
 import { supportsEventStream, type TranslatorClient } from "./client/translator-client";
+import { hasRelevantContentSettingChange } from "./settings-change";
 import { ChapterResultCache, type ChapterResultCacheContext } from "./cache/chapter-result-cache";
 import { ManualSelectionCache, type ManualSelectionCacheContext } from "./cache/manual-selection-cache";
 import { ExtensionManualOverrideStore } from "./cache/manual-overrides";
@@ -509,8 +510,7 @@ async function bootstrap(): Promise<boolean> {
 
   chrome.storage?.onChanged?.addListener((changes, areaName) => {
     if (areaName !== "sync") return;
-    const relevant = ["runMode", "backendUrl", "directOcr", "directTranslator", "targetLanguage", "maxConcurrentSubmissions", "maxFullPageSurfaces", "siteSettings", "enabledSites", "translationOverlayVisible", "overlayAppearance", "autoTranslateDefault", "debugOverlayEnabled", "requestTimeoutMs", "retryCount", "floatingButtonEnabled", "progressWidgetEnabled"];
-    if (relevant.some((key) => Object.prototype.hasOwnProperty.call(changes, key))) void reloadSettings();
+    if (hasRelevantContentSettingChange(changes)) void reloadSettings();
   });
 
   chrome.runtime?.onMessage?.addListener((message, _sender, sendResponse) => {
