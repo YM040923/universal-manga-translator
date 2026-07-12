@@ -32,6 +32,19 @@ test("release checklist prioritizes extension zip instead of desktop packaging",
   assert.match(checklist, /Desktop\/backend.*advanced/i);
 });
 
+test("release checklist includes a manual smoke test for product-critical extension flows", () => {
+  const checklist = read("docs/release-checklist.md");
+  for (const phrase of [
+    "Manual smoke test",
+    "enable the site",
+    "API self-test",
+    "directory/detail pages",
+    "top-left image buttons",
+    "single-page retranslate",
+    "manual selection",
+  ]) assertIncludes(checklist, phrase);
+});
+
 test("release artifacts are ignored instead of committed", () => {
   const gitignore = read(".gitignore");
   assert.match(gitignore, /^release\/$/m);

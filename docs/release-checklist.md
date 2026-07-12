@@ -30,6 +30,19 @@ Before publishing a release:
    This runs `scripts/verify-extension-package.ps1`, confirms the zip contains `manifest.json` and required runtime files at the archive root, blocks source files, `.env`, logs, cache/data, and workspace folders from the release asset, and verifies `extension-release.zip.sha256` matches the zip bytes.
 
 6. Load `apps/extension/dist` in Chrome developer mode and verify the popup opens, self-test reports API failures clearly, and a manga chapter page can be translated.
+
+   Manual smoke test:
+
+   - Install from `apps/extension/dist`, open the popup, and confirm it renders immediately.
+   - On a never-enabled manga domain, confirm no page UI appears before clicking `enable the site` in the popup.
+   - After enabling, open a real chapter reader page and confirm the progress widget, the show/hide floating button, and the top-left image buttons appear on manga images.
+   - Open directory/detail pages on the same site and confirm they are not treated as reader pages.
+   - Run `API self-test` once with intentionally missing or invalid credentials and confirm the popup reports the OCR/AI error clearly without leaking API keys.
+   - Run `API self-test` once with valid credentials and confirm OCR parsing plus translator connectivity are reported.
+   - Trigger auto translation and confirm the first chapter image finishes before later concurrent pages.
+   - Click a top-left image retry button and confirm `single-page retranslate` only queues that image.
+   - Use `manual selection` on a small region, refresh the page, and confirm the cached manual bubble remains and is not overwritten by normal translation.
+   - Edit one translated bubble, refresh, and confirm the manual edit persists; delete the text and confirm the bubble stays removed.
 7. Upload `release/extension-release.zip` as the primary GitHub Release asset, and upload `release/extension-release.zip.sha256` beside it.
 8. Copy `docs/release-notes-template.md` into the GitHub Release body and fill in the version-specific changes.
 9. Mention in release notes that users should unzip the package and load the extracted directory through `chrome://extensions`.
