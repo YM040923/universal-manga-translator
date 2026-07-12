@@ -16,11 +16,15 @@ pnpm test
 powershell -ExecutionPolicy Bypass -File .\scripts\package-extension.ps1
 ```
 
-生成的发布包在：
+生成的发布资产在：
 
 ```text
 release/extension-release.zip
+release/extension-release.zip.sha256
+release/build-info.json
 ```
+
+发布 GitHub Release 时，三个文件都应上传：zip 是主安装包，`.sha256` 用于校验，`build-info.json` 用于追溯版本、commit 和构建状态。
 
 ## 本地加载插件
 

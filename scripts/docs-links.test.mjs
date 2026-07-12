@@ -248,6 +248,9 @@ test("release notes template and contributing guide document safe release workfl
   for (const phrase of ["纯插件优先", "pnpm install", "pnpm typecheck", "pnpm test", "package-extension.ps1", ".env", "release/"]) {
     assertIncludes(contributing, phrase);
   }
+  for (const phrase of ["extension-release.zip", "extension-release.zip.sha256", "build-info.json"]) {
+    assertIncludes(contributing, phrase);
+  }
 
   assert.doesNotMatch(`${releaseNotes}\n${contributing}`, /uapis\.cn|baidu|sk-[A-Za-z0-9_-]{12,}/i);
 });
