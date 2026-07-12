@@ -101,6 +101,8 @@ test("extension packaging runs release package verification and checksum workflo
   assert.equal(exists("scripts/write-extension-checksum.ps1"), true);
   assert.equal(exists("scripts/write-release-build-info.ps1"), true);
   assert.equal(exists("scripts/verify-release-assets.ps1"), true);
+  assert.match(read("scripts/verify-release-assets.ps1"), /BuildInfoPath/);
+  assert.match(read("scripts/verify-release-assets.ps1"), /build-info\.json/);
   assert.match(packageScript, /verify-extension-package\.ps1/);
   assert.match(packageScript, /write-extension-checksum\.ps1/);
   assert.match(packageScript, /write-release-build-info\.ps1/);
