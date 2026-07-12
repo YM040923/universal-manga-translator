@@ -33,6 +33,18 @@ test("root test:e2e builds the extension before launching browser tests", () => 
   );
 });
 
+test("root qa:extension builds the extension before launching manual QA", () => {
+  const pkg = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8"));
+  const script = pkg.scripts?.["qa:extension"] ?? "";
+
+  assert.match(script, /pnpm --filter @umt\/extension build/);
+  assert.match(script, /node scripts\/qa-extension-load\.mjs/);
+  assert.ok(
+    script.indexOf("pnpm --filter @umt/extension build") < script.indexOf("node scripts/qa-extension-load.mjs"),
+    "extension build must happen before QA loads apps/extension/dist",
+  );
+});
+
 test("QA extension loader does not require backend health in plugin-only mode", () => {
   const script = readFileSync(path.join(root, "scripts", "qa-extension-load.mjs"), "utf8");
 

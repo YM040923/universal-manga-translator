@@ -14,7 +14,7 @@
     "package:extension": "powershell -ExecutionPolicy Bypass -File .\\scripts\\package-extension.ps1",
     "verify:release": "powershell -ExecutionPolicy Bypass -File .\\scripts\\verify-release-assets.ps1",
     "scan:sites": "node scripts/scan-sites.mjs",
-    "qa:extension": "node scripts/qa-extension-load.mjs",
+    "qa:extension": "pnpm --filter @umt/extension build && node scripts/qa-extension-load.mjs",
     "desktop": "pnpm --filter @umt/desktop dev"
   },
   "devDependencies": {
