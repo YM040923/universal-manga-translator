@@ -70,3 +70,18 @@ test("QA extension loader uses generic OCR environment names only", () => {
   assert.match(script, /OCR_API_KEYS/);
   assert.doesNotMatch(script, /UAPIS|BAIDU|uapis|baidu/);
 });
+
+test("QA extension loader has a help mode that exits before launching Chrome", () => {
+  const script = readFileSync(path.join(root, "scripts", "qa-extension-load.mjs"), "utf8");
+
+  assert.match(script, /args\.has\("help"\)/);
+  assert.match(script, /printHelp\(\)/);
+  assert.match(script, /process\.exit\(0\)/);
+  assert.ok(
+    script.indexOf('args.has("help")') < script.indexOf("chromium.launchPersistentContext"),
+    "help mode must be handled before Playwright launches Chrome",
+  );
+  assert.match(script, /--configure-direct=true/);
+  assert.match(script, /--run-mode=backend/);
+  assert.match(script, /qa-output\/extension-qa-report\.json/);
+});

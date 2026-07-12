@@ -10,6 +10,11 @@ const args = new Map(process.argv.slice(2).map((arg) => {
   return [key, rest.length ? rest.join("=") : "true"];
 }));
 
+if (args.has("help") || args.has("h")) {
+  printHelp();
+  process.exit(0);
+}
+
 const url = args.get("url") || DEFAULT_URL;
 const runMode = args.get("run-mode") === "backend" ? "backend" : "direct";
 const qaDomain = primaryDomainFromUrl(url);
@@ -249,4 +254,38 @@ function primaryDomainFromUrl(value) {
   } catch {
     return "";
   }
+}
+
+function printHelp() {
+  console.log(`Universal Manga Translator extension QA
+
+Usage:
+  pnpm qa:extension -- [options]
+
+Default mode:
+  Builds and loads the pure Chrome extension, enables the domain from --url,
+  then verifies the page controls mount without requiring the desktop/backend.
+
+Options:
+  --url=<chapter-url>          Manga chapter URL to open.
+                              Default: ${DEFAULT_URL}
+  --translate=<0-10>           Click the first N image translation buttons and wait.
+                              Default: 0
+  --configure-direct=true      Preload direct OCR/translator config from .env.
+                              Reads OCR_API_URL, OCR_API_KEYS/OCR_API_KEY,
+                              OPENAI_BASE_URL, OPENAI_API_KEY, OPENAI_MODEL.
+  --run-mode=backend           Advanced mode: require local backend health too.
+                              Default: direct
+  --timeout=<ms>               Translation wait timeout. Default: 180000
+  --help, -h                   Show this help and do not launch Chrome.
+
+Examples:
+  pnpm qa:extension -- --url=https://example.com/chapter/1
+  pnpm qa:extension -- --configure-direct=true --translate=2
+  pnpm qa:extension -- --run-mode=backend
+
+Output:
+  qa-output/extension-qa-report.json
+  qa-output/extension-qa.png
+`);
 }

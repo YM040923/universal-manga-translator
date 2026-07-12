@@ -43,6 +43,32 @@ Before publishing a release:
    - Click a top-left image retry button and confirm `single-page retranslate` only queues that image.
    - Use `manual selection` on a small region, refresh the page, and confirm the cached manual bubble remains and is not overwritten by normal translation.
    - Edit one translated bubble, refresh, and confirm the manual edit persists; delete the text and confirm the bubble stays removed.
+
+### Optional automated extension QA
+
+For a repeatable local browser smoke test, run:
+
+```powershell
+pnpm qa:extension -- --url=https://example.com/chapter/1
+```
+
+Useful variants:
+
+```powershell
+pnpm qa:extension -- --help
+pnpm qa:extension -- --configure-direct=true --translate=2
+pnpm qa:extension -- --run-mode=backend
+```
+
+Default QA mode is the pure plugin path. It enables the primary domain from `--url`, verifies the content script, progress widget, and image buttons mount, and writes:
+
+```text
+qa-output/extension-qa-report.json
+qa-output/extension-qa.png
+```
+
+Use `--run-mode=backend` only for advanced backend validation.
+
 7. Upload `release/extension-release.zip` as the primary GitHub Release asset, and upload `release/extension-release.zip.sha256` beside it.
 8. Copy `docs/release-notes-template.md` into the GitHub Release body and fill in the version-specific changes.
 9. Mention in release notes that users should unzip the package and load the extracted directory through `chrome://extensions`.
