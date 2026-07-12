@@ -45,6 +45,18 @@ test("release checklist includes a manual smoke test for product-critical extens
   ]) assertIncludes(checklist, phrase);
 });
 
+test("release checklist documents automated pure-extension QA options", () => {
+  const checklist = read("docs/release-checklist.md");
+  for (const phrase of [
+    "Optional automated extension QA",
+    "pnpm qa:extension",
+    "--configure-direct=true",
+    "--run-mode=backend",
+    "pure plugin path",
+    "qa-output/extension-qa-report.json",
+  ]) assertIncludes(checklist, phrase);
+});
+
 test("release artifacts are ignored instead of committed", () => {
   const gitignore = read(".gitignore");
   assert.match(gitignore, /^release\/$/m);
