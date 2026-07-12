@@ -12,7 +12,7 @@ import type {
   SaveManualOverrideResponse,
   SubmitSurfaceResponse,
 } from "@umt/shared/protocol";
-import type { OverlayRegion, SurfaceResult, SurfaceTask, TextRegion } from "@umt/shared/types";
+import type { SurfaceResult, SurfaceTask } from "@umt/shared/types";
 import type { ExtensionSettings } from "../../settings/settings.js";
 import { DirectOcrCache } from "../cache/direct-ocr-cache.js";
 import { ExtensionManualOverrideStore, type ManualOverrideStorage } from "../cache/manual-overrides.js";
@@ -21,6 +21,7 @@ import { ChapterTranslationMemory } from "./chapter-memory.js";
 import { directOcrConfigHash, effectiveGlossary, effectiveGlossaryHash } from "./direct-config.js";
 import { createExtensionProxyFetch } from "./extension-proxy-fetch.js";
 import { dataUrlToBytes, parseStaticFields, sha256Hex } from "./direct-image-utils.js";
+import { toOverlayRegion } from "./direct-overlay-region.js";
 import type { TranslatorClient } from "./translator-client.js";
 
 type FetchLike = typeof fetch;
@@ -220,17 +221,4 @@ export class DirectClient implements TranslatorClient {
   providerProfile(): string {
     return `direct:${this.settings.directOcr.inputMode}:${directOcrConfigHash(this.settings)}+openai-compatible:${this.settings.directTranslator.model}+style:${TRANSLATION_STYLE_VERSION}+${effectiveGlossaryHash(this.settings)}`;
   }
-}
-
-function toOverlayRegion(region: TextRegion): OverlayRegion {
-  return {
-    ...region,
-    style: {
-      fontSize: Math.max(14, Math.min(28, Math.round(region.box.height * 0.52))),
-      writingMode: region.orientation === "vertical" ? "vertical-rl" : "horizontal-tb",
-      align: "center",
-      background: "rgba(255,255,255,0.96)",
-      color: "#111",
-    },
-  };
 }
