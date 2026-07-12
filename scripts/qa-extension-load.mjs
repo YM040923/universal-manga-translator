@@ -12,6 +12,7 @@ const args = new Map(process.argv.slice(2).map((arg) => {
 
 const url = args.get("url") || DEFAULT_URL;
 const runMode = args.get("run-mode") === "backend" ? "backend" : "direct";
+const qaDomain = primaryDomainFromUrl(url);
 const translateCount = Math.max(0, Math.min(10, Number(args.get("translate") || "0") || 0));
 const timeoutMs = Math.max(10_000, Number(args.get("timeout") || "180000") || 180_000);
 const projectRoot = resolve(import.meta.dirname, "..");
@@ -34,6 +35,7 @@ const context = await chromium.launchPersistentContext(profileDir, {
 const report = {
   ok: false,
   url,
+  qaDomain,
   runMode,
   translateCount,
   extensionDir,
@@ -61,9 +63,9 @@ try {
   const worker = context.serviceWorkers()[0];
   if (worker) {
     const ocrKeys = splitKeys(env.OCR_API_KEYS || env.OCR_API_KEY || env.UAPIS_API_KEYS || env.UAPIS_API_KEY);
-    await worker.evaluate(async (mode) => {
-      await chrome.storage.sync.set({ enabledSites: { "asurascans.com": true }, runMode: mode });
-    }, runMode);
+    await worker.evaluate(async ({ domain, mode }) => {
+      await chrome.storage.sync.set({ enabledSites: domain ? { [domain]: true } : {}, runMode: mode });
+    }, { domain: qaDomain, mode: runMode });
     if (args.get("configure-direct") === "true") {
       await worker.evaluate(async (config) => {
         await chrome.storage.sync.set(config);
@@ -233,4 +235,18 @@ function splitList(value) {
 
 function splitKeys(value) {
   return splitList(value);
+}
+
+function primaryDomainFromUrl(value) {
+  try {
+    const host = new URL(value).hostname.toLowerCase().replace(/^www\./, "");
+    const parts = host.split(".").filter(Boolean);
+    if (parts.length <= 2) return host;
+    const secondLevel = parts.at(-2) ?? "";
+    const knownSecondLevel = new Set(["co", "com", "net", "org", "ac", "gov"]);
+    if (knownSecondLevel.has(secondLevel) && (parts.at(-1)?.length ?? 0) === 2) return parts.slice(-3).join(".");
+    return parts.slice(-2).join(".");
+  } catch {
+    return "";
+  }
 }

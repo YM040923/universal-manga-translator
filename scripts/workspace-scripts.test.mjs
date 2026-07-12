@@ -43,3 +43,11 @@ test("QA extension loader does not require backend health in plugin-only mode", 
     "backend health check must be guarded behind backend run mode",
   );
 });
+
+test("QA extension loader enables the domain from the requested QA URL", () => {
+  const script = readFileSync(path.join(root, "scripts", "qa-extension-load.mjs"), "utf8");
+
+  assert.match(script, /qaDomain/);
+  assert.match(script, /primaryDomainFromUrl/);
+  assert.doesNotMatch(script, /enabledSites:\s*\{\s*"asurascans\.com":\s*true\s*\}/);
+});
