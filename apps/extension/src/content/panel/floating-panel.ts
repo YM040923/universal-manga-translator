@@ -7,6 +7,7 @@ export interface FloatingPanelActions {
 }
 
 import { currentPanelPosition, DRAG_THRESHOLD_PX, loadStoredPosition, saveStoredPosition, type FloatingPanelPosition, clampPosition } from "./floating-position.js";
+import { compactStatusText } from "./floating-labels.js";
 import {
   FLOATING_BUTTON_STYLE,
   FLOATING_EYE_ICON_STYLE,
@@ -211,15 +212,4 @@ function createMenuButton(text: string, title: string, datasetName: "umtRetransl
   button.style.cssText = FLOATING_MENU_BUTTON_STYLE;
   button.addEventListener("click", onClick);
   return button;
-}
-
-function compactStatusText(text: string, state: FloatingPanelState): string {
-  if (state === "busy") return "处理中";
-  if (state === "done") return "完成";
-  if (state === "paused") return "暂停";
-  if (state === "offline") return "离线";
-  if (state === "error") return "错误";
-  if (/自动关闭|auto off/i.test(text)) return "翻译";
-  if (/backend connected|ready|已连接/i.test(text)) return "翻译";
-  return text.length > 4 ? "翻译" : text;
 }
