@@ -3,6 +3,7 @@ import type { ManualOverridePayload } from "@umt/shared/protocol";
 import type { OverlayRegion, Size, SurfaceResult } from "@umt/shared/types";
 import { DEFAULT_SETTINGS, normalizeOverlayAppearance, type OverlayAppearance } from "../../settings/settings.js";
 import { overlayHostForElement } from "./overlay-host.js";
+import { maskPaddingForBox, maskStyleForRegion } from "./overlay-mask.js";
 import { createStableTextLayout, normalizeOverlayText } from "./text-layout.js";
 
 const manualEdits = new Map<string, string>();
@@ -384,41 +385,6 @@ function escapeSelectorValue(value: string): string {
 
 function roundCssPx(value: number): number {
   return Math.round(value * 10) / 10;
-}
-
-function maskPaddingForBox(width: number, height: number, scale = 1): number {
-  return Math.max(1, Math.min(24, Math.round(Math.min(width, height) * 0.035 * scale)));
-}
-
-function maskStyleForRegion(kind: string, width = 0, height = 0, appearance: OverlayAppearance = DEFAULT_SETTINGS.overlayAppearance): { background: string; borderRadius: string; clipPath: string; textShadow: string } {
-  const { maskShape: shape, ellipseX, ellipseY } = appearance;
-  const ellipseClip = `ellipse(${ellipseX}% ${ellipseY}% at 50% 50%)`;
-  if (shape === "transparent") return { background: "transparent", borderRadius: "0", clipPath: "none", textShadow: "0 1px 2px rgba(255,255,255,0.95),0 -1px 2px rgba(255,255,255,0.95),1px 0 2px rgba(255,255,255,0.95),-1px 0 2px rgba(255,255,255,0.95)" };
-  if (kind === "sfx") {
-    return {
-      background: "rgba(255,255,255,0.28)",
-      borderRadius: "14px",
-      clipPath: "none",
-      textShadow: "0 1px 2px rgba(255,255,255,0.95),0 -1px 2px rgba(255,255,255,0.95),1px 0 2px rgba(255,255,255,0.95),-1px 0 2px rgba(255,255,255,0.95)",
-    };
-  }
-  const aspect = width / Math.max(1, height);
-  if (shape === "rounded") return { background: "rgb(255,255,255)", borderRadius: "18px", clipPath: "inset(0 round 18px)", textShadow: "none" };
-  if (shape === "ellipse") return { background: "rgb(255,255,255)", borderRadius: "999px", clipPath: ellipseClip, textShadow: "none" };
-  if (kind === "dialogue" && aspect >= 2.35 && width >= 360) {
-    return {
-      background: "rgb(255,255,255)",
-      borderRadius: "18px",
-      clipPath: "inset(0 round 18px)",
-      textShadow: "none",
-    };
-  }
-  return {
-    background: "rgb(255,255,255)",
-    borderRadius: "999px",
-    clipPath: kind === "dialogue" ? ellipseClip : "inset(0 round 14px)",
-    textShadow: "none",
-  };
 }
 
 function expandRectWithinBounds(rect: { x: number; y: number; width: number; height: number }, bounds: Size, scale = 1): { x: number; y: number; width: number; height: number } {
