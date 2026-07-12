@@ -14,6 +14,7 @@ import type {
 } from "@umt/shared/protocol";
 import type { SurfaceResult, SurfaceTask } from "@umt/shared/types";
 import type { ExtensionSettings } from "../../settings/settings.js";
+import { directHttpUrlPolicyError } from "../messages.js";
 import { DirectOcrCache } from "../cache/direct-ocr-cache.js";
 import { ExtensionManualOverrideStore, type ManualOverrideStorage } from "../cache/manual-overrides.js";
 import type { DiagnosticsResponse, SelfTestResponse } from "./backend-client.js";
@@ -146,6 +147,8 @@ export class DirectClient implements TranslatorClient {
     try {
       if (!task.imageData) return { ok: false, error: "Direct plugin mode imageData is required. Enable extension image-data capture or use backend mode for imageUrl fallback." };
       if (!this.isConfigured()) return { ok: false, error: "Direct plugin mode is not configured. Please set OCR API URL/key and translator API URL/key/model." };
+      const urlPolicyError = this.urlPolicyError();
+      if (urlPolicyError) return { ok: false, error: urlPolicyError };
       const startedAt = Date.now();
       const imageBytes = dataUrlToBytes(task.imageData);
       const imageHash = await sha256Hex(imageBytes);
@@ -216,6 +219,14 @@ export class DirectClient implements TranslatorClient {
 
   private isConfigured(): boolean {
     return Boolean(this.settings.directOcr.apiUrl && this.settings.directOcr.apiKeys.length && this.settings.directTranslator.baseUrl && this.settings.directTranslator.apiKey && this.settings.directTranslator.model);
+  }
+
+  private urlPolicyError(): string {
+    const ocrError = directHttpUrlPolicyError(this.settings.directOcr.apiUrl);
+    if (ocrError) return `OCR API URL rejected: ${ocrError}`;
+    const translatorError = directHttpUrlPolicyError(this.settings.directTranslator.baseUrl);
+    if (translatorError) return `Translator API URL rejected: ${translatorError}`;
+    return "";
   }
 
   providerProfile(): string {

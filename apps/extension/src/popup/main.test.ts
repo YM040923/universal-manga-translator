@@ -612,6 +612,40 @@ test("popup direct self-test explains OCR quota failures without leaking keys", 
   assert.equal(selfTest.includes("llm-secret"), false);
 });
 
+test("popup direct self-test rejects remote plain HTTP before sending API keys", async () => {
+  const dom = setupDom();
+  const configured = enableSiteForUrl({
+    ...DEFAULT_SETTINGS,
+    runMode: "direct",
+    directOcr: { ...DEFAULT_SETTINGS.directOcr, apiUrl: "http://ocr.example/ocr", apiKeys: ["ocr-secret"] },
+    directTranslator: { baseUrl: "https://api.example/v1", apiKey: "llm-secret", model: "gpt-test" },
+  }, "https://asurascans.com/a");
+  const storage = fakeStorage(configured);
+  const root = dom.window.document.querySelector<HTMLElement>("#app")!;
+  const seenUrls: string[] = [];
+
+  await mountPopupPage(root, deps({
+    storage,
+    tabUrl: "https://asurascans.com/a",
+    directHttp: async (request) => {
+      seenUrls.push(request.url);
+      if (request.url.endsWith("/models")) return { ok: true, status: 200, statusText: "OK", headers: { "content-type": "application/json" }, bodyText: JSON.stringify({ data: [{ id: "gpt-test" }] }) };
+      if (request.url.endsWith("/chat/completions")) return { ok: true, status: 200, statusText: "OK", headers: { "content-type": "application/json" }, bodyText: JSON.stringify({ choices: [{ message: { content: "你好 OCR" } }] }) };
+      throw new Error("must not call directHttp for insecure OCR URL");
+    },
+  }));
+  root.querySelector<HTMLButtonElement>("[data-action='open-api-settings']")!.click();
+  root.querySelector<HTMLButtonElement>("[data-action='self-test']")!.click();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  const selfTest = root.querySelector<HTMLElement>(".self-test")?.textContent ?? "";
+  assert.match(selfTest, /OCR 失败/);
+  assert.match(selfTest, /https/);
+  assert.equal(selfTest.includes("ocr-secret"), false);
+  assert.deepEqual(seenUrls, ["https://api.example/v1/models", "https://api.example/v1/chat/completions"]);
+});
+
 test("popup direct self-test reports OCR mapping guidance when no configured regions are parsed", async () => {
   const dom = setupDom();
   const configured = enableSiteForUrl({

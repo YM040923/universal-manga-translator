@@ -109,6 +109,26 @@ test("DirectClient rejects tasks without imageData with a clear error", async ()
   assert.match(response.error, /imageData.*required/i);
 });
 
+test("DirectClient rejects remote plain HTTP API URLs before sending secrets", async () => {
+  let calls = 0;
+  const fetchImpl = (async () => {
+    calls += 1;
+    throw new Error("must not fetch insecure API URLs");
+  }) as typeof fetch;
+  const configured = {
+    ...settings(fetchImpl),
+    directOcr: { ...settings(fetchImpl).directOcr, apiUrl: "http://ocr.example/ocr" },
+  } as ReturnType<typeof settings>;
+  const client = new DirectClient(configured);
+
+  const response = await client.submit(task());
+
+  assert.equal(response.ok, false);
+  assert.match(response.error, /OCR API URL rejected/i);
+  assert.match(response.error, /https/);
+  assert.equal(calls, 0);
+});
+
 test("DirectClient selfTest reports missing configuration", async () => {
   const client = new DirectClient({ ...DEFAULT_SETTINGS, runMode: "direct" });
 

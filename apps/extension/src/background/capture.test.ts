@@ -6,7 +6,7 @@ if (typeof globalThis.btoa === "undefined") {
   globalThis.btoa = (value: string) => Buffer.from(value, "binary").toString("base64");
 }
 import { handleBackendHttpMessage, handleCaptureVisibleTabMessage, handleDirectHttpMessage, handleFetchImageDataMessage } from "./capture.js";
-import { isUmtBackendHttpRequest, isUmtCaptureVisibleTabRequest, isUmtDirectHttpRequest, isUmtFetchImageDataRequest } from "../content/messages.js";
+import { directHttpUrlPolicyError, isUmtBackendHttpRequest, isUmtCaptureVisibleTabRequest, isUmtDirectHttpRequest, isUmtFetchImageDataRequest } from "../content/messages.js";
 
 test("isUmtCaptureVisibleTabRequest validates screenshot capture requests", () => {
   assert.equal(isUmtCaptureVisibleTabRequest({ source: "umt-content", command: "captureVisibleTab" }), true);
@@ -123,6 +123,13 @@ test("isUmtDirectHttpRequest accepts generic HTTP API calls from extension conte
   assert.equal(isUmtDirectHttpRequest({ source: "umt-content", command: "directHttp", url: "http://ocr.example/ocr" }), false);
   assert.equal(isUmtDirectHttpRequest({ source: "umt-content", command: "directHttp", url: "file:///etc/passwd" }), false);
   assert.equal(isUmtDirectHttpRequest({ source: "umt-content", command: "backendHttp", url: "https://ocr.example/ocr" }), false);
+});
+
+test("directHttpUrlPolicyError explains remote HTTP rejection", () => {
+  assert.equal(directHttpUrlPolicyError("https://ocr.example/ocr"), "");
+  assert.equal(directHttpUrlPolicyError("http://127.0.0.1:9000/ocr"), "");
+  assert.match(directHttpUrlPolicyError("http://ocr.example/ocr"), /Remote API URL must use https/);
+  assert.match(directHttpUrlPolicyError("ftp://ocr.example/ocr"), /must use https/);
 });
 
 test("handleDirectHttpMessage proxies text requests and returns raw JSON text", async () => {

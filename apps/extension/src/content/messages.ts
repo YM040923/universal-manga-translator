@@ -162,17 +162,22 @@ export function isUmtDirectHttpRequest(value: unknown): value is UmtDirectHttpRe
   if (!value || typeof value !== "object") return false;
   const candidate = value as Partial<UmtDirectHttpRequest>;
   if ((candidate.source !== "umt-content" && candidate.source !== "umt-popup") || candidate.command !== "directHttp" || typeof candidate.url !== "string") return false;
+  return directHttpUrlPolicyError(candidate.url) === "";
+}
+
+export function directHttpUrlPolicyError(value: string): string {
   try {
-    const url = new URL(candidate.url);
-    if (url.protocol === "https:") return true;
-    if (url.protocol !== "http:") return false;
-    return isLoopbackHost(url.hostname);
+    const url = new URL(value);
+    if (url.protocol === "https:") return "";
+    if (url.protocol !== "http:") return "API URL must use https://, except local http://127.0.0.1 / localhost / [::1].";
+    if (isLoopbackHost(url.hostname)) return "";
+    return "Remote API URL must use https://. Plain http:// is only allowed for local 127.0.0.1 / localhost / [::1].";
   } catch {
-    return false;
+    return "API URL is invalid.";
   }
 }
 
-function isLoopbackHost(hostname: string): boolean {
+export function isLoopbackHost(hostname: string): boolean {
   const host = hostname.toLowerCase().replace(/^\[|\]$/g, "");
   return host === "localhost" || host === "127.0.0.1" || host === "::1";
 }
