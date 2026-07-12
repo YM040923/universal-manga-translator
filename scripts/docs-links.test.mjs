@@ -70,6 +70,13 @@ test("public user docs are readable UTF-8 without mojibake", () => {
   }
 });
 
+test("public user docs are UTF-8 without a byte-order mark", () => {
+  for (const relative of publicDocs()) {
+    const content = fs.readFileSync(path.join(root, relative));
+    assert.notEqual(content[0], 0xef, `${relative} must not start with a UTF-8 BOM`);
+  }
+});
+
 test("extension user-facing source strings do not contain mojibake", () => {
   for (const relative of [
     "apps/extension/src/popup/main.ts",

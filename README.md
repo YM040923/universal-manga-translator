@@ -1,4 +1,4 @@
-﻿# Universal Manga Translator
+# Universal Manga Translator
 
 Universal Manga Translator 是一个网页漫画翻译工具。**主产品形态是纯插件版：用户只安装 Chrome 插件即可使用，不需要桌面端，不需要本地后端，也不需要命令行长期运行。**
 
