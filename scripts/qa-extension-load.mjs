@@ -62,7 +62,7 @@ try {
   check("extension-service-worker", report.serviceWorkers.some((item) => item.startsWith("chrome-extension://")), report.serviceWorkers.join(", "));
   const worker = context.serviceWorkers()[0];
   if (worker) {
-    const ocrKeys = splitKeys(env.OCR_API_KEYS || env.OCR_API_KEY || env.UAPIS_API_KEYS || env.UAPIS_API_KEY);
+    const ocrKeys = splitKeys(env.OCR_API_KEYS || env.OCR_API_KEY);
     await worker.evaluate(async ({ domain, mode }) => {
       await chrome.storage.sync.set({ enabledSites: domain ? { [domain]: true } : {}, runMode: mode });
     }, { domain: qaDomain, mode: runMode });

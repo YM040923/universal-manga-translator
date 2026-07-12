@@ -63,3 +63,10 @@ test("QA extension loader enables the domain from the requested QA URL", () => {
   assert.match(script, /primaryDomainFromUrl/);
   assert.doesNotMatch(script, /enabledSites:\s*\{\s*"asurascans\.com":\s*true\s*\}/);
 });
+
+test("QA extension loader uses generic OCR environment names only", () => {
+  const script = readFileSync(path.join(root, "scripts", "qa-extension-load.mjs"), "utf8");
+
+  assert.match(script, /OCR_API_KEYS/);
+  assert.doesNotMatch(script, /UAPIS|BAIDU|uapis|baidu/);
+});
