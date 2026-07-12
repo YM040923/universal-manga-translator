@@ -73,6 +73,31 @@ test("verify-extension-package rejects bundled secrets and provider-specific per
   }
 });
 
+test("verify-extension-package rejects options pages and static content scripts", () => {
+  const workspace = mkdtempSync(path.join(tmpdir(), "umt-package-test-"));
+  try {
+    const source = path.join(workspace, "dist");
+    const iconDir = path.join(source, "icons");
+    const zipPath = path.join(workspace, "extension.zip");
+    mkdirSync(iconDir, { recursive: true });
+
+    writeCompleteMinimalExtension(source, iconDir, {
+      options_page: "options.html",
+      content_scripts: [{ matches: ["<all_urls>"], js: ["content.js"] }],
+    });
+    writeFileSync(path.join(source, "options.html"), "");
+
+    zipDirectory(source, zipPath);
+    const result = runVerifier(zipPath);
+
+    assert.notEqual(result.status, 0);
+    assert.match(`${result.stdout}\n${result.stderr}`, /options pages are disabled/);
+  }
+  finally {
+    rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
 function zipDirectory(source, zipPath) {
   const psSource = source.replaceAll("'", "''");
   const psZipPath = zipPath.replaceAll("'", "''");
@@ -103,7 +128,7 @@ function runVerifier(zipPath) {
   ], { encoding: "utf8" });
 }
 
-function writeCompleteMinimalExtension(source, iconDir) {
+function writeCompleteMinimalExtension(source, iconDir, extraManifest = {}) {
   writeFileSync(path.join(source, "manifest.json"), JSON.stringify({
     manifest_version: 3,
     name: "Test Extension",
@@ -120,6 +145,7 @@ function writeCompleteMinimalExtension(source, iconDir) {
     background: {
       service_worker: "background.js",
     },
+    ...extraManifest,
   }));
   writeFileSync(path.join(source, "popup.html"), "<script src=\"popup.js\"></script>");
   writeFileSync(path.join(source, "popup.js"), "");

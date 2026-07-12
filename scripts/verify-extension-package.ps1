@@ -81,6 +81,14 @@ try {
     $manifestReader.Dispose()
   }
 
+  if ($manifest.options_page -or $manifest.options_ui) {
+    throw "Extension package is invalid: options pages are disabled; use the popup API settings page"
+  }
+
+  if ($manifest.content_scripts) {
+    throw "Extension package is invalid: content_scripts must not be statically declared; use site activation and dynamic injection"
+  }
+
   $manifestAssets = New-Object System.Collections.Generic.List[string]
   if ($manifest.action.default_popup) {
     $manifestAssets.Add([string]$manifest.action.default_popup)
