@@ -27,7 +27,7 @@ Before publishing a release:
    powershell -ExecutionPolicy Bypass -File .\scripts\verify-release-assets.ps1
    ```
 
-   This runs `scripts/verify-extension-package.ps1`, confirms the zip contains `manifest.json` and required runtime files at the archive root, blocks source files, `.env`, logs, cache/data, and workspace folders from the release asset, and verifies `extension-release.zip.sha256` matches the zip bytes.
+   This runs `scripts/verify-extension-package.ps1`, confirms the zip contains `manifest.json` and required runtime files at the archive root, blocks source files, `.env`, logs, cache/data, and workspace folders from the release asset, verifies `extension-release.zip.sha256` matches the zip bytes, and validates `build-info.json` against the package version, extension version, commit, dirty flag, zip filename, checksum, and build timestamp.
 
 6. Load `apps/extension/dist` in Chrome developer mode and verify the popup opens, self-test reports API failures clearly, and a manga chapter page can be translated.
 

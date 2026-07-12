@@ -41,7 +41,35 @@ if ($actual -ne $expected) {
   throw "Release checksum mismatch: expected $expected, got $actual"
 }
 
-$buildInfo = Get-Content -LiteralPath $BuildInfoPath -Raw | ConvertFrom-Json
+try {
+  $buildInfo = Get-Content -LiteralPath $BuildInfoPath -Raw | ConvertFrom-Json
+}
+catch {
+  throw "Release build metadata is not valid JSON: $BuildInfoPath"
+}
+
+function Assert-BuildInfoField {
+  param(
+    [object]$Info,
+    [string]$Name
+  )
+  $property = $Info.PSObject.Properties[$Name]
+  if ($null -eq $property -or $null -eq $property.Value -or [string]::IsNullOrWhiteSpace([string]$property.Value)) {
+    throw "Release build metadata missing required field: $Name"
+  }
+}
+
+foreach ($field in @("product", "packageVersion", "extensionVersion", "commit", "zipFile", "sha256", "builtAtUtc")) {
+  Assert-BuildInfoField -Info $buildInfo -Name $field
+}
+if ($null -eq $buildInfo.PSObject.Properties["dirty"]) {
+  throw "Release build metadata missing required field: dirty"
+}
+
+if ($buildInfo.product -ne "Universal Manga Translator") {
+  throw "Release build metadata product mismatch: $($buildInfo.product)"
+}
+
 $expectedZipFile = Split-Path -Leaf $ZipPath
 if ($buildInfo.zipFile -ne $expectedZipFile) {
   throw "Release build metadata zip filename mismatch: expected $expectedZipFile, got $($buildInfo.zipFile)"
@@ -67,6 +95,17 @@ if ($commit -notmatch "^([0-9a-f]{40}|unknown)$") {
 }
 if ($buildInfo.dirty -isnot [bool]) {
   throw "Release build metadata dirty must be a boolean"
+}
+
+$builtAtUtc = [string]$buildInfo.builtAtUtc
+if ($builtAtUtc -notmatch "^\d{4}-\d{2}-\d{2}T.*Z$") {
+  throw "Release build metadata builtAtUtc must be an ISO UTC timestamp: $builtAtUtc"
+}
+try {
+  [void][DateTimeOffset]::Parse($builtAtUtc, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::AssumeUniversal)
+}
+catch {
+  throw "Release build metadata builtAtUtc must be an ISO UTC timestamp: $builtAtUtc"
 }
 
 Write-Host "Release assets verified:"

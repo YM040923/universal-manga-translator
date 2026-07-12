@@ -126,6 +126,57 @@ test("verify-release-assets rejects build metadata with mismatched versions", ()
   }
 });
 
+test("verify-release-assets rejects invalid build metadata JSON with a clear error", () => {
+  const workspace = mkdtempSync(path.join(tmpdir(), "umt-release-assets-test-"));
+  try {
+    const { zipPath, shaPath, buildInfoPath, hash } = writeReleaseFixture(workspace);
+    writeFileSync(shaPath, `${hash}  extension-release.zip\n`);
+    writeFileSync(buildInfoPath, "{ not json\n");
+
+    const result = runVerifier(zipPath, shaPath, buildInfoPath);
+
+    assert.notEqual(result.status, 0);
+    assert.match(`${result.stdout}\n${result.stderr}`, /Release build metadata is not valid JSON/);
+  }
+  finally {
+    rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test("verify-release-assets rejects build metadata with missing required fields", () => {
+  const workspace = mkdtempSync(path.join(tmpdir(), "umt-release-assets-test-"));
+  try {
+    const { zipPath, shaPath, buildInfoPath, hash } = writeReleaseFixture(workspace);
+    writeFileSync(shaPath, `${hash}  extension-release.zip\n`);
+    writeBuildInfoFixture(buildInfoPath, { sha256: undefined });
+
+    const result = runVerifier(zipPath, shaPath, buildInfoPath);
+
+    assert.notEqual(result.status, 0);
+    assert.match(`${result.stdout}\n${result.stderr}`, /Release build metadata missing required field: sha256/);
+  }
+  finally {
+    rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test("verify-release-assets rejects build metadata with an invalid build timestamp", () => {
+  const workspace = mkdtempSync(path.join(tmpdir(), "umt-release-assets-test-"));
+  try {
+    const { zipPath, shaPath, buildInfoPath, hash } = writeReleaseFixture(workspace);
+    writeFileSync(shaPath, `${hash}  extension-release.zip\n`);
+    writeBuildInfoFixture(buildInfoPath, { sha256: hash, builtAtUtc: "not-a-date" });
+
+    const result = runVerifier(zipPath, shaPath, buildInfoPath);
+
+    assert.notEqual(result.status, 0);
+    assert.match(`${result.stdout}\n${result.stderr}`, /Release build metadata builtAtUtc must be an ISO UTC timestamp/);
+  }
+  finally {
+    rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
 function writeReleaseFixture(workspace) {
   const source = path.join(workspace, "dist");
   const iconDir = path.join(source, "icons");
@@ -147,8 +198,10 @@ function writeBuildInfoFixture(buildInfoPath, overrides = {}) {
     sha256: "0".repeat(64),
     packageVersion,
     extensionVersion,
+    product: "Universal Manga Translator",
     commit: "unknown",
     dirty: false,
+    builtAtUtc: "2026-01-01T00:00:00.000Z",
     ...overrides,
   }, null, 2)}\n`);
 }
