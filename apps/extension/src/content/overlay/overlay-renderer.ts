@@ -2,6 +2,7 @@
 import type { ManualOverridePayload } from "@umt/shared/protocol";
 import type { OverlayRegion, Size, SurfaceResult } from "@umt/shared/types";
 import { DEFAULT_SETTINGS, normalizeOverlayAppearance, type OverlayAppearance } from "../../settings/settings.js";
+import { overlayHostForElement } from "./overlay-host.js";
 import { createStableTextLayout, normalizeOverlayText } from "./text-layout.js";
 
 const manualEdits = new Map<string, string>();
@@ -363,30 +364,6 @@ function rectFromStyle(node: HTMLElement): RenderedRect | null {
   const height = Number.parseFloat(node.style.height);
   if (![x, y, width, height].every(Number.isFinite) || width <= 0 || height <= 0) return null;
   return { x, y, width, height };
-}
-
-function overlayHostForElement(element: HTMLElement): HTMLElement {
-  for (let node = element.parentElement; node && node !== document.body && node !== document.documentElement; node = node.parentElement) {
-    const style = node.ownerDocument.defaultView?.getComputedStyle(node);
-    if (!style) continue;
-    if (createsOverlayCoordinateSpace(node, style)) {
-      ensureOverlayHostStyle(node, style);
-      return node;
-    }
-  }
-  return document.documentElement;
-}
-
-function createsOverlayCoordinateSpace(element: HTMLElement, style: CSSStyleDeclaration): boolean {
-  const scrollsVertically = /(auto|scroll|overlay)/.test(style.overflowY) && element.scrollHeight > element.clientHeight + 2;
-  const scrollsHorizontally = /(auto|scroll|overlay)/.test(style.overflowX) && element.scrollWidth > element.clientWidth + 2;
-  const transformed = style.transform !== "none" || style.perspective !== "none" || style.filter !== "none" || style.backdropFilter !== "none";
-  const contained = style.contain !== "none" || style.contentVisibility === "auto";
-  return scrollsVertically || scrollsHorizontally || transformed || contained;
-}
-
-function ensureOverlayHostStyle(element: HTMLElement, style: CSSStyleDeclaration): void {
-  if (style.position === "static") element.style.position = "relative";
 }
 
 function isManualSelectionSurface(surfaceId: string): boolean {
