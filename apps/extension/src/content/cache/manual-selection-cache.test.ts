@@ -5,14 +5,14 @@ import type { SurfaceResult } from "@umt/shared/types";
 
 test("manualSelectionCacheKey normalizes URL and includes target/provider", () => {
   assert.equal(
-    manualSelectionCacheKey({ pageUrl: "https://reader.example/ch/1?x=1#p3", targetLanguage: "zh-CN", providerProfile: "uapis+gpt" }),
-    "umt.manual-selection-cache:v1:https://reader.example/ch/1:zh-CN:uapis+gpt",
+    manualSelectionCacheKey({ pageUrl: "https://reader.example/ch/1?x=1#p3", targetLanguage: "zh-CN", providerProfile: "generic-ocr+gpt" }),
+    "umt.manual-selection-cache:v1:https://reader.example/ch/1:zh-CN:generic-ocr+gpt",
   );
 });
 
 test("ManualSelectionCache saves and restores selected rectangle results", async () => {
   const cache = new ManualSelectionCache(fakeStorage());
-  const context = { pageUrl: "https://reader.example/ch/1", targetLanguage: "zh-CN", providerProfile: "uapis" };
+  const context = { pageUrl: "https://reader.example/ch/1", targetLanguage: "zh-CN", providerProfile: "generic-ocr" };
 
   await cache.save(context, {
     id: "manual:10:20:100:80",
@@ -29,7 +29,7 @@ test("ManualSelectionCache saves and restores selected rectangle results", async
 
 test("ManualSelectionCache ignores empty results and can clear page selections", async () => {
   const cache = new ManualSelectionCache(fakeStorage());
-  const context = { pageUrl: "https://reader.example/ch/1", targetLanguage: "zh-CN", providerProfile: "uapis" };
+  const context = { pageUrl: "https://reader.example/ch/1", targetLanguage: "zh-CN", providerProfile: "generic-ocr" };
 
   await cache.save(context, {
     id: "empty",
@@ -66,7 +66,7 @@ function fakeResult(surfaceId: string): SurfaceResult {
     surfaceId,
     imageHash: "hash",
     status: "completed",
-    providerProfile: "uapis",
+    providerProfile: "generic-ocr",
     layoutVersion: 1,
     elapsedMs: 10,
     regions: [{

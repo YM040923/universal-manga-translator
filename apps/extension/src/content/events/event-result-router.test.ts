@@ -71,7 +71,7 @@ function fakeResult(surfaceId: string): SurfaceResult {
     surfaceId,
     imageHash: "hash",
     status: "completed",
-    providerProfile: "uapis-ocr:image_base64+openai-compatible:gpt-5.4-mini",
+    providerProfile: "generic-ocr:image_base64+openai-compatible:gpt-5.4-mini",
     layoutVersion: 1,
     elapsedMs: 45000,
     regions: [{

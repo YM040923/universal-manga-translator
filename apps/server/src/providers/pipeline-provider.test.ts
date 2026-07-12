@@ -249,8 +249,8 @@ test("OcrThenTranslateProvider reuses cached OCR regions during retranslate and 
 
 test("buildOcrCacheKey ignores downstream translator model changes", () => {
   assert.equal(
-    buildOcrCacheKey("uapis-ocr:image_base64+openai-compatible:gpt-5.4-mini", input),
-    buildOcrCacheKey("uapis-ocr:image_base64+openai-compatible:gpt-5.5", input),
+    buildOcrCacheKey("generic-ocr:image_base64+openai-compatible:gpt-5.4-mini", input),
+    buildOcrCacheKey("generic-ocr:image_base64+openai-compatible:gpt-5.5", input),
   );
 });
 

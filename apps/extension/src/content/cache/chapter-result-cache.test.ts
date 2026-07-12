@@ -5,15 +5,15 @@ import type { SurfaceResult } from "@umt/shared/types";
 
 test("chapterResultCacheKey normalizes URL and includes target/provider", () => {
   assert.equal(
-    chapterResultCacheKey({ pageUrl: "https://reader.example/comic/1?x=1#p2", targetLanguage: "zh-CN", providerProfile: "uapis+gpt" }),
-    "umt.chapter-cache:v1:https://reader.example/comic/1:zh-CN:uapis+gpt",
+    chapterResultCacheKey({ pageUrl: "https://reader.example/comic/1?x=1#p2", targetLanguage: "zh-CN", providerProfile: "generic-ocr+gpt" }),
+    "umt.chapter-cache:v1:https://reader.example/comic/1:zh-CN:generic-ocr+gpt",
   );
 });
 
 test("ChapterResultCache saves and reads renderable results by image URL", async () => {
   const storage = fakeStorage();
   const cache = new ChapterResultCache(storage);
-  const context = { pageUrl: "https://reader.example/ch/1", targetLanguage: "zh-CN", providerProfile: "uapis" };
+  const context = { pageUrl: "https://reader.example/ch/1", targetLanguage: "zh-CN", providerProfile: "generic-ocr" };
 
   await cache.save(context, "https://cdn.example/1.webp", fakeResult("s1"));
   const doc = await cache.read(context);
@@ -25,7 +25,7 @@ test("ChapterResultCache saves and reads renderable results by image URL", async
 test("ChapterResultCache ignores empty results and can clear a chapter", async () => {
   const storage = fakeStorage();
   const cache = new ChapterResultCache(storage);
-  const context = { pageUrl: "https://reader.example/ch/1", targetLanguage: "zh-CN", providerProfile: "uapis" };
+  const context = { pageUrl: "https://reader.example/ch/1", targetLanguage: "zh-CN", providerProfile: "generic-ocr" };
 
   await cache.save(context, "https://cdn.example/empty.webp", { ...fakeResult("empty"), status: "empty", regions: [] });
   assert.deepEqual((await cache.read(context)).entries, {});
@@ -52,7 +52,7 @@ function fakeResult(surfaceId: string): SurfaceResult {
     surfaceId,
     imageHash: "hash",
     status: "completed",
-    providerProfile: "uapis",
+    providerProfile: "generic-ocr",
     layoutVersion: 1,
     elapsedMs: 10,
     regions: [{
