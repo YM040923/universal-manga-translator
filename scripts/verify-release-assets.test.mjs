@@ -75,6 +75,23 @@ test("verify-release-assets rejects a mismatched checksum", () => {
   }
 });
 
+test("verify-release-assets rejects a checksum file with a mismatched zip filename", () => {
+  const workspace = mkdtempSync(path.join(tmpdir(), "umt-release-assets-test-"));
+  try {
+    const { zipPath, shaPath, buildInfoPath, hash } = writeReleaseFixture(workspace);
+    writeFileSync(shaPath, `${hash}  other.zip\n`);
+    writeBuildInfoFixture(buildInfoPath, { sha256: hash });
+
+    const result = runVerifier(zipPath, shaPath, buildInfoPath);
+
+    assert.notEqual(result.status, 0);
+    assert.match(`${result.stdout}\n${result.stderr}`, /Release checksum filename mismatch/);
+  }
+  finally {
+    rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
 test("verify-release-assets rejects build metadata with a mismatched checksum", () => {
   const workspace = mkdtempSync(path.join(tmpdir(), "umt-release-assets-test-"));
   try {

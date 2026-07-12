@@ -31,9 +31,19 @@ if ([string]::IsNullOrWhiteSpace($line)) {
   throw "Release checksum file is empty: $ShaPath"
 }
 
-$expected = ($line -split "\s+")[0].ToLowerInvariant()
+$checksumParts = $line -split "\s+"
+$expected = $checksumParts[0].ToLowerInvariant()
 if ($expected -notmatch "^[0-9a-f]{64}$") {
   throw "Release checksum file does not start with a SHA256 hash: $ShaPath"
+}
+
+$expectedChecksumFileName = Split-Path -Leaf $ZipPath
+if ($checksumParts.Count -lt 2 -or [string]::IsNullOrWhiteSpace($checksumParts[1])) {
+  throw "Release checksum file must include the zip filename: $ShaPath"
+}
+$actualChecksumFileName = Split-Path -Leaf ([string]$checksumParts[1])
+if ($actualChecksumFileName -ne $expectedChecksumFileName) {
+  throw "Release checksum filename mismatch: expected $expectedChecksumFileName, got $actualChecksumFileName"
 }
 
 $actual = (Get-FileHash -LiteralPath $ZipPath -Algorithm SHA256).Hash.ToLowerInvariant()
