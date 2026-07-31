@@ -39,10 +39,10 @@ test("popup sends page commands only after site is enabled", async () => {
   const root = dom.window.document.querySelector<HTMLElement>("#app")!;
 
   await mountPopupPage(root, deps({ storage, sentMessages: sent, tabUrl: "https://reader.asurascans.com/chapter/1" }));
-  root.querySelector<HTMLButtonElement>("[data-action='translate']")!.click();
-  root.querySelector<HTMLButtonElement>("[data-action='retranslate']")!.click();
-  root.querySelector<HTMLButtonElement>("[data-action='cancel']")!.click();
-  await Promise.resolve();
+  for (const action of ["translate", "retranslate", "cancel"]) {
+    root.querySelector<HTMLButtonElement>(`[data-action='${action}']`)!.click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
 
   assert.deepEqual(sent, [
     { tabId: 123, message: { source: "umt-popup", command: "translate" } },
@@ -83,8 +83,8 @@ test("popup primary controls are all wired to page commands", async () => {
   await mountPopupPage(root, deps({ storage, sentMessages: sent, tabUrl: "https://asurascans.com/a" }));
   for (const action of ["translate", "retranslate", "pause", "clear", "cancel", "select-region"]) {
     root.querySelector<HTMLButtonElement>(`[data-action='${action}']`)!.click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
   }
-  await Promise.resolve();
 
   assert.deepEqual(sent.map((entry) => (entry as { message: { command: string } }).message.command), [
     "translate",
@@ -94,6 +94,91 @@ test("popup primary controls are all wired to page commands", async () => {
     "cancelQueue",
     "selectRegion",
   ]);
+});
+
+
+test("popup locks page actions while a command is being sent and confirms acceptance", async () => {
+  const dom = setupDom();
+  const storage = fakeStorage(enableSiteForUrl(DEFAULT_SETTINGS, "https://asurascans.com/a"));
+  const root = dom.window.document.querySelector<HTMLElement>("#app")!;
+  let resolveSend!: () => void;
+  const pendingSend = new Promise<void>((resolve) => { resolveSend = resolve; });
+  let sends = 0;
+
+  await mountPopupPage(root, deps({
+    storage,
+    tabUrl: "https://asurascans.com/a",
+    sendMessageToTab: async () => { sends += 1; await pendingSend; },
+  }));
+
+  root.querySelector<HTMLButtonElement>("[data-action='translate']")!.click();
+
+  assert.equal(root.querySelector<HTMLButtonElement>("[data-action='translate']")?.disabled, true);
+  assert.equal(root.querySelector<HTMLButtonElement>("[data-action='cancel']")?.disabled, false);
+  assert.match(root.querySelector<HTMLElement>("[data-action-feedback]")?.textContent ?? "", /\u6b63\u5728\u53d1\u9001/);
+  root.querySelector<HTMLButtonElement>("[data-action='translate']")!.click();
+  assert.equal(sends, 1);
+
+  resolveSend();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(root.querySelector<HTMLButtonElement>("[data-action='translate']")?.disabled, false);
+  assert.match(root.querySelector<HTMLElement>("[data-action-feedback]")?.textContent ?? "", /\u7ffb\u8bd1\u672c\u9875.*\u5df2\u63a5\u6536/);
+});
+
+test("popup keeps cancel available during another pending page action and sends cancel only once", async () => {
+  const dom = setupDom();
+  const storage = fakeStorage(enableSiteForUrl(DEFAULT_SETTINGS, "https://asurascans.com/a"));
+  const root = dom.window.document.querySelector<HTMLElement>("#app")!;
+  const sentCommands: string[] = [];
+  let resolveTranslate!: () => void;
+  let resolveCancel!: () => void;
+  const pendingTranslate = new Promise<void>((resolve) => { resolveTranslate = resolve; });
+  const pendingCancel = new Promise<void>((resolve) => { resolveCancel = resolve; });
+
+  await mountPopupPage(root, deps({
+    storage,
+    tabUrl: "https://asurascans.com/a",
+    sendMessageToTab: async (_tabId, message) => {
+      sentCommands.push(message.command);
+      if (message.command === "translate") await pendingTranslate;
+      if (message.command === "cancelQueue") await pendingCancel;
+    },
+  }));
+
+  root.querySelector<HTMLButtonElement>("[data-action='translate']")!.click();
+
+  assert.equal(root.querySelector<HTMLButtonElement>("[data-action='translate']")?.disabled, true);
+  assert.equal(root.querySelector<HTMLButtonElement>("[data-action='cancel']")?.disabled, false);
+
+  root.querySelector<HTMLButtonElement>("[data-action='cancel']")!.click();
+  root.querySelector<HTMLButtonElement>("[data-action='cancel']")!.click();
+
+  assert.deepEqual(sentCommands, ["translate", "cancelQueue"]);
+  assert.equal(root.querySelector<HTMLButtonElement>("[data-action='cancel']")?.disabled, true);
+
+  resolveCancel();
+  resolveTranslate();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+});
+
+test("popup restores page actions and shows a readable command error", async () => {
+  const dom = setupDom();
+  const storage = fakeStorage(enableSiteForUrl(DEFAULT_SETTINGS, "https://asurascans.com/a"));
+  const root = dom.window.document.querySelector<HTMLElement>("#app")!;
+
+  await mountPopupPage(root, deps({
+    storage,
+    tabUrl: "https://asurascans.com/a",
+    sendMessageToTab: async () => { throw new Error("Could not establish connection. Receiving end does not exist."); },
+  }));
+
+  root.querySelector<HTMLButtonElement>("[data-action='retranslate']")!.click();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(root.querySelector<HTMLButtonElement>("[data-action='retranslate']")?.disabled, false);
+  assert.match(root.querySelector<HTMLElement>("[data-action-feedback]")?.textContent ?? "", /\u91cd\u7ffb\u672c\u9875.*\u5931\u8d25/);
+  assert.equal(root.querySelector<HTMLElement>("[data-action-feedback]")?.classList.contains("error"), true);
 });
 
 test("popup disables every page-affecting control before a site is activated", async () => {

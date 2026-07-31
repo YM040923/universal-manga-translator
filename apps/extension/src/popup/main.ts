@@ -60,6 +60,9 @@ export async function mountPopupPage(root: HTMLElement, deps: PopupDeps = {}): P
   const tab = await queryActiveTab(deps);
   let backendOnline: boolean | null = null;
   let selfTestSummary = "";
+  let competingPageActionBusy = false;
+  let cancelBusy = false;
+  let pageActionFeedback: { kind: "pending" | "success" | "error"; text: string } | null = null;
   let view: "main" | "api" = "main";
 
   const render = (options: { preserveScroll?: boolean } = {}): void => {
@@ -69,7 +72,7 @@ export async function mountPopupPage(root: HTMLElement, deps: PopupDeps = {}): P
     const enabled = !unsupported && isSiteEnabled(settings, url);
     const effectiveSite = getEffectiveSiteSettings(settings, url);
     const previousScrollTop = options.preserveScroll === false ? 0 : root.querySelector<HTMLElement>(".umt-popup")?.scrollTop ?? 0;
-    root.innerHTML = markup({ settings, backendOnline, domain, unsupported, enabled, autoTranslate: effectiveSite.autoTranslate, selfTestSummary, view });
+    root.innerHTML = markup({ settings, backendOnline, domain, unsupported, enabled, autoTranslate: effectiveSite.autoTranslate, selfTestSummary, pageActionFeedback, view });
     bind({ unsupported, enabled });
     const popup = root.querySelector<HTMLElement>(".umt-popup");
     if (popup) popup.scrollTop = previousScrollTop;
@@ -111,6 +114,24 @@ export async function mountPopupPage(root: HTMLElement, deps: PopupDeps = {}): P
     }
   };
 
+  const runPageAction = async (label: string, command: UmtContentCommandName, kind: "competing" | "cancel" = "competing"): Promise<void> => {
+    if (kind === "cancel" ? cancelBusy : competingPageActionBusy || cancelBusy) return;
+    if (kind === "cancel") cancelBusy = true;
+    else competingPageActionBusy = true;
+    pageActionFeedback = { kind: "pending", text: `正在发送“${label}”…` };
+    render();
+    try {
+      await sendCommand(command);
+      pageActionFeedback = { kind: "success", text: `${label}已接收，页面会显示实际进度。` };
+    } catch (error) {
+      pageActionFeedback = { kind: "error", text: `${label}失败：${pageActionErrorMessage(error)}` };
+    } finally {
+      if (kind === "cancel") cancelBusy = false;
+      else competingPageActionBusy = false;
+      render();
+    }
+  };
+
   const bind = ({ unsupported, enabled }: { unsupported: boolean; enabled: boolean }): void => {
     root.querySelector<HTMLButtonElement>("[data-action='activate-site']")?.addEventListener("click", async () => {
       if (!tab?.id || !tab.url) return;
@@ -137,12 +158,12 @@ export async function mountPopupPage(root: HTMLElement, deps: PopupDeps = {}): P
         render();
       });
     });
-    root.querySelector<HTMLButtonElement>("[data-action='translate']")?.addEventListener("click", () => void sendCommand("translate"));
-    root.querySelector<HTMLButtonElement>("[data-action='retranslate']")?.addEventListener("click", () => void sendCommand("retranslateVisible"));
-    root.querySelector<HTMLButtonElement>("[data-action='pause']")?.addEventListener("click", () => void sendCommand("togglePause"));
-    root.querySelector<HTMLButtonElement>("[data-action='clear']")?.addEventListener("click", () => void sendCommand("clearPage"));
-    root.querySelector<HTMLButtonElement>("[data-action='cancel']")?.addEventListener("click", () => void sendCommand("cancelQueue"));
-    root.querySelector<HTMLButtonElement>("[data-action='select-region']")?.addEventListener("click", () => void sendCommand("selectRegion"));
+    root.querySelector<HTMLButtonElement>("[data-action='translate']")?.addEventListener("click", () => void runPageAction(TEXT.translate, "translate"));
+    root.querySelector<HTMLButtonElement>("[data-action='retranslate']")?.addEventListener("click", () => void runPageAction(TEXT.retranslate, "retranslateVisible"));
+    root.querySelector<HTMLButtonElement>("[data-action='pause']")?.addEventListener("click", () => void runPageAction(TEXT.pause, "togglePause"));
+    root.querySelector<HTMLButtonElement>("[data-action='clear']")?.addEventListener("click", () => void runPageAction(TEXT.clear, "clearPage"));
+    root.querySelector<HTMLButtonElement>("[data-action='cancel']")?.addEventListener("click", () => void runPageAction(TEXT.cancel, "cancelQueue", "cancel"));
+    root.querySelector<HTMLButtonElement>("[data-action='select-region']")?.addEventListener("click", () => void runPageAction(TEXT.select, "selectRegion"));
     root.querySelector<HTMLInputElement>("[data-field='overlay-visible']")?.addEventListener("change", (event) => {
       const visible = (event.currentTarget as HTMLInputElement).checked;
       void persist(setTranslationOverlayVisible(settings, visible));
@@ -189,6 +210,8 @@ export async function mountPopupPage(root: HTMLElement, deps: PopupDeps = {}): P
         void sendCommand("applyOverlayAppearance", { appearance: next.overlayAppearance });
       });
     }
+    if (competingPageActionBusy || cancelBusy) root.querySelectorAll<HTMLButtonElement>("[data-page-action]:not([data-action='cancel'])").forEach((node) => { node.disabled = true; });
+    if (cancelBusy) root.querySelector<HTMLButtonElement>("[data-action='cancel']")!.disabled = true;
     if (unsupported || !enabled) root.querySelectorAll<HTMLButtonElement | HTMLInputElement | HTMLSelectElement>("[data-requires-enabled]").forEach((node) => { node.disabled = true; });
   };
 
@@ -197,8 +220,8 @@ export async function mountPopupPage(root: HTMLElement, deps: PopupDeps = {}): P
   void refreshBackendStatus();
 }
 
-function markup(input: { settings: ExtensionSettings; backendOnline: boolean | null; domain: string | null; unsupported: boolean; enabled: boolean; autoTranslate: boolean; selfTestSummary: string; view: "main" | "api" }): string {
-  const { settings, backendOnline, domain, unsupported, enabled, autoTranslate, selfTestSummary, view } = input;
+function markup(input: { settings: ExtensionSettings; backendOnline: boolean | null; domain: string | null; unsupported: boolean; enabled: boolean; autoTranslate: boolean; selfTestSummary: string; pageActionFeedback: { kind: "pending" | "success" | "error"; text: string } | null; view: "main" | "api" }): string {
+  const { settings, backendOnline, domain, unsupported, enabled, autoTranslate, selfTestSummary, pageActionFeedback, view } = input;
   const status = unsupported ? TEXT.unsupported : enabled ? TEXT.enabled : TEXT.disabled;
   const directReady = Boolean(settings.directOcr.apiUrl && settings.directOcr.apiKeys.length && settings.directTranslator.baseUrl && settings.directTranslator.apiKey && settings.directTranslator.model);
   const healthClass = settings.runMode === "direct" ? directReady ? "ok" : "bad" : backendOnline === true ? "ok" : backendOnline === null ? "checking" : "bad";
@@ -213,12 +236,13 @@ function markup(input: { settings: ExtensionSettings; backendOnline: boolean | n
     <main class="card site-card"><div><div class="site-state ${enabled ? "on" : "off"}">${status}</div><small>${enabled ? "此网站已允许插件运行" : "启用后才会在该网站注入功能"}</small></div>${!enabled && !unsupported ? `<button class="primary" data-action="activate-site">${TEXT.activate}</button>` : ""}</main>
     <section class="card mode-card"><b>运行与 API</b><small>${settings.runMode === "direct" ? directStatus : escapeHtml(settings.backendUrl)}</small><button class="muted wide" data-action="open-api-settings">API 设置 / 自检</button></section>
     <section class="card controls">
-      <button class="primary wide" data-action="translate" data-requires-enabled>${TEXT.translate}</button>
-      <button data-action="retranslate" data-requires-enabled>${TEXT.retranslate}</button>
-      <button data-action="select-region" data-requires-enabled>${TEXT.select}</button>
-      <button data-action="pause" data-requires-enabled>${TEXT.pause}</button>
-      <button class="muted" data-action="clear" data-requires-enabled>${TEXT.clear}</button>
-      <button class="danger" data-action="cancel" data-requires-enabled>${TEXT.cancel}</button>
+      <button class="primary wide" data-action="translate" data-page-action data-requires-enabled>${TEXT.translate}</button>
+      <button data-action="retranslate" data-page-action data-requires-enabled>${TEXT.retranslate}</button>
+      <button data-action="select-region" data-page-action data-requires-enabled>${TEXT.select}</button>
+      <button data-action="pause" data-page-action data-requires-enabled>${TEXT.pause}</button>
+      <button class="muted" data-action="clear" data-page-action data-requires-enabled>${TEXT.clear}</button>
+      <button class="danger" data-action="cancel" data-page-action data-requires-enabled>${TEXT.cancel}</button>
+      ${pageActionFeedback ? `<div class="action-feedback ${pageActionFeedback.kind}" data-action-feedback role="status" aria-live="polite">${escapeHtml(pageActionFeedback.text)}</div>` : ""}
     </section>
     <section class="card toggles"><b>${TEXT.switches}</b>
       ${toggle(TEXT.overlay, "overlay-visible", settings.translationOverlayVisible, true)}
@@ -237,6 +261,18 @@ function markup(input: { settings: ExtensionSettings; backendOnline: boolean | n
       <button class="muted wide" data-action="reset-appearance" data-requires-enabled>${TEXT.resetAppearance}</button>
     </section>
   </section>`;
+}
+
+
+function pageActionErrorMessage(error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error);
+  if (/receiving end does not exist|could not establish connection|message port closed/i.test(raw)) {
+    return "无法连接当前页面，请重载漫画页后重试。";
+  }
+  if (/cannot access|extensions gallery cannot be scripted|missing host permission/i.test(raw)) {
+    return "当前页面受浏览器限制，插件无法运行。";
+  }
+  return raw.trim() || "未能把操作发送到当前页面。";
 }
 
 function toggle(label: string, field: string, checked: boolean, requiresEnabled: boolean): string {
