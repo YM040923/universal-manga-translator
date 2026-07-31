@@ -54,6 +54,8 @@ const TEXT = {
   resetAppearance: "\u6062\u590d\u9ed8\u8ba4\u663e\u793a",
 };
 
+type PageActionFeedback = { kind: "pending" | "success" | "error"; text: string };
+
 export async function mountPopupPage(root: HTMLElement, deps: PopupDeps = {}): Promise<void> {
   const storage = deps.storage;
   let settings = await loadSettings(storage);
@@ -62,7 +64,8 @@ export async function mountPopupPage(root: HTMLElement, deps: PopupDeps = {}): P
   let selfTestSummary = "";
   let competingPageActionBusy = false;
   let cancelBusy = false;
-  let pageActionFeedback: { kind: "pending" | "success" | "error"; text: string } | null = null;
+  let pageActionFeedback: PageActionFeedback | null = null;
+  let cancelActionFeedback: PageActionFeedback | null = null;
   let view: "main" | "api" = "main";
 
   const render = (options: { preserveScroll?: boolean } = {}): void => {
@@ -72,7 +75,7 @@ export async function mountPopupPage(root: HTMLElement, deps: PopupDeps = {}): P
     const enabled = !unsupported && isSiteEnabled(settings, url);
     const effectiveSite = getEffectiveSiteSettings(settings, url);
     const previousScrollTop = options.preserveScroll === false ? 0 : root.querySelector<HTMLElement>(".umt-popup")?.scrollTop ?? 0;
-    root.innerHTML = markup({ settings, backendOnline, domain, unsupported, enabled, autoTranslate: effectiveSite.autoTranslate, selfTestSummary, pageActionFeedback, view });
+    root.innerHTML = markup({ settings, backendOnline, domain, unsupported, enabled, autoTranslate: effectiveSite.autoTranslate, selfTestSummary, pageActionFeedback: cancelActionFeedback ?? pageActionFeedback, view });
     bind({ unsupported, enabled });
     const popup = root.querySelector<HTMLElement>(".umt-popup");
     if (popup) popup.scrollTop = previousScrollTop;
@@ -116,15 +119,24 @@ export async function mountPopupPage(root: HTMLElement, deps: PopupDeps = {}): P
 
   const runPageAction = async (label: string, command: UmtContentCommandName, kind: "competing" | "cancel" = "competing"): Promise<void> => {
     if (kind === "cancel" ? cancelBusy : competingPageActionBusy || cancelBusy) return;
-    if (kind === "cancel") cancelBusy = true;
-    else competingPageActionBusy = true;
-    pageActionFeedback = { kind: "pending", text: `正在发送“${label}”…` };
+    if (kind === "cancel") {
+      cancelBusy = true;
+      cancelActionFeedback = { kind: "pending", text: `正在发送“${label}”…` };
+    } else {
+      competingPageActionBusy = true;
+      cancelActionFeedback = null;
+      pageActionFeedback = { kind: "pending", text: `正在发送“${label}”…` };
+    }
     render();
     try {
       await sendCommand(command);
-      pageActionFeedback = { kind: "success", text: `${label}已接收，页面会显示实际进度。` };
+      const feedback: PageActionFeedback = { kind: "success", text: `${label}已接收，页面会显示实际进度。` };
+      if (kind === "cancel") cancelActionFeedback = feedback;
+      else pageActionFeedback = feedback;
     } catch (error) {
-      pageActionFeedback = { kind: "error", text: `${label}失败：${pageActionErrorMessage(error)}` };
+      const feedback: PageActionFeedback = { kind: "error", text: `${label}失败：${pageActionErrorMessage(error)}` };
+      if (kind === "cancel") cancelActionFeedback = feedback;
+      else pageActionFeedback = feedback;
     } finally {
       if (kind === "cancel") cancelBusy = false;
       else competingPageActionBusy = false;
@@ -220,7 +232,7 @@ export async function mountPopupPage(root: HTMLElement, deps: PopupDeps = {}): P
   void refreshBackendStatus();
 }
 
-function markup(input: { settings: ExtensionSettings; backendOnline: boolean | null; domain: string | null; unsupported: boolean; enabled: boolean; autoTranslate: boolean; selfTestSummary: string; pageActionFeedback: { kind: "pending" | "success" | "error"; text: string } | null; view: "main" | "api" }): string {
+function markup(input: { settings: ExtensionSettings; backendOnline: boolean | null; domain: string | null; unsupported: boolean; enabled: boolean; autoTranslate: boolean; selfTestSummary: string; pageActionFeedback: PageActionFeedback | null; view: "main" | "api" }): string {
   const { settings, backendOnline, domain, unsupported, enabled, autoTranslate, selfTestSummary, pageActionFeedback, view } = input;
   const status = unsupported ? TEXT.unsupported : enabled ? TEXT.enabled : TEXT.disabled;
   const directReady = Boolean(settings.directOcr.apiUrl && settings.directOcr.apiKeys.length && settings.directTranslator.baseUrl && settings.directTranslator.apiKey && settings.directTranslator.model);

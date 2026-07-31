@@ -162,6 +162,40 @@ test("popup keeps cancel available during another pending page action and sends 
   await new Promise((resolve) => setTimeout(resolve, 0));
 });
 
+test("popup keeps pending cancel feedback when the interrupted page action completes first", async () => {
+  const dom = setupDom();
+  const storage = fakeStorage(enableSiteForUrl(DEFAULT_SETTINGS, "https://asurascans.com/a"));
+  const root = dom.window.document.querySelector<HTMLElement>("#app")!;
+  let resolveTranslate!: () => void;
+  let resolveCancel!: () => void;
+  const pendingTranslate = new Promise<void>((resolve) => { resolveTranslate = resolve; });
+  const pendingCancel = new Promise<void>((resolve) => { resolveCancel = resolve; });
+
+  await mountPopupPage(root, deps({
+    storage,
+    tabUrl: "https://asurascans.com/a",
+    sendMessageToTab: async (_tabId, message) => {
+      if (message.command === "translate") await pendingTranslate;
+      if (message.command === "cancelQueue") await pendingCancel;
+    },
+  }));
+
+  root.querySelector<HTMLButtonElement>("[data-action='translate']")!.click();
+  root.querySelector<HTMLButtonElement>("[data-action='cancel']")!.click();
+
+  assert.match(root.querySelector<HTMLElement>("[data-action-feedback]")?.textContent ?? "", /\u6b63\u5728\u53d1\u9001.*\u53d6\u6d88\u961f\u5217/);
+
+  resolveTranslate();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.match(root.querySelector<HTMLElement>("[data-action-feedback]")?.textContent ?? "", /\u6b63\u5728\u53d1\u9001.*\u53d6\u6d88\u961f\u5217/);
+
+  resolveCancel();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.match(root.querySelector<HTMLElement>("[data-action-feedback]")?.textContent ?? "", /\u53d6\u6d88\u961f\u5217.*\u5df2\u63a5\u6536/);
+});
+
 test("popup restores page actions and shows a readable command error", async () => {
   const dom = setupDom();
   const storage = fakeStorage(enableSiteForUrl(DEFAULT_SETTINGS, "https://asurascans.com/a"));
