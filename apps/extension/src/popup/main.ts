@@ -54,7 +54,15 @@ const TEXT = {
   resetAppearance: "\u6062\u590d\u9ed8\u8ba4\u663e\u793a",
 };
 
-type PageActionFeedback = { kind: "pending" | "success" | "error"; text: string };
+type PageActionFeedback = {
+  operation: "competing" | "cancel";
+  command: UmtContentCommandName;
+  revision: number;
+  kind: "pending" | "success" | "error";
+  text: string;
+};
+
+type PopupPageAction = "translate" | "retranslate" | "pause" | "clear" | "cancel" | "select-region";
 
 export async function mountPopupPage(root: HTMLElement, deps: PopupDeps = {}): Promise<void> {
   const storage = deps.storage;
@@ -66,17 +74,30 @@ export async function mountPopupPage(root: HTMLElement, deps: PopupDeps = {}): P
   let cancelBusy = false;
   let pageActionFeedback: PageActionFeedback | null = null;
   let cancelActionFeedback: PageActionFeedback | null = null;
+  let pageActionFeedbackRevision = 0;
   let view: "main" | "api" = "main";
 
-  const render = (options: { preserveScroll?: boolean } = {}): void => {
+  const render = (options: { preserveScroll?: boolean; focusAction?: PopupPageAction } = {}): void => {
     const url = tab?.url ?? "";
     const domain = primaryDomainFromUrl(url);
     const unsupported = !domain || !tab?.id;
     const enabled = !unsupported && isSiteEnabled(settings, url);
     const effectiveSite = getEffectiveSiteSettings(settings, url);
     const previousScrollTop = options.preserveScroll === false ? 0 : root.querySelector<HTMLElement>(".umt-popup")?.scrollTop ?? 0;
-    root.innerHTML = markup({ settings, backendOnline, domain, unsupported, enabled, autoTranslate: effectiveSite.autoTranslate, selfTestSummary, pageActionFeedback: cancelActionFeedback ?? pageActionFeedback, view });
+    root.innerHTML = markup({
+      settings,
+      backendOnline,
+      domain,
+      unsupported,
+      enabled,
+      autoTranslate: effectiveSite.autoTranslate,
+      selfTestSummary,
+      pageActionFeedback: selectPageActionFeedback(pageActionFeedback, cancelActionFeedback, cancelBusy),
+      view,
+    });
     bind({ unsupported, enabled });
+    const focusTarget = options.focusAction ? root.querySelector<HTMLButtonElement>(`[data-action='${options.focusAction}']`) : null;
+    if (focusTarget && !focusTarget.disabled) focusTarget.focus();
     const popup = root.querySelector<HTMLElement>(".umt-popup");
     if (popup) popup.scrollTop = previousScrollTop;
   };
@@ -117,30 +138,39 @@ export async function mountPopupPage(root: HTMLElement, deps: PopupDeps = {}): P
     }
   };
 
-  const runPageAction = async (label: string, command: UmtContentCommandName, kind: "competing" | "cancel" = "competing"): Promise<void> => {
+  const runPageAction = async (action: PopupPageAction, label: string, command: UmtContentCommandName, kind: "competing" | "cancel" = "competing"): Promise<void> => {
     if (kind === "cancel" ? cancelBusy : competingPageActionBusy || cancelBusy) return;
+    const restoreFocusedAction = kind === "competing" && root.ownerDocument.activeElement?.getAttribute("data-action") === action;
+    const feedback = (state: PageActionFeedback["kind"], text: string): PageActionFeedback => ({
+      operation: kind,
+      command,
+      revision: ++pageActionFeedbackRevision,
+      kind: state,
+      text,
+    });
     if (kind === "cancel") {
+      if (!competingPageActionBusy) pageActionFeedback = null;
       cancelBusy = true;
-      cancelActionFeedback = { kind: "pending", text: `正在发送“${label}”…` };
+      cancelActionFeedback = feedback("pending", `正在发送“${label}”…`);
     } else {
       competingPageActionBusy = true;
       cancelActionFeedback = null;
-      pageActionFeedback = { kind: "pending", text: `正在发送“${label}”…` };
+      pageActionFeedback = feedback("pending", `正在发送“${label}”…`);
     }
-    render();
+    render(restoreFocusedAction ? { focusAction: "cancel" } : {});
     try {
       await sendCommand(command);
-      const feedback: PageActionFeedback = { kind: "success", text: `${label}已接收，页面会显示实际进度。` };
-      if (kind === "cancel") cancelActionFeedback = feedback;
-      else pageActionFeedback = feedback;
+      const result = feedback("success", `${label}已接收，页面会显示实际进度。`);
+      if (kind === "cancel") cancelActionFeedback = result;
+      else pageActionFeedback = result;
     } catch (error) {
-      const feedback: PageActionFeedback = { kind: "error", text: `${label}失败：${pageActionErrorMessage(error)}` };
-      if (kind === "cancel") cancelActionFeedback = feedback;
-      else pageActionFeedback = feedback;
+      const result = feedback("error", `${label}失败：${pageActionErrorMessage(error)}`);
+      if (kind === "cancel") cancelActionFeedback = result;
+      else pageActionFeedback = result;
     } finally {
       if (kind === "cancel") cancelBusy = false;
       else competingPageActionBusy = false;
-      render();
+      render(restoreFocusedAction ? { focusAction: action } : {});
     }
   };
 
@@ -170,12 +200,12 @@ export async function mountPopupPage(root: HTMLElement, deps: PopupDeps = {}): P
         render();
       });
     });
-    root.querySelector<HTMLButtonElement>("[data-action='translate']")?.addEventListener("click", () => void runPageAction(TEXT.translate, "translate"));
-    root.querySelector<HTMLButtonElement>("[data-action='retranslate']")?.addEventListener("click", () => void runPageAction(TEXT.retranslate, "retranslateVisible"));
-    root.querySelector<HTMLButtonElement>("[data-action='pause']")?.addEventListener("click", () => void runPageAction(TEXT.pause, "togglePause"));
-    root.querySelector<HTMLButtonElement>("[data-action='clear']")?.addEventListener("click", () => void runPageAction(TEXT.clear, "clearPage"));
-    root.querySelector<HTMLButtonElement>("[data-action='cancel']")?.addEventListener("click", () => void runPageAction(TEXT.cancel, "cancelQueue", "cancel"));
-    root.querySelector<HTMLButtonElement>("[data-action='select-region']")?.addEventListener("click", () => void runPageAction(TEXT.select, "selectRegion"));
+    root.querySelector<HTMLButtonElement>("[data-action='translate']")?.addEventListener("click", () => void runPageAction("translate", TEXT.translate, "translate"));
+    root.querySelector<HTMLButtonElement>("[data-action='retranslate']")?.addEventListener("click", () => void runPageAction("retranslate", TEXT.retranslate, "retranslateVisible"));
+    root.querySelector<HTMLButtonElement>("[data-action='pause']")?.addEventListener("click", () => void runPageAction("pause", TEXT.pause, "togglePause"));
+    root.querySelector<HTMLButtonElement>("[data-action='clear']")?.addEventListener("click", () => void runPageAction("clear", TEXT.clear, "clearPage"));
+    root.querySelector<HTMLButtonElement>("[data-action='cancel']")?.addEventListener("click", () => void runPageAction("cancel", TEXT.cancel, "cancelQueue", "cancel"));
+    root.querySelector<HTMLButtonElement>("[data-action='select-region']")?.addEventListener("click", () => void runPageAction("select-region", TEXT.select, "selectRegion"));
     root.querySelector<HTMLInputElement>("[data-field='overlay-visible']")?.addEventListener("change", (event) => {
       const visible = (event.currentTarget as HTMLInputElement).checked;
       void persist(setTranslationOverlayVisible(settings, visible));
@@ -273,6 +303,14 @@ function markup(input: { settings: ExtensionSettings; backendOnline: boolean | n
       <button class="muted wide" data-action="reset-appearance" data-requires-enabled>${TEXT.resetAppearance}</button>
     </section>
   </section>`;
+}
+
+function selectPageActionFeedback(pageFeedback: PageActionFeedback | null, cancelFeedback: PageActionFeedback | null, cancelBusy: boolean): PageActionFeedback | null {
+  if (cancelBusy && cancelFeedback?.operation === "cancel" && cancelFeedback.kind === "pending") return cancelFeedback;
+  const candidates = [pageFeedback, cancelFeedback].filter((feedback): feedback is PageActionFeedback => feedback !== null);
+  const errors = candidates.filter((feedback) => feedback.kind === "error");
+  const visible = errors.length > 0 ? errors : candidates;
+  return visible.reduce<PageActionFeedback | null>((latest, feedback) => !latest || feedback.revision > latest.revision ? feedback : latest, null);
 }
 
 

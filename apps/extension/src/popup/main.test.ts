@@ -126,6 +126,33 @@ test("popup locks page actions while a command is being sent and confirms accept
   assert.match(root.querySelector<HTMLElement>("[data-action-feedback]")?.textContent ?? "", /\u7ffb\u8bd1\u672c\u9875.*\u5df2\u63a5\u6536/);
 });
 
+test("popup moves focus to cancel while a focused page action is pending and restores it afterward", async () => {
+  const dom = setupDom();
+  const storage = fakeStorage(enableSiteForUrl(DEFAULT_SETTINGS, "https://asurascans.com/a"));
+  const root = dom.window.document.querySelector<HTMLElement>("#app")!;
+  let resolveSend!: () => void;
+  const pendingSend = new Promise<void>((resolve) => { resolveSend = resolve; });
+
+  await mountPopupPage(root, deps({
+    storage,
+    tabUrl: "https://asurascans.com/a",
+    sendMessageToTab: async () => { await pendingSend; },
+  }));
+
+  const translate = root.querySelector<HTMLButtonElement>("[data-action='translate']")!;
+  translate.focus();
+  assert.equal(dom.window.document.activeElement, translate);
+
+  translate.click();
+
+  assert.equal(dom.window.document.activeElement, root.querySelector<HTMLButtonElement>("[data-action='cancel']"));
+
+  resolveSend();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(dom.window.document.activeElement, root.querySelector<HTMLButtonElement>("[data-action='translate']"));
+});
+
 test("popup keeps cancel available during another pending page action and sends cancel only once", async () => {
   const dom = setupDom();
   const storage = fakeStorage(enableSiteForUrl(DEFAULT_SETTINGS, "https://asurascans.com/a"));
@@ -194,6 +221,42 @@ test("popup keeps pending cancel feedback when the interrupted page action compl
   await new Promise((resolve) => setTimeout(resolve, 0));
 
   assert.match(root.querySelector<HTMLElement>("[data-action-feedback]")?.textContent ?? "", /\u53d6\u6d88\u961f\u5217.*\u5df2\u63a5\u6536/);
+});
+
+test("popup shows a later page action error after cancel succeeds first", async () => {
+  const dom = setupDom();
+  const storage = fakeStorage(enableSiteForUrl(DEFAULT_SETTINGS, "https://asurascans.com/a"));
+  const root = dom.window.document.querySelector<HTMLElement>("#app")!;
+  let resolveTranslate!: () => void;
+  let resolveCancel!: () => void;
+  const pendingTranslate = new Promise<void>((resolve) => { resolveTranslate = resolve; });
+  const pendingCancel = new Promise<void>((resolve) => { resolveCancel = resolve; });
+
+  await mountPopupPage(root, deps({
+    storage,
+    tabUrl: "https://asurascans.com/a",
+    sendMessageToTab: async (_tabId, message) => {
+      if (message.command === "translate") {
+        await pendingTranslate;
+        throw new Error("translation transport failed");
+      }
+      if (message.command === "cancelQueue") await pendingCancel;
+    },
+  }));
+
+  root.querySelector<HTMLButtonElement>("[data-action='translate']")!.click();
+  root.querySelector<HTMLButtonElement>("[data-action='cancel']")!.click();
+
+  resolveCancel();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.match(root.querySelector<HTMLElement>("[data-action-feedback]")?.textContent ?? "", /\u53d6\u6d88\u961f\u5217.*\u5df2\u63a5\u6536/);
+
+  resolveTranslate();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.match(root.querySelector<HTMLElement>("[data-action-feedback]")?.textContent ?? "", /\u7ffb\u8bd1\u672c\u9875.*\u5931\u8d25/);
+  assert.equal(root.querySelector<HTMLElement>("[data-action-feedback]")?.classList.contains("error"), true);
 });
 
 test("popup restores page actions and shows a readable command error", async () => {
