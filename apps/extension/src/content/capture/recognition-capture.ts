@@ -8,6 +8,8 @@ export interface RecognitionCapture {
   mimeType: string;
   byteLength: number;
   devicePixelRatio: number;
+  viewportScaleX?: number;
+  viewportScaleY?: number;
   captureSource: RecognitionCaptureSource;
 }
 
@@ -22,6 +24,8 @@ export interface CreateRecognitionCaptureInput {
   reason: RecognitionReason;
   captureSource: RecognitionCaptureSource;
   devicePixelRatio?: number;
+  viewportScaleX?: number;
+  viewportScaleY?: number;
 }
 
 const PREPROCESSING_VERSION = "none-v1";
@@ -41,6 +45,8 @@ export function createRecognitionCapture(input: CreateRecognitionCaptureInput): 
     mimeType: input.mimeType ?? readDataUrlMimeType(input.imageData) ?? "application/octet-stream",
     byteLength: readImageDataByteLength(input.imageData),
     devicePixelRatio: normalizePositiveNumber(input.devicePixelRatio, 1),
+    ...(input.viewportScaleX !== undefined ? { viewportScaleX: normalizePositiveNumber(input.viewportScaleX, 1) } : {}),
+    ...(input.viewportScaleY !== undefined ? { viewportScaleY: normalizePositiveNumber(input.viewportScaleY, 1) } : {}),
     captureSource: input.captureSource,
   };
 }
@@ -55,6 +61,9 @@ export function formatRecognitionCaptureSummary(capture: RecognitionCapture): st
     `pixel=${formatSize(unit.pixelSize)}`,
     `crop=${unit.crop.x},${unit.crop.y},${unit.crop.width}x${unit.crop.height}`,
     `scale=${unit.scaleX}x${unit.scaleY}`,
+    ...(capture.viewportScaleX !== undefined && capture.viewportScaleY !== undefined
+      ? [`viewportScale=${capture.viewportScaleX}x${capture.viewportScaleY}`]
+      : []),
     `bytes=${capture.byteLength}`,
   ].join(" | ");
 }

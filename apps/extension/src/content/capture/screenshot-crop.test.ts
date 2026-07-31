@@ -64,14 +64,16 @@ test("createScreenshotSurfaceCapture records 2x screenshot mapping without chang
 
   assert.deepEqual(result.surface.rect, { x: 50, y: 100, width: 200, height: 300 });
   assert.deepEqual(result.surface.naturalSize, { width: 400, height: 600 });
-  assert.deepEqual(result.capture.unit.crop, { x: 50, y: 100, width: 200, height: 300 });
-  assert.deepEqual(result.capture.unit.naturalSize, { width: 500, height: 1000 });
+  assert.deepEqual(result.capture.unit.crop, { x: 0, y: 0, width: 400, height: 600 });
+  assert.deepEqual(result.capture.unit.naturalSize, { width: 400, height: 600 });
   assert.deepEqual(result.capture.unit.pixelSize, { width: 400, height: 600 });
-  assert.equal(result.capture.unit.scaleX, 2);
-  assert.equal(result.capture.unit.scaleY, 2);
+  assert.equal(result.capture.unit.scaleX, 1);
+  assert.equal(result.capture.unit.scaleY, 1);
   assert.equal(result.capture.unit.priority, "p0");
   assert.equal(result.capture.unit.reason, "manual-selection");
   assert.equal(result.capture.devicePixelRatio, 2);
+  assert.equal(result.capture.viewportScaleX, 2);
+  assert.equal(result.capture.viewportScaleY, 2);
   assert.equal(result.capture.captureSource, "manual-selection");
 });
 

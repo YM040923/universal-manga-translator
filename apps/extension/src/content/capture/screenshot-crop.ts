@@ -66,24 +66,19 @@ export async function createScreenshotSurfaceCapture(input: CreateScreenshotSurf
   };
   const scaleX = input.screenshotSize.width / Math.max(1, input.viewportSize.width);
   const scaleY = input.screenshotSize.height / Math.max(1, input.viewportSize.height);
-  const naturalCrop = {
-    x: baseCrop.x / scaleX,
-    y: baseCrop.y / scaleY,
-    width: baseCrop.width / scaleX,
-    height: baseCrop.height / scaleY,
-  };
   return {
     surface,
     capture: createRecognitionCapture({
       parentSurfaceId: input.surfaceId,
       imageData,
-      naturalSize: input.viewportSize,
-      crop: naturalCrop,
+      naturalSize: pixelSize,
       pixelSize,
       priority: "p0",
       reason: "manual-selection",
       captureSource: "manual-selection",
       devicePixelRatio: input.devicePixelRatio ?? readDevicePixelRatio(),
+      viewportScaleX: scaleX,
+      viewportScaleY: scaleY,
     }),
   };
 }

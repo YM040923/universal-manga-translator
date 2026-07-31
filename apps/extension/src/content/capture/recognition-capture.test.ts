@@ -1,6 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { JSDOM } from "jsdom";
+import type { DetectedSurface } from "../detector/surface-detector.js";
 import { createRecognitionCapture, formatRecognitionCaptureSummary } from "./recognition-capture.js";
+import { createScreenshotSurfaceCapture } from "./screenshot-crop.js";
+import { createSurfaceTaskCapture } from "./surface-capture.js";
 
 test("createRecognitionCapture describes an automatic full image in natural coordinates", () => {
   const capture = createRecognitionCapture({
@@ -53,6 +57,42 @@ test("automatic and manual captures share equivalent crop mapping metadata", () 
     pickCoordinateMetadata(automatic.unit),
     pickCoordinateMetadata(manual.unit),
   );
+});
+
+test("automatic full image and manual full screenshot selection use the same OCR pixel coordinate space", async () => {
+  const dom = new JSDOM("<body></body>", { url: "https://reader.example/chapter/1" });
+  globalThis.document = dom.window.document;
+  Object.defineProperty(globalThis, "location", { value: dom.window.location, configurable: true });
+  Object.defineProperty(globalThis, "devicePixelRatio", { value: 2, configurable: true });
+  const automaticSurface: DetectedSurface = {
+    surfaceId: "automatic:1000x2000",
+    kind: "canvas",
+    element: document.body,
+    imageData: "data:image/png;base64,YWJj",
+    rect: { x: 0, y: 0, width: 500, height: 1000 },
+    naturalSize: { width: 1000, height: 2000 },
+    score: 10,
+  };
+
+  const automatic = createSurfaceTaskCapture(automaticSurface, "p2").capture;
+  const manual = (await createScreenshotSurfaceCapture({
+    screenshotDataUrl: "data:image/png;base64,full",
+    viewportRect: { x: 0, y: 0, width: 500, height: 1000 },
+    viewportSize: { width: 500, height: 1000 },
+    screenshotSize: { width: 1000, height: 2000 },
+    devicePixelRatio: 2,
+    surfaceId: "manual:1000x2000",
+    element: document.body,
+    cropper: async () => "data:image/png;base64,YWJj",
+  })).capture;
+
+  assert.deepEqual(
+    pickCoordinateMetadata(manual.unit),
+    pickCoordinateMetadata(automatic.unit),
+  );
+  assert.equal(manual.devicePixelRatio, 2);
+  assert.equal(manual.viewportScaleX, 2);
+  assert.equal(manual.viewportScaleY, 2);
 });
 
 test("formatRecognitionCaptureSummary excludes image data and secret-like payloads", () => {
