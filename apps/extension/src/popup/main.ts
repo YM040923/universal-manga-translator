@@ -64,6 +64,11 @@ type PageActionFeedback = {
 
 type PopupPageAction = "translate" | "retranslate" | "pause" | "clear" | "cancel" | "select-region";
 
+type PopupFocusTarget = {
+  attribute: "data-action" | "data-field";
+  value: string;
+};
+
 export async function mountPopupPage(root: HTMLElement, deps: PopupDeps = {}): Promise<void> {
   const storage = deps.storage;
   let settings = await loadSettings(storage);
@@ -77,7 +82,7 @@ export async function mountPopupPage(root: HTMLElement, deps: PopupDeps = {}): P
   let pageActionFeedbackRevision = 0;
   let view: "main" | "api" = "main";
 
-  const render = (options: { preserveScroll?: boolean; focusAction?: PopupPageAction } = {}): void => {
+  const render = (options: { preserveScroll?: boolean; focusTarget?: PopupFocusTarget } = {}): void => {
     const url = tab?.url ?? "";
     const domain = primaryDomainFromUrl(url);
     const unsupported = !domain || !tab?.id;
@@ -96,8 +101,8 @@ export async function mountPopupPage(root: HTMLElement, deps: PopupDeps = {}): P
       view,
     });
     bind({ unsupported, enabled });
-    const focusTarget = options.focusAction ? root.querySelector<HTMLButtonElement>(`[data-action='${options.focusAction}']`) : null;
-    if (focusTarget && !focusTarget.disabled) focusTarget.focus();
+    const focusTarget = options.focusTarget ? findPopupFocusTarget(root, options.focusTarget) : null;
+    if (focusTarget && !focusTarget.hasAttribute("disabled")) focusTarget.focus();
     const popup = root.querySelector<HTMLElement>(".umt-popup");
     if (popup) popup.scrollTop = previousScrollTop;
   };
@@ -157,7 +162,7 @@ export async function mountPopupPage(root: HTMLElement, deps: PopupDeps = {}): P
       cancelActionFeedback = null;
       pageActionFeedback = feedback("pending", `正在发送“${label}”…`);
     }
-    render(restoreFocusedAction ? { focusAction: "cancel" } : {});
+    render(restoreFocusedAction ? { focusTarget: { attribute: "data-action", value: "cancel" } } : {});
     try {
       await sendCommand(command);
       const result = feedback("success", `${label}已接收，页面会显示实际进度。`);
@@ -168,9 +173,13 @@ export async function mountPopupPage(root: HTMLElement, deps: PopupDeps = {}): P
       if (kind === "cancel") cancelActionFeedback = result;
       else pageActionFeedback = result;
     } finally {
+      const activeFocusTarget = restoreFocusedAction ? readPopupFocusTarget(root) : null;
+      const completionFocusTarget = activeFocusTarget && !(activeFocusTarget.attribute === "data-action" && activeFocusTarget.value === "cancel")
+        ? activeFocusTarget
+        : { attribute: "data-action" as const, value: action };
       if (kind === "cancel") cancelBusy = false;
       else competingPageActionBusy = false;
-      render(restoreFocusedAction ? { focusAction: action } : {});
+      render(restoreFocusedAction ? { focusTarget: completionFocusTarget } : {});
     }
   };
 
@@ -311,6 +320,21 @@ function selectPageActionFeedback(pageFeedback: PageActionFeedback | null, cance
   const errors = candidates.filter((feedback) => feedback.kind === "error");
   const visible = errors.length > 0 ? errors : candidates;
   return visible.reduce<PageActionFeedback | null>((latest, feedback) => !latest || feedback.revision > latest.revision ? feedback : latest, null);
+}
+
+function readPopupFocusTarget(root: HTMLElement): PopupFocusTarget | null {
+  const active = root.ownerDocument.activeElement;
+  if (!active || !root.contains(active)) return null;
+  for (const attribute of ["data-action", "data-field"] as const) {
+    const value = active.getAttribute(attribute);
+    if (value) return { attribute, value };
+  }
+  return null;
+}
+
+function findPopupFocusTarget(root: HTMLElement, target: PopupFocusTarget): HTMLElement | null {
+  return [...root.querySelectorAll<HTMLElement>(`[${target.attribute}]`)]
+    .find((node) => node.getAttribute(target.attribute) === target.value) ?? null;
 }
 
 

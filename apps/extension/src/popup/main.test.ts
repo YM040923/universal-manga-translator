@@ -153,6 +153,34 @@ test("popup moves focus to cancel while a focused page action is pending and res
   assert.equal(dom.window.document.activeElement, root.querySelector<HTMLButtonElement>("[data-action='translate']"));
 });
 
+test("popup preserves focus when the user moves away from cancel while a page action is pending", async () => {
+  const dom = setupDom();
+  const storage = fakeStorage(enableSiteForUrl(DEFAULT_SETTINGS, "https://asurascans.com/a"));
+  const root = dom.window.document.querySelector<HTMLElement>("#app")!;
+  let resolveSend!: () => void;
+  const pendingSend = new Promise<void>((resolve) => { resolveSend = resolve; });
+
+  await mountPopupPage(root, deps({
+    storage,
+    tabUrl: "https://asurascans.com/a",
+    sendMessageToTab: async () => { await pendingSend; },
+  }));
+
+  const translate = root.querySelector<HTMLButtonElement>("[data-action='translate']")!;
+  translate.focus();
+  translate.click();
+  assert.equal(dom.window.document.activeElement, root.querySelector<HTMLButtonElement>("[data-action='cancel']"));
+
+  const apiSettings = root.querySelector<HTMLButtonElement>("[data-action='open-api-settings']")!;
+  apiSettings.focus();
+  assert.equal(dom.window.document.activeElement, apiSettings);
+
+  resolveSend();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(dom.window.document.activeElement, root.querySelector<HTMLButtonElement>("[data-action='open-api-settings']"));
+});
+
 test("popup keeps cancel available during another pending page action and sends cancel only once", async () => {
   const dom = setupDom();
   const storage = fakeStorage(enableSiteForUrl(DEFAULT_SETTINGS, "https://asurascans.com/a"));
