@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
 import type { DetectedSurface } from "../detector/surface-detector.js";
-import { createSurfaceTask, createSurfaceTaskWithImageData } from "./surface-capture.js";
+import { createSurfaceTask, createSurfaceTaskCapture, createSurfaceTaskWithImageData } from "./surface-capture.js";
 
 test("createSurfaceTask sends image surfaces by URL", () => {
   installLocation("https://reader.example/chapter/1");
@@ -23,6 +23,32 @@ test("createSurfaceTask sends image surfaces by URL", () => {
   assert.equal("imageData" in task, false);
   assert.equal(task.domain, "reader.example");
   assert.equal(task.targetLanguage, "ja");
+});
+
+test("createSurfaceTaskCapture builds automatic recognition metadata for a full image", () => {
+  installLocation("https://reader.example/chapter/1");
+  installDevicePixelRatio(2);
+  const dom = new JSDOM(`<canvas id="page"></canvas>`);
+  const surface: DetectedSurface = {
+    surfaceId: "canvas:1:1000x1500",
+    kind: "canvas",
+    element: dom.window.document.querySelector<HTMLElement>("#page")!,
+    imageData: "data:image/png;base64,YWJj",
+    rect: { x: 1, y: 2, width: 800, height: 1200 },
+    naturalSize: { width: 1000, height: 1500 },
+    score: 10,
+  };
+
+  const result = createSurfaceTaskCapture(surface, "p1", "zh-CN");
+
+  assert.equal(result.task.imageData, surface.imageData);
+  assert.deepEqual(result.capture.unit.crop, { x: 0, y: 0, width: 1000, height: 1500 });
+  assert.deepEqual(result.capture.unit.naturalSize, surface.naturalSize);
+  assert.deepEqual(result.capture.unit.pixelSize, surface.naturalSize);
+  assert.equal(result.capture.unit.priority, "p1");
+  assert.equal(result.capture.unit.reason, "automatic");
+  assert.equal(result.capture.captureSource, "inline-image-data");
+  assert.equal(result.capture.devicePixelRatio, 2);
 });
 
 test("createSurfaceTask sends canvas fallback surfaces by image data", () => {
@@ -47,6 +73,10 @@ test("createSurfaceTask sends canvas fallback surfaces by image data", () => {
 function installLocation(url: string): void {
   const dom = new JSDOM(``, { url });
   Object.defineProperty(globalThis, "location", { value: dom.window.location, configurable: true });
+}
+
+function installDevicePixelRatio(value: number): void {
+  Object.defineProperty(globalThis, "devicePixelRatio", { value, configurable: true });
 }
 
 test("createSurfaceTaskWithImageData prefers extension-fetched image data over backend URL fetch", async () => {
