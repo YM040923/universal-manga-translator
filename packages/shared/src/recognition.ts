@@ -1,6 +1,7 @@
-import type { Rect, Size } from "./types.js";
+import type { Priority, Rect, Size } from "./types.js";
 
 export type RecognitionReason = "automatic" | "manual-selection" | "ocr-rescue";
+export type RecognitionPriority = Exclude<Priority, "p3">;
 
 export interface RecognitionUnit {
   id: string;
@@ -11,7 +12,7 @@ export interface RecognitionUnit {
   pixelSize: Size;
   scaleX: number;
   scaleY: number;
-  priority: "p0" | "p1" | "p2";
+  priority: RecognitionPriority;
   reason: RecognitionReason;
   preprocessingVersion: string;
 }

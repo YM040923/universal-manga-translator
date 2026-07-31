@@ -1,9 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import type { OcrObservation, RecognitionUnit } from "./index.js";
+import type { OcrObservation, RecognitionPriority, RecognitionUnit } from "./index.js";
 
-test("RecognitionUnit preserves normalized recognition coordinates and metadata", () => {
-  const unit: RecognitionUnit = {
+test("RecognitionUnit is JSON-safe and preserves its contract fields", () => {
+  const priority = "p0" satisfies RecognitionPriority;
+  const unit = {
     id: "unit-1",
     parentSurfaceId: "surface-1",
     imageHash: "sha256:abc",
@@ -12,16 +13,16 @@ test("RecognitionUnit preserves normalized recognition coordinates and metadata"
     pixelSize: { width: 1000, height: 1400 },
     scaleX: 2,
     scaleY: 2,
-    priority: "p0",
+    priority,
     reason: "manual-selection",
     preprocessingVersion: "preprocess-v1",
-  };
+  } satisfies RecognitionUnit;
 
   assert.deepEqual(JSON.parse(JSON.stringify(unit)), unit);
 });
 
-test("OcrObservation preserves OCR evidence provenance", () => {
-  const observation: OcrObservation = {
+test("OcrObservation is JSON-safe and preserves its contract fields", () => {
+  const observation = {
     id: "observation-1",
     unitId: "unit-1",
     box: { x: 20, y: 30, width: 100, height: 40 },
@@ -31,7 +32,7 @@ test("OcrObservation preserves OCR evidence provenance", () => {
     kind: "dialogue",
     variant: "original",
     suspicious: false,
-  };
+  } satisfies OcrObservation;
 
   assert.deepEqual(JSON.parse(JSON.stringify(observation)), observation);
 });
