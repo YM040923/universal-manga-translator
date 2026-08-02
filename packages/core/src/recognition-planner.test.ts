@@ -1,6 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { MAX_RECOGNITION_UNITS, planRecognitionUnits } from "./recognition-planner.js";
+import {
+  MAX_BROWSER_RECOGNITION_IMAGE_HEIGHT,
+  MAX_BROWSER_RECOGNITION_IMAGE_WIDTH,
+  MAX_BROWSER_RECOGNITION_TILE_PIXELS,
+  MAX_RECOGNITION_UNITS,
+  planRecognitionUnits,
+} from "./recognition-planner.js";
 
 test("planRecognitionUnits keeps short images as one full-image unit", () => {
   const plan = planRecognitionUnits({
@@ -68,15 +74,23 @@ test("planRecognitionUnits does not add a redundant overlap-only tail tile", () 
   assert.equal(plan.units.at(-1)!.crop.y + plan.units.at(-1)!.crop.height, 7201);
 });
 
-test("planRecognitionUnits accepts safe integer bounds and rejects unsafe or non-finite parameters", () => {
-  assert.equal(planRecognitionUnits({
-    surfaceId: "surface:max-safe",
-    naturalSize: { width: Number.MAX_SAFE_INTEGER, height: 1 },
-    maxTileHeight: 1,
-    overlapRatio: 0,
+test("planRecognitionUnits rejects browser-unsafe dimensions and non-finite parameters", () => {
+  for (const width of [1_000_000, Number.MAX_SAFE_INTEGER]) {
+    assert.throws(() => planRecognitionUnits({
+      surfaceId: "surface:too-wide",
+      naturalSize: { width, height: 16000 },
+      maxTileHeight: 4096,
+      overlapRatio: 0.125,
+      reason: "automatic",
+    }), new RegExp(`naturalSize\\.width.*${MAX_BROWSER_RECOGNITION_IMAGE_WIDTH}`, "i"));
+  }
+  assert.throws(() => planRecognitionUnits({
+    surfaceId: "surface:too-tall",
+    naturalSize: { width: 900, height: MAX_BROWSER_RECOGNITION_IMAGE_HEIGHT + 1 },
+    maxTileHeight: 4096,
+    overlapRatio: 0.125,
     reason: "automatic",
-  }).units.length, 1);
-
+  }), new RegExp(`naturalSize\\.height.*${MAX_BROWSER_RECOGNITION_IMAGE_HEIGHT}`, "i"));
   assert.throws(() => planRecognitionUnits({
     surfaceId: "surface:unsafe",
     naturalSize: { width: Number.MAX_SAFE_INTEGER + 1, height: 100 },
@@ -91,6 +105,31 @@ test("planRecognitionUnits accepts safe integer bounds and rejects unsafe or non
     overlapRatio: Number.POSITIVE_INFINITY,
     reason: "automatic",
   }), /overlapRatio.*finite/i);
+});
+
+test("planRecognitionUnits rejects a tile above the browser pixel-area guard before creating units", () => {
+  assert.throws(() => planRecognitionUnits({
+    surfaceId: "surface:oversized-tile",
+    naturalSize: { width: 8000, height: 16000 },
+    maxTileHeight: 4096,
+    overlapRatio: 0.125,
+    reason: "automatic",
+  }), new RegExp(`tile.*${MAX_BROWSER_RECOGNITION_TILE_PIXELS}`, "i"));
+});
+
+test("planRecognitionUnits keeps a common 900x16000 webtoon within browser guards", () => {
+  const plan = planRecognitionUnits({
+    surfaceId: "surface:common-webtoon",
+    naturalSize: { width: 900, height: 16000 },
+    maxTileHeight: 4096,
+    overlapRatio: 0.125,
+    reason: "automatic",
+  });
+
+  assert.equal(plan.units.length, 5);
+  assert.equal(plan.units.every((unit) => unit.crop.width <= MAX_BROWSER_RECOGNITION_IMAGE_WIDTH), true);
+  assert.equal(plan.units.every((unit) => unit.crop.width <= Math.floor(MAX_BROWSER_RECOGNITION_TILE_PIXELS / unit.crop.height)), true);
+  assert.equal(plan.units.at(-1)!.crop.y + plan.units.at(-1)!.crop.height, 16000);
 });
 
 test("planRecognitionUnits rejects plans above the hard unit limit before allocating tiles", () => {

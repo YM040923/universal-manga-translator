@@ -672,3 +672,34 @@ test("DirectClient keeps at most one tile byte buffer active during OCR", async 
   assert.equal(ocrCalls, 5);
   assert.equal(translatorCalls, 1);
 });
+
+
+test("DirectClient rejects browser-unsafe image dimensions before invoking the tile cropper", async () => {
+  let cropperCalls = 0;
+  let fetchCalls = 0;
+  const cropper: RecognitionTileCropper = async () => {
+    cropperCalls += 1;
+    throw new Error("browser cropper must not run");
+  };
+  const fetchImpl = (async () => {
+    fetchCalls += 1;
+    throw new Error("network providers must not run");
+  }) as typeof fetch;
+  const client = new DirectClient(settingsWithTileCropper(fetchImpl, cropper));
+  const signedSurfaceId = "surface:https://cdn.example/page.jpg?token=secret-token&X-Amz-Signature=secret-signature";
+
+  const response = await client.submit(task({
+    surfaceId: signedSurfaceId,
+    naturalSize: { width: 1_000_000, height: 16000 },
+    renderSize: { width: 1_000_000, height: 16000 },
+  }));
+
+  assert.equal(response.ok, false);
+  const error = response.ok ? "" : response.error;
+  assert.match(error, /naturalSize\.width.*16384/i);
+  assert.equal(error.includes(signedSurfaceId), false);
+  assert.equal(error.includes("secret-token"), false);
+  assert.equal(error.includes("X-Amz-Signature"), false);
+  assert.equal(cropperCalls, 0);
+  assert.equal(fetchCalls, 0);
+});

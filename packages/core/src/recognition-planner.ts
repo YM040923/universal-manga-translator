@@ -1,5 +1,9 @@
 import type { RecognitionReason, RecognitionUnit, Size } from "@umt/shared";
 
+// Browser Canvas safety guards. These reject pathological dimensions before any tile bitmap is allocated.
+export const MAX_BROWSER_RECOGNITION_IMAGE_WIDTH = 16_384;
+export const MAX_BROWSER_RECOGNITION_IMAGE_HEIGHT = 1_000_000;
+export const MAX_BROWSER_RECOGNITION_TILE_PIXELS = 32_000_000;
 export const MAX_RECOGNITION_UNITS = 256;
 
 export interface RecognitionPlan {
@@ -20,8 +24,18 @@ export function planRecognitionUnits(input: PlanRecognitionUnitsInput): Recognit
   const width = positiveSafeInteger(input.naturalSize.width, "naturalSize.width");
   const height = positiveSafeInteger(input.naturalSize.height, "naturalSize.height");
   const maxTileHeight = positiveSafeInteger(input.maxTileHeight, "maxTileHeight");
+  if (width > MAX_BROWSER_RECOGNITION_IMAGE_WIDTH) {
+    throw new Error(`naturalSize.width exceeds browser safety maximum ${MAX_BROWSER_RECOGNITION_IMAGE_WIDTH}.`);
+  }
+  if (height > MAX_BROWSER_RECOGNITION_IMAGE_HEIGHT) {
+    throw new Error(`naturalSize.height exceeds browser safety maximum ${MAX_BROWSER_RECOGNITION_IMAGE_HEIGHT}.`);
+  }
   if (!Number.isFinite(input.overlapRatio)) throw new Error("overlapRatio must be finite.");
   if (input.overlapRatio < 0 || input.overlapRatio >= 1) throw new Error("overlapRatio must be at least 0 and less than 1.");
+  const largestCropHeight = Math.min(maxTileHeight, height);
+  if (width > Math.floor(MAX_BROWSER_RECOGNITION_TILE_PIXELS / largestCropHeight)) {
+    throw new Error(`Recognition tile ${width}x${largestCropHeight} exceeds browser safety maximum ${MAX_BROWSER_RECOGNITION_TILE_PIXELS} pixels.`);
+  }
   const overlapRatio = input.overlapRatio;
   const overlapPx = height > maxTileHeight
     ? Math.min(maxTileHeight - 1, Math.max(0, Math.round(maxTileHeight * overlapRatio)))
