@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import type { OcrObservation, RecognitionUnit } from "@umt/shared";
 import type { GenericOcrRegion } from "./generic-ocr.js";
-import { assessOcrQuality } from "./ocr-quality.js";
+import { assessOcrQuality, shouldAcceptRescue } from "./ocr-quality.js";
 
 test("assessOcrQuality keeps normal readable text out of rescue", () => {
   const assessment = assessOcrQuality([
@@ -62,6 +62,79 @@ test("assessOcrQuality allows empty OCR rescue with likely text evidence or manu
   assert.deepEqual(likely.reasons, ["empty-with-text-evidence"]);
   assert.equal(manual.suspicious, true);
   assert.deepEqual(manual.reasons, ["empty-with-text-evidence"]);
+});
+
+test("assessOcrQuality accepts punctuation, common abbreviations, and split SFX fragments", () => {
+  const punctuation = assessOcrQuality([
+    region("punctuation", "!!!", 0.42, 20, 20, 36, 30),
+  ], unit());
+  const abbreviation = assessOcrQuality([
+    region("abbreviation", "A.I.", 0.61, 20, 20, 48, 30),
+  ], unit());
+  const splitSfx = assessOcrQuality([
+    region("b", "B", 0.93, 20, 20, 24, 28),
+    region("a", "A", 0.91, 52, 28, 24, 28),
+    region("m", "M", 0.94, 84, 36, 28, 30),
+  ], unit());
+
+  assert.equal(punctuation.suspicious, false);
+  assert.equal(abbreviation.suspicious, false);
+  assert.equal(splitSfx.reasons.includes("fragmented-text"), false);
+  assert.equal(splitSfx.suspicious, false);
+});
+
+test("shouldAcceptRescue accepts similar text with a material confidence improvement", () => {
+  const original = [region("original", "JOHN", 0.54, 20, 20, 100, 30)];
+  const rescue = [region("rescue", "JOHN", 0.91, 20, 20, 100, 30)];
+
+  assert.equal(shouldAcceptRescue(
+    { observations: original, assessment: assessOcrQuality(original, unit()) },
+    { observations: rescue, assessment: assessOcrQuality(rescue, unit()) },
+  ), true);
+});
+
+test("shouldAcceptRescue accepts a clean structural improvement for suspicious OCR", () => {
+  const original = [region("original", "H3LL?", 0.22, 20, 20, 100, 30)];
+  const rescue = [region("rescue", "HELLO", 0.94, 20, 20, 100, 30)];
+
+  assert.equal(shouldAcceptRescue(
+    { observations: original, assessment: assessOcrQuality(original, unit()) },
+    { observations: rescue, assessment: assessOcrQuality(rescue, unit()) },
+  ), true);
+});
+
+test("shouldAcceptRescue rejects inflated, repetitive, or unrelated rescue text", () => {
+  const original = [region("original", "JOHN", 0.48, 20, 20, 100, 30)];
+  const inflated = [region("inflated", "JOHNNNNNNNNNN", 0.99, 20, 20, 180, 30)];
+  const unrelated = [region("unrelated", "PRIVATE CASTLE", 0.99, 20, 20, 180, 30)];
+  const originalCandidate = {
+    observations: original,
+    assessment: assessOcrQuality(original, unit()),
+  };
+
+  assert.equal(shouldAcceptRescue(originalCandidate, {
+    observations: inflated,
+    assessment: assessOcrQuality(inflated, unit()),
+  }), false);
+  assert.equal(shouldAcceptRescue(originalCandidate, {
+    observations: unrelated,
+    assessment: assessOcrQuality(unrelated, unit()),
+  }), false);
+});
+
+test("assessOcrQuality does not reward extra characters or regions", () => {
+  const compact = assessOcrQuality([
+    region("compact", "JOHN", 0.9, 20, 20, 100, 30),
+  ], unit());
+  const inflated = assessOcrQuality([
+    region("one", "JOHN", 0.9, 20, 20, 100, 30),
+    region("two", "JOHN", 0.9, 20, 60, 100, 30),
+    region("three", "JOHN", 0.9, 20, 100, 100, 30),
+  ], unit());
+
+  assert.equal(inflated.metrics.characterCount > compact.metrics.characterCount, true);
+  assert.equal(inflated.metrics.regionCount > compact.metrics.regionCount, true);
+  assert.equal(inflated.score, compact.score);
 });
 
 function unit(id = "tile-1", reason: RecognitionUnit["reason"] = "automatic"): RecognitionUnit {

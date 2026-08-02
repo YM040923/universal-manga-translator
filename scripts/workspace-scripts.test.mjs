@@ -1,6 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 
@@ -9,6 +16,7 @@ const root = path.resolve(import.meta.dirname, "..");
 test("@umt/extension test builds workspace dependencies before compiling tests", () => {
   const pkg = JSON.parse(readFileSync(path.join(root, "apps", "extension", "package.json"), "utf8"));
   const script = pkg.scripts?.test ?? "";
+  const buildTestScript = pkg.scripts?.["build:test"] ?? "";
 
   assert.match(script, /pnpm --filter @umt\/shared build/);
   assert.match(script, /pnpm --filter @umt\/core build/);
@@ -20,14 +28,43 @@ test("@umt/extension test builds workspace dependencies before compiling tests",
     script.indexOf("pnpm --filter @umt/core build") < script.indexOf("pnpm build:test"),
     "core must be built before extension test compilation",
   );
+  assert.match(buildTestScript, /rmSync\(['"]dist-test['"],\s*\{\s*recursive:\s*true,\s*force:\s*true\s*\}\)/);
+  assert.ok(
+    buildTestScript.indexOf("rmSync") < buildTestScript.indexOf("tsc -p tsconfig.test.json"),
+    "dist-test must be cleared before extension tests compile",
+  );
 });
 
-test("@umt/core standard test command uses the cross-platform runner and gates 78+ tests", () => {
+test("@umt/extension build:test removes stale compiled suites before tsc", () => {
+  const stale = path.join(root, "apps", "extension", "dist-test", "content", "capture", "ocr-text-evidence.test.js");
+  mkdirSync(path.dirname(stale), { recursive: true });
+  writeFileSync(stale, "throw new Error('stale heuristic suite executed');\n", "utf8");
+  try {
+    const result = spawnSync("pnpm --filter @umt/extension build:test", {
+      cwd: root,
+      encoding: "utf8",
+      shell: true,
+      timeout: 60_000,
+    });
+    const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
+    assert.equal(result.status, 0, output);
+    assert.equal(existsSync(stale), false, "deleted ocr-text-evidence source must not leave stale compiled tests");
+  } finally {
+    rmSync(stale, { force: true });
+  }
+});
+
+test("@umt/core standard test command maps every source suite without a fixed count", () => {
   const pkg = JSON.parse(readFileSync(path.join(root, "packages", "core", "package.json"), "utf8"));
   const script = pkg.scripts?.test ?? "";
+  const runner = readFileSync(path.join(root, "packages", "core", "scripts", "run-tests.mjs"), "utf8");
 
   assert.match(script, /node scripts\/run-tests\.mjs/);
   assert.doesNotMatch(script, /dist\/\*\*\/\*\.test\.js/);
+  assert.doesNotMatch(runner, /minimumTestCount|78/);
+  assert.match(runner, /src/);
+  assert.match(runner, /\.test\.ts/);
+  assert.match(runner, /existsSync/);
 
   const result = spawnSync("pnpm --filter @umt/core test", {
     cwd: root,
@@ -38,8 +75,11 @@ test("@umt/core standard test command uses the cross-platform runner and gates 7
   });
   const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
   assert.equal(result.status, 0, output);
-  const count = Number(output.match(/CORE_TEST_COUNT=(\d+)/)?.[1] ?? 0);
-  assert.equal(count >= 78, true, `expected CORE_TEST_COUNT >= 78, got ${count}\n${output}`);
+  const expectedSuiteCount = findFiles(path.join(root, "packages", "core", "src"), ".test.ts").length;
+  const suiteCount = Number(output.match(/CORE_TEST_SUITE_COUNT=(\d+)/)?.[1] ?? 0);
+  const testCount = Number(output.match(/CORE_TEST_COUNT=(\d+)/)?.[1] ?? 0);
+  assert.equal(suiteCount, expectedSuiteCount, output);
+  assert.equal(testCount > 0, true, output);
 });
 
 test("root test:e2e builds the extension before launching browser tests", () => {
@@ -135,3 +175,13 @@ test("root release:check runs the complete local release gate", () => {
   assert.ok(script.indexOf("pnpm test:e2e") < script.indexOf("pnpm package:extension"), "browser smoke tests should run before packaging");
   assert.ok(script.indexOf("pnpm package:extension") < script.indexOf("pnpm verify:release"), "release assets should be verified after packaging");
 });
+
+function findFiles(directory, suffix) {
+  const files = [];
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    const absolute = path.join(directory, entry.name);
+    if (entry.isDirectory()) files.push(...findFiles(absolute, suffix));
+    else if (entry.isFile() && entry.name.endsWith(suffix)) files.push(absolute);
+  }
+  return files;
+}

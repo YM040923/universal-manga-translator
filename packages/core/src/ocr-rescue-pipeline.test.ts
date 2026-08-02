@@ -79,6 +79,24 @@ test("OcrTranslatePipeline keeps the original OCR when rescue quality is worse",
   assert.equal(result.regions[0]?.sourceText, "HERO");
 });
 
+test("OcrTranslatePipeline rejects high-confidence rescue text that is abnormally inflated", async () => {
+  let ocrCalls = 0;
+  const pipeline = pipelineWith(async () => {
+    ocrCalls += 1;
+    return ocrCalls === 1
+      ? [region("original", "JOHN", 0.48)]
+      : [region("inflated", "JOHNNNNNNNNNN", 0.99)];
+  });
+
+  const result = await pipeline.process(input({
+    ocrPreprocessLoader: loader(),
+    maxOcrRescueCallsPerImage: 1,
+  }));
+
+  assert.equal(ocrCalls, 2);
+  assert.equal(result.regions[0]?.sourceText, "JOHN");
+});
+
 test("OcrTranslatePipeline does not rescue empty OCR without evidence", async () => {
   let ocrCalls = 0;
   let rescueLoads = 0;
@@ -174,8 +192,54 @@ test("OcrTranslatePipeline propagates rescue-stage provider errors with safe con
 
     assert.equal(caught instanceof Error, true, message);
     assert.match((caught as Error).message, /^OCR rescue \(grayscale-contrast, unit x=0,y=0,w=1000,h=1000\) failed:/, message);
-    assert.equal((caught as Error).cause, rescueError, message);
+    assert.notEqual((caught as Error).cause, rescueError, message);
+    assert.equal((caught as Error).cause instanceof Error, true, message);
     assert.equal(translatorCalls, 0, message);
+  }
+});
+
+test("OcrTranslatePipeline redacts secrets, private URLs, image data, and the wrapped rescue cause", async () => {
+  let ocrCalls = 0;
+  const rawError = new Error(
+    "500 Authorization: Bearer sk-secret api_key=top-secret api-key=second-secret "
+    + "token=private-token secret=private-secret "
+    + "https://private.example/ocr?token=url-secret "
+    + "imageData=data:image/png;base64,VERY_PRIVATE_IMAGE",
+  );
+  const pipeline = pipelineWith(async () => {
+    ocrCalls += 1;
+    if (ocrCalls === 1) return [region("low", "H3LL?", 0.2)];
+    throw rawError;
+  });
+  let caught: unknown;
+
+  try {
+    await pipeline.process(input({
+      ocrPreprocessLoader: loader(),
+      maxOcrRescueCallsPerImage: 1,
+    }));
+  } catch (error) {
+    caught = error;
+  }
+
+  assert.equal(caught instanceof Error, true);
+  const wrapper = caught as Error;
+  assert.equal(wrapper.cause instanceof Error, true);
+  assert.notEqual(wrapper.cause, rawError);
+  const safeText = `${wrapper.message}\n${(wrapper.cause as Error).message}`;
+  for (const sensitive of [
+    "sk-secret",
+    "top-secret",
+    "second-secret",
+    "private-token",
+    "private-secret",
+    "private.example",
+    "url-secret",
+    "VERY_PRIVATE_IMAGE",
+    "data:image",
+    "imageData=",
+  ]) {
+    assert.equal(safeText.includes(sensitive), false, sensitive);
   }
 });
 

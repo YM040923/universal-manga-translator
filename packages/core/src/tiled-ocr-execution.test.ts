@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import type { RecognitionUnit } from "@umt/shared";
 import { OcrTranslatePipeline, type CorePreCroppedOcrInput, type CorePreCroppedOcrInputLoader } from "./pipeline.js";
 
-test("OcrTranslatePipeline wraps tile OCR failures with safe tile context and preserves cause", async () => {
+test("OcrTranslatePipeline wraps tile OCR failures with safe tile context and a sanitized cause", async () => {
   const providerError = new Error("provider timeout https://signed.example/image?token=secret data:image/png;base64,secret");
   let ocrCalls = 0;
   let translatorCalls = 0;
@@ -41,7 +41,12 @@ test("OcrTranslatePipeline wraps tile OCR failures with safe tile context and pr
       assert.equal(tileError.message.includes("https://"), false);
       assert.equal(tileError.message.includes("token=secret"), false);
       assert.equal(tileError.message.includes("data:image"), false);
-      assert.equal(tileError.cause, providerError);
+      assert.notEqual(tileError.cause, providerError);
+      assert.equal(tileError.cause instanceof Error, true);
+      const causeMessage = (tileError.cause as Error).message;
+      assert.equal(causeMessage.includes("https://"), false);
+      assert.equal(causeMessage.includes("token=secret"), false);
+      assert.equal(causeMessage.includes("data:image"), false);
       return true;
     },
   );

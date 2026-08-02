@@ -6,8 +6,7 @@ export type OcrPreprocessVariantId =
   | "lossless-normalized"
   | "upscale-2x"
   | "grayscale-contrast"
-  | "adaptive-threshold"
-  | "expanded-crop";
+  | "adaptive-threshold";
 
 export interface OcrPreprocessVariant {
   id: OcrPreprocessVariantId;
@@ -17,7 +16,6 @@ export interface OcrPreprocessVariant {
   grayscale: boolean;
   contrast: number;
   threshold: "none" | "adaptive";
-  expandCropRatio: number;
 }
 
 function variant(
@@ -33,7 +31,6 @@ function variant(
     grayscale: options.grayscale ?? false,
     contrast: options.contrast ?? 1,
     threshold: options.threshold ?? "none",
-    expandCropRatio: options.expandCropRatio ?? 0,
   });
 }
 
@@ -43,7 +40,6 @@ export const OCR_PREPROCESS_VARIANTS: Readonly<Record<OcrPreprocessVariantId, Oc
   "upscale-2x": variant("upscale-2x", { scale: 2 }),
   "grayscale-contrast": variant("grayscale-contrast", { grayscale: true, contrast: 1.45 }),
   "adaptive-threshold": variant("adaptive-threshold", { grayscale: true, contrast: 1.25, threshold: "adaptive" }),
-  "expanded-crop": variant("expanded-crop", { expandCropRatio: 0.04 }),
 });
 
 export function getOcrPreprocessVariant(id: OcrPreprocessVariantId): OcrPreprocessVariant {
@@ -70,7 +66,7 @@ export function applyOcrPreprocessVariantToUnit(
   variant: OcrPreprocessVariant,
 ): RecognitionUnit {
   if (variant.id === "original") return { ...unit };
-  const crop = variant.expandCropRatio > 0 ? expandCrop(unit, variant.expandCropRatio) : { ...unit.crop };
+  const crop = { ...unit.crop };
   return {
     ...unit,
     crop,
@@ -83,14 +79,4 @@ export function applyOcrPreprocessVariantToUnit(
     reason: "ocr-rescue",
     preprocessingVersion: variant.version,
   };
-}
-
-function expandCrop(unit: RecognitionUnit, ratio: number): RecognitionUnit["crop"] {
-  const padX = unit.crop.width * ratio;
-  const padY = unit.crop.height * ratio;
-  const left = Math.max(0, unit.crop.x - padX);
-  const top = Math.max(0, unit.crop.y - padY);
-  const right = Math.min(unit.naturalSize.width, unit.crop.x + unit.crop.width + padX);
-  const bottom = Math.min(unit.naturalSize.height, unit.crop.y + unit.crop.height + padY);
-  return { x: left, y: top, width: right - left, height: bottom - top };
 }

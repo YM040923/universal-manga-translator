@@ -16,7 +16,6 @@ test("OCR preprocess variants expose stable DOM-free ids, versions, and cache ke
     "upscale-2x",
     "grayscale-contrast",
     "adaptive-threshold",
-    "expanded-crop",
   ]);
   for (const variant of Object.values(OCR_PREPROCESS_VARIANTS)) {
     assert.match(variant.version, /^ocr-preprocess:[a-z0-9-]+:v1$/);

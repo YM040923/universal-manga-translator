@@ -80,11 +80,7 @@ export async function renderBrowserOcrVariant(
     if (variant.grayscale || variant.contrast !== 1) {
       context.filter = `${variant.grayscale ? "grayscale(1)" : ""} contrast(${Math.round(variant.contrast * 100)}%)`.trim();
     }
-    const offsetX = Math.round((source.recognitionUnit.crop.x - transformedUnit.crop.x) * transformedUnit.scaleX);
-    const offsetY = Math.round((source.recognitionUnit.crop.y - transformedUnit.crop.y) * transformedUnit.scaleY);
-    const drawWidth = Math.max(1, Math.round(source.recognitionUnit.pixelSize.width * variant.scale));
-    const drawHeight = Math.max(1, Math.round(source.recognitionUnit.pixelSize.height * variant.scale));
-    context.drawImage(decoded.image, offsetX, offsetY, drawWidth, drawHeight);
+    context.drawImage(decoded.image, 0, 0, canvas.width, canvas.height);
     context.filter = "none";
     if (variant.threshold === "adaptive") applyAdaptiveThreshold(context, canvas.width, canvas.height);
     const blob = await canvasToBlob(canvas);

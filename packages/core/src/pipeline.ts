@@ -7,7 +7,7 @@ import {
   type OcrPreprocessVariant,
   type OcrPreprocessVariantId,
 } from "./ocr-preprocess.js";
-import { assessOcrQuality, type OcrQualityReason } from "./ocr-quality.js";
+import { assessOcrQuality, shouldAcceptRescue, type OcrQualityReason } from "./ocr-quality.js";
 import type { TextTranslationItem, TextTranslationOptions, TextTranslationProvider, TextTranslationResult } from "./openai-translator.js";
 
 export type { GenericOcrRegion, TextTranslationItem, TextTranslationOptions, TextTranslationResult };
@@ -288,7 +288,10 @@ export class OcrTranslatePipeline {
         ...(parentInput.likelyTextEvidence !== undefined ? { likelyTextEvidence: parentInput.likelyTextEvidence } : {}),
         overlappingObservations: overlappingParentRegions,
       });
-      const useRescue = rescueAssessment.score > originalAssessment.score;
+      const useRescue = shouldAcceptRescue(
+        { observations: comparableOriginal, assessment: originalAssessment },
+        { observations: comparableRescue, assessment: rescueAssessment },
+      );
       parentInput.onOcrRescueDiagnostic?.({
         reasons: [...originalAssessment.reasons],
         variant: variant.id,
@@ -400,21 +403,39 @@ function clamp(value: number, minimum: number, maximum: number): number {
 
 function createOcrTileError(cause: unknown, tileIndex: number, tileCount: number, unit: RecognitionUnit): Error {
   const { crop } = unit;
-  const message = `OCR tile ${tileIndex}/${tileCount} (x=${formatDiagnosticNumber(crop.x)},y=${formatDiagnosticNumber(crop.y)},w=${formatDiagnosticNumber(crop.width)},h=${formatDiagnosticNumber(crop.height)}) failed: ${safeErrorMessage(cause)}`;
-  return new Error(message, { cause });
+  const safeCause = createSafeOcrCause(cause);
+  const message = `OCR tile ${tileIndex}/${tileCount} (x=${formatDiagnosticNumber(crop.x)},y=${formatDiagnosticNumber(crop.y)},w=${formatDiagnosticNumber(crop.width)},h=${formatDiagnosticNumber(crop.height)}) failed: ${safeCause.message}`;
+  return new Error(message, { cause: safeCause });
 }
 
 function createOcrRescueError(cause: unknown, variant: OcrPreprocessVariantId, unit: RecognitionUnit): Error {
   const { crop } = unit;
-  const message = `OCR rescue (${variant}, unit x=${formatDiagnosticNumber(crop.x)},y=${formatDiagnosticNumber(crop.y)},w=${formatDiagnosticNumber(crop.width)},h=${formatDiagnosticNumber(crop.height)}) failed: ${safeErrorMessage(cause)}`;
-  return new Error(message, { cause });
+  const safeCause = createSafeOcrCause(cause);
+  const message = `OCR rescue (${variant}, unit x=${formatDiagnosticNumber(crop.x)},y=${formatDiagnosticNumber(crop.y)},w=${formatDiagnosticNumber(crop.width)},h=${formatDiagnosticNumber(crop.height)}) failed: ${safeCause.message}`;
+  return new Error(message, { cause: safeCause });
+}
+
+function createSafeOcrCause(cause: unknown): Error {
+  const safeCause = new Error(safeErrorMessage(cause));
+  safeCause.name = "SafeOcrProviderError";
+  return safeCause;
 }
 
 function safeErrorMessage(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   return message
-    .replace(/data:[^\s)]+/gi, "[redacted-image]")
-    .replace(/https?:\/\/[^\s)]+/gi, "[redacted-url]")
+    .replace(/\bimage[_-]?data\b\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s]+)/gi, "[redacted-image]")
+    .replace(/data:[^\s"'<>)]*/gi, "[redacted-image]")
+    .replace(/https?:\/\/[^\s"'<>)]*/gi, "[redacted-url]")
+    .replace(
+      /\b(authorization|proxy-authorization)\b\s*[:=]\s*(?:bearer\s+)?(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi,
+      "$1=[redacted]",
+    )
+    .replace(/\bbearer\s+(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi, "Bearer [redacted]")
+    .replace(
+      /["']?\b(api[_-]?key|access[_-]?token|refresh[_-]?token|token|client[_-]?secret|secret)\b["']?\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi,
+      "$1=[redacted]",
+    )
     .slice(0, 500);
 }
 

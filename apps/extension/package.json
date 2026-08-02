@@ -6,7 +6,7 @@
     "build": "vite build -c vite.content.config.ts && vite build -c vite.app.config.ts && node scripts/copy-static.mjs",
     "dev": "vite build -c vite.content.config.ts --watch",
     "test": "pnpm --filter @umt/shared build && pnpm --filter @umt/core build && pnpm build:test && node --test dist-test/**/*.test.js && pnpm build && node --test scripts/*.test.mjs",
-    "build:test": "tsc -p tsconfig.test.json",
+    "build:test": "node -e \"fs.rmSync('dist-test',{recursive:true,force:true})\" && tsc -p tsconfig.test.json",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {

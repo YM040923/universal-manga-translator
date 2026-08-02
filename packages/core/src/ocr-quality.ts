@@ -34,6 +34,11 @@ export interface AssessOcrQualityOptions {
 
 export type OcrQualityInput = GenericOcrRegion | OcrObservation;
 
+export interface OcrRescueCandidate {
+  observations: readonly OcrQualityInput[];
+  assessment: OcrQualityAssessment;
+}
+
 export function assessOcrQuality(
   observations: readonly OcrQualityInput[],
   recognitionUnit: RecognitionUnit,
@@ -53,16 +58,28 @@ export function assessOcrQuality(
   const symbolRatio = characters.length ? symbolCount / characters.length : 0;
   const reasons: OcrQualityReason[] = [];
   const hasTextEvidence = options.likelyTextEvidence === true || recognitionUnit.reason === "manual-selection";
+  const conventionalSymbolicText = isConventionalSymbolicText(texts);
 
   if (observations.length === 0) {
     if (hasTextEvidence) reasons.push("empty-with-text-evidence");
   } else {
     const veryLowConfidenceCount = confidenceValues.filter((confidence) => confidence < 0.45).length;
-    if (averageConfidence < 0.58 || veryLowConfidenceCount >= Math.max(2, Math.ceil(observations.length / 2))) {
+    if (
+      !conventionalSymbolicText
+      && (averageConfidence < 0.58 || veryLowConfidenceCount >= Math.max(2, Math.ceil(observations.length / 2)))
+    ) {
       reasons.push("low-confidence");
     }
-    if (characters.length >= 3 && symbolRatio >= 0.45) reasons.push("high-symbol-ratio");
-    if (shortFragmentCount >= 3 && shortFragmentCount >= Math.ceil(texts.length * 0.6)) reasons.push("fragmented-text");
+    if (!conventionalSymbolicText && characters.length >= 3 && symbolRatio >= 0.45) reasons.push("high-symbol-ratio");
+    if (
+      !conventionalSymbolicText
+      && averageConfidence < 0.72
+      && shortFragmentCount >= 3
+      && shortFragmentCount >= Math.ceil(texts.length * 0.6)
+      && (isolatedCharacterCount >= 3 || shortFragmentCount >= 4)
+    ) {
+      reasons.push("fragmented-text");
+    }
     if (medianTextHeight > 0 && medianTextHeight <= 18 && averageConfidence < 0.8 && characters.length <= 48) reasons.push("small-text");
     if (overlapDisagreementCount > 0) reasons.push("overlap-disagreement");
   }
@@ -94,17 +111,100 @@ export function assessOcrQuality(
   };
 }
 
+export function shouldAcceptRescue(
+  original: OcrRescueCandidate,
+  rescue: OcrRescueCandidate,
+): boolean {
+  const originalText = combinedNormalizedText(original.observations);
+  const rescueText = combinedNormalizedText(rescue.observations);
+  if (!rescueText) return false;
+  if (!originalText) {
+    return !rescue.assessment.suspicious && rescue.assessment.metrics.averageConfidence >= 0.65;
+  }
+
+  const similarity = textSimilarity(originalText, rescueText);
+  if (isAbnormallyExpanded(originalText, rescueText)) return false;
+  if (hasNewRepeatedCharacterRun(originalText, rescueText)) return false;
+  if (similarity < 0.45) return false;
+
+  const confidenceGain =
+    rescue.assessment.metrics.averageConfidence
+    - original.assessment.metrics.averageConfidence;
+  const fragmentRatioGain =
+    fragmentRatio(original.assessment.metrics)
+    - fragmentRatio(rescue.assessment.metrics);
+  const structuralImprovement =
+    original.assessment.metrics.symbolRatio - rescue.assessment.metrics.symbolRatio >= 0.15
+    || fragmentRatioGain >= 0.25
+    || original.assessment.metrics.overlapDisagreementCount > rescue.assessment.metrics.overlapDisagreementCount;
+
+  if (
+    similarity >= 0.82
+    && confidenceGain >= 0.08
+    && rescue.assessment.reasons.length <= original.assessment.reasons.length
+  ) {
+    return true;
+  }
+  return (
+    original.assessment.suspicious
+    && !rescue.assessment.suspicious
+    && similarity >= 0.5
+    && (confidenceGain >= 0.08 || structuralImprovement)
+    && rescue.assessment.metrics.averageConfidence >= 0.6
+  );
+}
+
 function qualityScore(metrics: OcrQualityMetrics, reasons: readonly OcrQualityReason[]): number {
   if (metrics.regionCount === 0) return 0;
+  const shortFragmentRatio = fragmentRatio(metrics);
   let score =
-    metrics.averageConfidence * 55
-    + Math.min(25, metrics.characterCount * 1.25)
-    + Math.min(10, metrics.regionCount * 2)
-    + (1 - metrics.symbolRatio) * 10;
+    metrics.averageConfidence * 70
+    + (1 - metrics.symbolRatio) * 15
+    + (1 - shortFragmentRatio) * 15;
   if (reasons.includes("fragmented-text")) score -= 15;
   if (reasons.includes("overlap-disagreement")) score -= 18 * metrics.overlapDisagreementCount;
   if (reasons.includes("small-text")) score -= 4;
   return round(clamp(score, 0, 100), 4);
+}
+
+function fragmentRatio(metrics: OcrQualityMetrics): number {
+  return metrics.regionCount > 0 ? metrics.shortFragmentCount / metrics.regionCount : 0;
+}
+
+function isConventionalSymbolicText(texts: readonly string[]): boolean {
+  if (texts.length !== 1) return false;
+  const text = texts[0]!.replace(/\s+/g, "");
+  return /^[\p{P}\p{S}]+$/u.test(text) || /^(?:[\p{L}\p{N}]\.){2,}$/u.test(text);
+}
+
+function combinedNormalizedText(observations: readonly OcrQualityInput[]): string {
+  return observations
+    .map((observation) => normalizeText(observation.sourceText))
+    .filter(Boolean)
+    .join("");
+}
+
+function isAbnormallyExpanded(original: string, rescue: string): boolean {
+  if (rescue.length <= original.length) return false;
+  const addedCharacters = rescue.length - original.length;
+  return addedCharacters >= 4 && rescue.length / Math.max(1, original.length) > 1.75;
+}
+
+function hasNewRepeatedCharacterRun(original: string, rescue: string): boolean {
+  const rescueRun = longestRepeatedCharacterRun(rescue);
+  return rescueRun >= 4 && rescueRun >= longestRepeatedCharacterRun(original) + 2;
+}
+
+function longestRepeatedCharacterRun(text: string): number {
+  let longest = 0;
+  let current = 0;
+  let previous = "";
+  for (const character of Array.from(text)) {
+    current = character === previous ? current + 1 : 1;
+    previous = character;
+    longest = Math.max(longest, current);
+  }
+  return longest;
 }
 
 function countOverlapDisagreements(
