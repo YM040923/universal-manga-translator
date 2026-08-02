@@ -28,7 +28,7 @@ export function createSurfaceTask(surface: DetectedSurface, priority: SurfaceTas
 
 export function createSurfaceTaskCapture(
   surface: DetectedSurface,
-  priority: SurfaceTask["viewportPriority"],
+  priority: RecognitionPriority,
   targetLanguage = "zh-CN",
   captureSource: RecognitionCaptureSource = surface.imageData ? "inline-image-data" : "image-url",
 ): SurfaceTaskCapture {
@@ -39,7 +39,7 @@ export function createSurfaceTaskCapture(
       imageData: surface.imageData,
       naturalSize: surface.naturalSize,
       pixelSize: surface.naturalSize,
-      priority: priority as RecognitionPriority,
+      priority,
       reason: "automatic",
       captureSource,
       devicePixelRatio: readDevicePixelRatio(),
@@ -53,7 +53,7 @@ export interface CreateSurfaceTaskWithImageDataOptions {
 
 export async function createSurfaceTaskWithImageData(
   surface: DetectedSurface,
-  priority: SurfaceTask["viewportPriority"],
+  priority: RecognitionPriority,
   targetLanguage = "zh-CN",
   options: CreateSurfaceTaskWithImageDataOptions = {},
 ): Promise<SurfaceTask> {
@@ -62,7 +62,7 @@ export async function createSurfaceTaskWithImageData(
 
 export async function createSurfaceTaskWithImageDataCapture(
   surface: DetectedSurface,
-  priority: SurfaceTask["viewportPriority"],
+  priority: RecognitionPriority,
   targetLanguage = "zh-CN",
   options: CreateSurfaceTaskWithImageDataOptions = {},
 ): Promise<SurfaceTaskCapture> {

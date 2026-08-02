@@ -64,15 +64,16 @@ export async function createScreenshotSurfaceCapture(input: CreateScreenshotSurf
     naturalSize: pixelSize,
     score: 999,
   };
-  const scaleX = input.screenshotSize.width / Math.max(1, input.viewportSize.width);
-  const scaleY = input.screenshotSize.height / Math.max(1, input.viewportSize.height);
+  const scaleX = input.screenshotSize.width / input.viewportSize.width;
+  const scaleY = input.screenshotSize.height / input.viewportSize.height;
   return {
     surface,
     capture: createRecognitionCapture({
       parentSurfaceId: input.surfaceId,
       imageData,
-      naturalSize: pixelSize,
+      naturalSize: input.screenshotSize,
       pixelSize,
+      crop: baseCrop,
       priority: "p0",
       reason: "manual-selection",
       captureSource: "manual-selection",
