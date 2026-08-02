@@ -1148,14 +1148,17 @@ test("popup saves OCR cost protection settings", async () => {
 
   assert.ok(root.querySelector("[data-field='direct-ocr-max-auto-pages']"));
   assert.ok(root.querySelector("[data-field='direct-ocr-max-tiles-per-image']"));
+  assert.ok(root.querySelector("[data-field='direct-ocr-max-rescue-calls-per-image']"));
   assert.ok(root.querySelector("[data-field='direct-ocr-stop-after-failures']"));
   setValue(root, dom, "direct-ocr-max-auto-pages", "25");
   setValue(root, dom, "direct-ocr-max-tiles-per-image", "7");
+  setValue(root, dom, "direct-ocr-max-rescue-calls-per-image", "2");
   setValue(root, dom, "direct-ocr-stop-after-failures", "3");
   root.querySelector<HTMLButtonElement>("[data-action='save-api-settings']")!.click();
   await new Promise((resolve) => setTimeout(resolve, 0));
 
   assert.equal(storage.current.directOcr.maxAutoOcrPages, 25);
   assert.equal(storage.current.directOcr.maxOcrTilesPerImage, 7);
+  assert.equal(storage.current.directOcr.maxOcrRescueCallsPerImage, 2);
   assert.equal(storage.current.directOcr.stopAfterConsecutiveFailures, 3);
 });

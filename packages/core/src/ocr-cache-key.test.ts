@@ -37,6 +37,36 @@ test("buildOcrCacheKey separates tile pixel dimensions and scales", () => {
   assert.notEqual(differentPixels, differentScale);
 });
 
+test("buildOcrCacheKey isolates OCR preprocess variants", () => {
+  const recognitionUnit = unit(
+    "tile-variant",
+    { x: 0, y: 0, width: 1000, height: 1000 },
+    { width: 1000, height: 1000 },
+    1,
+    1,
+  );
+  const base = {
+    imageHash: "same-image",
+    width: 1000,
+    height: 1000,
+    sourceLanguage: "auto",
+    recognitionUnit,
+  };
+
+  const original = buildOcrCacheKey("direct:image_base64:ocr:abc+openai-compatible:gpt", base);
+  const grayscale = buildOcrCacheKey("direct:image_base64:ocr:abc+openai-compatible:gpt", {
+    ...base,
+    ocrVariant: "grayscale-contrast",
+  });
+  const threshold = buildOcrCacheKey("direct:image_base64:ocr:abc+openai-compatible:gpt", {
+    ...base,
+    ocrVariant: "adaptive-threshold",
+  });
+
+  assert.notEqual(original, grayscale);
+  assert.notEqual(grayscale, threshold);
+});
+
 function tileKey(recognitionUnit: RecognitionUnit): string {
   return buildOcrCacheKey("direct:image_base64:ocr:abc+openai-compatible:gpt", {
     imageHash: "same-image",

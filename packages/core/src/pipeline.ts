@@ -1,6 +1,13 @@
 import type { RecognitionUnit, Rect, TextRegion } from "@umt/shared";
 import type { ApiKeyPoolStatus } from "./api-key-pool.js";
-import type { GenericOcrImageInput, GenericOcrRegion } from "./generic-ocr.js";
+import { classifyGenericOcrError, type GenericOcrImageInput, type GenericOcrRegion } from "./generic-ocr.js";
+import {
+  getOcrPreprocessVariant,
+  selectOcrRescueVariant,
+  type OcrPreprocessVariant,
+  type OcrPreprocessVariantId,
+} from "./ocr-preprocess.js";
+import { assessOcrQuality, type OcrQualityReason } from "./ocr-quality.js";
 import type { TextTranslationItem, TextTranslationOptions, TextTranslationProvider, TextTranslationResult } from "./openai-translator.js";
 
 export type { GenericOcrRegion, TextTranslationItem, TextTranslationOptions, TextTranslationResult };
@@ -19,10 +26,16 @@ export interface CorePipelineInput extends GenericOcrImageInput {
   preCroppedOcrInputs?: CorePreCroppedOcrInput[];
   preCroppedOcrInputLoader?: CorePreCroppedOcrInputLoader;
   onOcrTileError?: (failure: CoreOcrTileFailure) => void;
+  recognitionUnit?: RecognitionUnit;
+  likelyTextEvidence?: boolean;
+  maxOcrRescueCallsPerImage?: number;
+  ocrPreprocessLoader?: CoreOcrPreprocessLoader;
+  onOcrRescueDiagnostic?: (diagnostic: CoreOcrRescueDiagnostic) => void;
 }
 
 export interface CorePreCroppedOcrInput extends GenericOcrImageInput {
   recognitionUnit: RecognitionUnit;
+  ocrVariant?: OcrPreprocessVariantId;
 }
 
 export interface CorePreCroppedOcrInputLoader {
@@ -35,6 +48,32 @@ export interface CoreOcrTileFailure {
   tileCount: number;
   recognitionUnit: RecognitionUnit;
   error: Error;
+}
+
+export interface CoreOcrPreprocessSourceInput extends GenericOcrImageInput {
+  recognitionUnit: RecognitionUnit;
+}
+
+export interface CoreOcrPreprocessLoader {
+  withVariant<T>(
+    source: CoreOcrPreprocessSourceInput,
+    variant: OcrPreprocessVariant,
+    consume: (input: CorePreCroppedOcrInput) => Promise<T>,
+  ): Promise<T>;
+}
+
+export interface CoreOcrRescueDiagnostic {
+  reasons: OcrQualityReason[];
+  variant: OcrPreprocessVariantId;
+  usedBudget: number;
+  remainingBudget: number;
+  originalScore: number;
+  rescueScore?: number;
+  selected: "original" | "rescue";
+  regionCount: number;
+  characterCount: number;
+  crop: Rect;
+  errorKind?: ReturnType<typeof classifyGenericOcrError>["kind"];
 }
 
 export interface CoreOcrProvider {
@@ -106,31 +145,49 @@ export class OcrTranslatePipeline {
   }
 
   private async readOcrRegions(input: CorePipelineInput): Promise<GenericOcrRegion[]> {
+    const rescueBudget = createOcrRescueBudget(input.maxOcrRescueCallsPerImage);
     if (input.preCroppedOcrInputLoader) {
       return this.readTiledOcrRegions(
         input,
         input.preCroppedOcrInputLoader.tileCount,
         input.preCroppedOcrInputLoader.forEach,
+        rescueBudget,
       );
     }
     if (input.preCroppedOcrInputs?.length) {
       return this.readTiledOcrRegions(input, input.preCroppedOcrInputs.length, async (consume) => {
         for (const [index, ocrInput] of input.preCroppedOcrInputs!.entries()) await consume(ocrInput, index);
-      });
+      }, rescueBudget);
     }
-    return this.readSingleOcrInput(input, input);
+    const recognitionUnit = input.recognitionUnit ?? createFullImageRecognitionUnit(input);
+    const original = await this.readSingleOcrInput(input, input);
+    return this.maybeRescueOcrRegions(input, {
+      imageBytes: input.imageBytes,
+      ...(input.fileName ? { fileName: input.fileName } : {}),
+      ...(input.mimeType ? { mimeType: input.mimeType } : {}),
+      recognitionUnit,
+    }, original, [], rescueBudget, false);
   }
 
   private async readTiledOcrRegions(
     input: CorePipelineInput,
     tileCount: number,
     forEach: CorePreCroppedOcrInputLoader["forEach"],
+    rescueBudget: CoreOcrRescueBudget,
   ): Promise<GenericOcrRegion[]> {
     const regions: GenericOcrRegion[] = [];
     await forEach(async (ocrInput, index) => {
       try {
-        const localRegions = await this.readSingleOcrInput(input, ocrInput);
-        regions.push(...localRegions.map((region) => remapRegionToParent(region, ocrInput.recognitionUnit, input.width, input.height)));
+        const original = await this.readSingleOcrInput(input, ocrInput, ocrInput.recognitionUnit, ocrInput.ocrVariant);
+        const selected = await this.maybeRescueOcrRegions(
+          input,
+          ocrInput,
+          original,
+          regions,
+          rescueBudget,
+          true,
+        );
+        regions.push(...selected.map((region) => remapRegionToParent(region, ocrInput.recognitionUnit, input.width, input.height)));
       } catch (cause) {
         const error = createOcrTileError(cause, index + 1, tileCount, ocrInput.recognitionUnit);
         input.onOcrTileError?.({ tileIndex: index + 1, tileCount, recognitionUnit: ocrInput.recognitionUnit, error });
@@ -143,6 +200,8 @@ export class OcrTranslatePipeline {
   private async readSingleOcrInput(
     parentInput: CorePipelineInput,
     ocrInput: CorePipelineInput | CorePreCroppedOcrInput,
+    recognitionUnit?: RecognitionUnit,
+    ocrVariant?: OcrPreprocessVariantId,
   ): Promise<GenericOcrRegion[]> {
     if (!this.options.ocrCache) {
       this.lastOcrCacheStatus = "disabled";
@@ -153,7 +212,8 @@ export class OcrTranslatePipeline {
       width: parentInput.width,
       height: parentInput.height,
       sourceLanguage: parentInput.sourceLanguage,
-      ...("recognitionUnit" in ocrInput ? { recognitionUnit: ocrInput.recognitionUnit } : {}),
+      ...(recognitionUnit ? { recognitionUnit } : {}),
+      ...(ocrVariant && ocrVariant !== "original" ? { ocrVariant } : {}),
     });
     const cached = await this.options.ocrCache.get(key);
     if (cached) {
@@ -178,9 +238,115 @@ export class OcrTranslatePipeline {
       if (inFlightOcrReads.get(key) === read) inFlightOcrReads.delete(key);
     }
   }
+
+  private async maybeRescueOcrRegions(
+    parentInput: CorePipelineInput,
+    sourceInput: CoreOcrPreprocessSourceInput,
+    originalRegions: GenericOcrRegion[],
+    overlappingParentRegions: GenericOcrRegion[],
+    budget: CoreOcrRescueBudget,
+    remapForComparison: boolean,
+  ): Promise<GenericOcrRegion[]> {
+    const comparableOriginal = remapForComparison
+      ? originalRegions.map((region) => remapRegionToParent(region, sourceInput.recognitionUnit, parentInput.width, parentInput.height))
+      : originalRegions;
+    const originalAssessment = assessOcrQuality(comparableOriginal, sourceInput.recognitionUnit, {
+      ...(parentInput.likelyTextEvidence !== undefined ? { likelyTextEvidence: parentInput.likelyTextEvidence } : {}),
+      overlappingObservations: overlappingParentRegions,
+    });
+    const variantId = selectOcrRescueVariant(originalAssessment);
+    if (
+      !variantId
+      || !parentInput.ocrPreprocessLoader
+      || budget.used >= budget.maximum
+    ) {
+      return originalRegions;
+    }
+
+    const variant = getOcrPreprocessVariant(variantId);
+    budget.used += 1;
+    try {
+      let variantUnit = sourceInput.recognitionUnit;
+      const rawRescueRegions = await parentInput.ocrPreprocessLoader.withVariant(sourceInput, variant, async (variantInput) => {
+        variantUnit = variantInput.recognitionUnit;
+        return this.readSingleOcrInput(
+          parentInput,
+          variantInput,
+          variantInput.recognitionUnit,
+          variantInput.ocrVariant ?? variant.id,
+        );
+      });
+      const rescueRegions = rawRescueRegions.map((region) => remapRegionBetweenUnits(
+        region,
+        variantUnit,
+        sourceInput.recognitionUnit,
+      ));
+      const comparableRescue = remapForComparison
+        ? rescueRegions.map((region) => remapRegionToParent(region, sourceInput.recognitionUnit, parentInput.width, parentInput.height))
+        : rescueRegions;
+      const rescueAssessment = assessOcrQuality(comparableRescue, sourceInput.recognitionUnit, {
+        ...(parentInput.likelyTextEvidence !== undefined ? { likelyTextEvidence: parentInput.likelyTextEvidence } : {}),
+        overlappingObservations: overlappingParentRegions,
+      });
+      const useRescue = rescueAssessment.score > originalAssessment.score;
+      parentInput.onOcrRescueDiagnostic?.({
+        reasons: [...originalAssessment.reasons],
+        variant: variant.id,
+        usedBudget: budget.used,
+        remainingBudget: budget.maximum - budget.used,
+        originalScore: originalAssessment.score,
+        rescueScore: rescueAssessment.score,
+        selected: useRescue ? "rescue" : "original",
+        regionCount: originalAssessment.metrics.regionCount,
+        characterCount: originalAssessment.metrics.characterCount,
+        crop: { ...sourceInput.recognitionUnit.crop },
+      });
+      return useRescue ? rescueRegions : originalRegions;
+    } catch (error) {
+      parentInput.onOcrRescueDiagnostic?.({
+        reasons: [...originalAssessment.reasons],
+        variant: variant.id,
+        usedBudget: budget.used,
+        remainingBudget: budget.maximum - budget.used,
+        originalScore: originalAssessment.score,
+        selected: "original",
+        regionCount: originalAssessment.metrics.regionCount,
+        characterCount: originalAssessment.metrics.characterCount,
+        crop: { ...sourceInput.recognitionUnit.crop },
+        errorKind: classifyGenericOcrError(error).kind,
+      });
+      return originalRegions;
+    }
+  }
 }
 
 const inFlightOcrReads = new Map<string, Promise<GenericOcrRegion[]>>();
+
+interface CoreOcrRescueBudget {
+  maximum: number;
+  used: number;
+}
+
+function createOcrRescueBudget(value: number | undefined): CoreOcrRescueBudget {
+  const maximum = Number.isFinite(value) ? Math.max(0, Math.min(3, Math.trunc(value!))) : 0;
+  return { maximum, used: 0 };
+}
+
+function createFullImageRecognitionUnit(input: CorePipelineInput): RecognitionUnit {
+  return {
+    id: "full-image",
+    parentSurfaceId: "full-image",
+    imageHash: input.imageHash,
+    crop: { x: 0, y: 0, width: input.width, height: input.height },
+    naturalSize: { width: input.width, height: input.height },
+    pixelSize: { width: input.width, height: input.height },
+    scaleX: 1,
+    scaleY: 1,
+    priority: "p0",
+    reason: "automatic",
+    preprocessingVersion: "none-v1",
+  };
+}
 
 function remapRegionToParent(
   region: GenericOcrRegion,
@@ -195,6 +361,30 @@ function remapRegionToParent(
   return {
     ...region,
     id: `${unit.id}:${region.id}`,
+    box: {
+      x: left,
+      y: top,
+      width: Math.max(0, right - left),
+      height: Math.max(0, bottom - top),
+    },
+  };
+}
+
+function remapRegionBetweenUnits(
+  region: GenericOcrRegion,
+  fromUnit: RecognitionUnit,
+  toUnit: RecognitionUnit,
+): GenericOcrRegion {
+  const naturalLeft = fromUnit.crop.x + region.box.x / fromUnit.scaleX;
+  const naturalTop = fromUnit.crop.y + region.box.y / fromUnit.scaleY;
+  const naturalRight = fromUnit.crop.x + (region.box.x + region.box.width) / fromUnit.scaleX;
+  const naturalBottom = fromUnit.crop.y + (region.box.y + region.box.height) / fromUnit.scaleY;
+  const left = clamp((naturalLeft - toUnit.crop.x) * toUnit.scaleX, 0, toUnit.pixelSize.width);
+  const top = clamp((naturalTop - toUnit.crop.y) * toUnit.scaleY, 0, toUnit.pixelSize.height);
+  const right = clamp((naturalRight - toUnit.crop.x) * toUnit.scaleX, 0, toUnit.pixelSize.width);
+  const bottom = clamp((naturalBottom - toUnit.crop.y) * toUnit.scaleY, 0, toUnit.pixelSize.height);
+  return {
+    ...region,
     box: {
       x: left,
       y: top,
@@ -335,6 +525,7 @@ export function buildOcrCacheKey(
     height: number;
     sourceLanguage: string;
     recognitionUnit?: RecognitionUnit;
+    ocrVariant?: OcrPreprocessVariantId;
   },
 ): string {
   const base = {
@@ -345,11 +536,33 @@ export function buildOcrCacheKey(
     height: input.height,
     sourceLanguage: input.sourceLanguage,
   };
-  if (!input.recognitionUnit) return JSON.stringify(base);
+  if (!input.recognitionUnit && !input.ocrVariant) return JSON.stringify(base);
   const unit = input.recognitionUnit;
+  if (!unit) {
+    return JSON.stringify({
+      ...base,
+      v: 3,
+      ocrVariant: input.ocrVariant,
+    });
+  }
+  if (!input.ocrVariant || input.ocrVariant === "original") {
+    return JSON.stringify({
+      ...base,
+      v: 2,
+      cropX: normalizeCacheNumber(unit.crop.x),
+      cropY: normalizeCacheNumber(unit.crop.y),
+      cropWidth: normalizeCacheNumber(unit.crop.width),
+      cropHeight: normalizeCacheNumber(unit.crop.height),
+      pixelWidth: normalizeCacheNumber(unit.pixelSize.width),
+      pixelHeight: normalizeCacheNumber(unit.pixelSize.height),
+      scaleX: normalizeCacheNumber(unit.scaleX),
+      scaleY: normalizeCacheNumber(unit.scaleY),
+      preprocessingVersion: unit.preprocessingVersion,
+    });
+  }
   return JSON.stringify({
     ...base,
-    v: 2,
+    v: 3,
     cropX: normalizeCacheNumber(unit.crop.x),
     cropY: normalizeCacheNumber(unit.crop.y),
     cropWidth: normalizeCacheNumber(unit.crop.width),
@@ -359,6 +572,7 @@ export function buildOcrCacheKey(
     scaleX: normalizeCacheNumber(unit.scaleX),
     scaleY: normalizeCacheNumber(unit.scaleY),
     preprocessingVersion: unit.preprocessingVersion,
+    ocrVariant: input.ocrVariant,
   });
 }
 

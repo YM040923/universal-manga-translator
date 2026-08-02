@@ -1,6 +1,10 @@
 ﻿import test from "node:test";
 import assert from "node:assert/strict";
-import { planRecognitionUnits } from "@umt/core";
+import {
+  applyOcrPreprocessVariantToUnit,
+  planRecognitionUnits,
+  type CoreOcrPreprocessLoader,
+} from "@umt/core";
 import type { SurfaceTask } from "@umt/shared/types";
 import { DIRECT_OCR_MAX_TILE_HEIGHT, DIRECT_OCR_TILE_OVERLAP_RATIO, DirectClient } from "./direct-client.js";
 import type { ExtensionSettings } from "../../settings/settings.js";
@@ -486,6 +490,104 @@ test("DirectClient sends tall images through multiple ordered OCR tiles and one 
   assert.equal(diagnosticText.includes("secret-token"), false);
   assert.equal(diagnosticText.includes("X-Amz-Signature"), false);
   assert.equal(diagnosticText.includes("secret-signature"), false);
+});
+
+test("DirectClient runs one bounded quality rescue and records safe diagnostics", async () => {
+  let ocrCalls = 0;
+  let translatorCalls = 0;
+  const variants: string[] = [];
+  const preprocessLoader: CoreOcrPreprocessLoader = {
+    withVariant: async (source, variant, consume) => {
+      variants.push(variant.id);
+      return consume({
+        imageBytes: new Uint8Array([7]),
+        fileName: `${variant.id}.png`,
+        mimeType: "image/png",
+        recognitionUnit: applyOcrPreprocessVariantToUnit(source.recognitionUnit, variant),
+        ocrVariant: variant.id,
+      });
+    },
+  };
+  const fetchImpl = (async (url) => {
+    if (String(url).includes("ocr")) {
+      ocrCalls += 1;
+      return new Response(JSON.stringify({
+        words_result: [{
+          words: ocrCalls === 1 ? "H3LL?" : "HELLO",
+          score: ocrCalls === 1 ? 0.2 : 0.96,
+          location: { left: 10, top: 20, width: 80, height: 20 },
+        }],
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    translatorCalls += 1;
+    return new Response(JSON.stringify({
+      choices: [{ message: { content: '{"items":[{"id":"network-ocr-1","translatedText":"你好"}]}' } }],
+    }), { status: 200, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+  const base = settings(fetchImpl);
+  const client = new DirectClient({
+    ...base,
+    directOcr: { ...base.directOcr, maxOcrRescueCallsPerImage: 1 },
+    __testOcrPreprocessLoader: preprocessLoader,
+  } as ExtensionSettings & { __testOcrPreprocessLoader: CoreOcrPreprocessLoader });
+
+  const response = await client.submit(task());
+
+  assert.equal(response.ok, true);
+  assert.equal(ocrCalls, 2);
+  assert.equal(translatorCalls, 1);
+  assert.deepEqual(variants, ["grayscale-contrast"]);
+  assert.equal(response.ok ? response.result?.regions[0]?.sourceText : "", "HELLO");
+  const diagnostics = await client.recentDiagnostics();
+  const rescue = diagnostics.ok ? diagnostics.records.find((record) => record.type === "ocr-quality-rescue") : undefined;
+  assert.equal(rescue?.usedBudget, 1);
+  assert.equal(rescue?.remainingBudget, 0);
+  assert.equal(rescue?.variant, "grayscale-contrast");
+  assert.equal(rescue?.selected, "rescue");
+  const diagnosticText = JSON.stringify(rescue);
+  assert.equal(diagnosticText.includes("H3LL?"), false);
+  assert.equal(diagnosticText.includes("HELLO"), false);
+  assert.equal(diagnosticText.includes("data:image"), false);
+  assert.equal(diagnosticText.includes("https://"), false);
+});
+
+test("DirectClient can rescue an empty manual selection but not an automatic empty image", async () => {
+  for (const mode of ["manual", "automatic"] as const) {
+    let ocrCalls = 0;
+    const preprocessLoader: CoreOcrPreprocessLoader = {
+      withVariant: async (source, variant, consume) => consume({
+        imageBytes: new Uint8Array([8]),
+        fileName: `${variant.id}.png`,
+        mimeType: "image/png",
+        recognitionUnit: applyOcrPreprocessVariantToUnit(source.recognitionUnit, variant),
+        ocrVariant: variant.id,
+      }),
+    };
+    const fetchImpl = (async (url) => {
+      if (String(url).includes("ocr")) {
+        ocrCalls += 1;
+        return new Response(JSON.stringify({
+          words_result: ocrCalls === 1 ? [] : [{
+            words: "FOUND",
+            score: 0.95,
+            location: { left: 10, top: 20, width: 80, height: 20 },
+          }],
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      return new Response(JSON.stringify({ choices: [{ message: { content: "" } }] }), { status: 200, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+    const base = settings(fetchImpl);
+    const client = new DirectClient({
+      ...base,
+      directOcr: { ...base.directOcr, maxOcrRescueCallsPerImage: 1 },
+      __testOcrPreprocessLoader: preprocessLoader,
+    } as ExtensionSettings & { __testOcrPreprocessLoader: CoreOcrPreprocessLoader });
+
+    const response = await client.submit(task({ surfaceId: mode === "manual" ? "manual:selection-1" : "surface:auto" }));
+
+    assert.equal(response.ok, true, mode);
+    assert.equal(ocrCalls, mode === "manual" ? 2 : 1, mode);
+  }
 });
 
 test("DirectClient keeps short images on one OCR request without invoking the tile cropper", async () => {

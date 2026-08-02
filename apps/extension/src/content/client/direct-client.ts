@@ -4,6 +4,8 @@ import {
   OcrTranslatePipeline,
   planRecognitionUnits,
   type CorePreCroppedOcrInputLoader,
+  type CoreOcrPreprocessLoader,
+  type CoreOcrRescueDiagnostic,
   type CoreOcrTileFailure,
   type RecognitionPlan,
 } from "@umt/core";
@@ -33,6 +35,7 @@ import { dataUrlToBytes, parseStaticFields, sha256Hex } from "./direct-image-uti
 import { toOverlayRegion } from "./direct-overlay-region.js";
 import type { TranslatorClient } from "./translator-client.js";
 import { cropRecognitionTiles, type RecognitionTileCropper } from "../capture/recognition-tile-cropper.js";
+import { createBrowserOcrPreprocessLoader } from "../capture/browser-ocr-preprocess.js";
 
 type FetchLike = typeof fetch;
 const TRANSLATION_STYLE_VERSION = "manga-v2";
@@ -46,6 +49,7 @@ interface DirectClientSettings extends ExtensionSettings {
   __testOcrCache?: DirectOcrCache;
   __testManualOverrideStorage?: ManualOverrideStorage;
   __testRecognitionTileCropper?: RecognitionTileCropper;
+  __testOcrPreprocessLoader?: CoreOcrPreprocessLoader;
 }
 
 interface DirectRecognitionDecision {
@@ -61,6 +65,7 @@ export class DirectClient implements TranslatorClient {
   private readonly ocrClient: GenericNetworkOcrClient;
   private readonly chapterMemory: ChapterTranslationMemory;
   private readonly recognitionTileCropper: RecognitionTileCropper;
+  private readonly ocrPreprocessLoader: CoreOcrPreprocessLoader;
   private readonly diagnostics: Array<Record<string, unknown>> = [];
 
   constructor(private readonly settings: DirectClientSettings) {
@@ -70,6 +75,7 @@ export class DirectClient implements TranslatorClient {
     this.ocrClient = this.createOcrClient();
     this.chapterMemory = new ChapterTranslationMemory();
     this.recognitionTileCropper = settings.__testRecognitionTileCropper ?? cropRecognitionTiles;
+    this.ocrPreprocessLoader = settings.__testOcrPreprocessLoader ?? createBrowserOcrPreprocessLoader();
   }
 
   async health(): Promise<boolean> {
@@ -205,7 +211,13 @@ export class DirectClient implements TranslatorClient {
         chapterContext,
         previousTranslations,
         termCandidates,
+        ...(recognitionPlan.units.length === 1 && recognitionPlan.units[0]
+          ? { recognitionUnit: recognitionPlan.units[0] }
+          : {}),
         ...(preCroppedOcrInputLoader ? { preCroppedOcrInputLoader } : {}),
+        maxOcrRescueCallsPerImage: this.settings.directOcr.maxOcrRescueCallsPerImage,
+        ocrPreprocessLoader: this.ocrPreprocessLoader,
+        onOcrRescueDiagnostic: (diagnostic) => this.recordOcrRescueDiagnostic(imageHash, diagnostic),
         onOcrTileError: (failure) => this.recordRecognitionTileFailure(imageHash, failure),
       });
       const regions = result.regions.map((region) => toOverlayRegion(region));
@@ -243,18 +255,19 @@ export class DirectClient implements TranslatorClient {
   }
 
   private createRecognitionPlan(task: SurfaceTask): DirectRecognitionDecision {
+    const reason = task.surfaceId.startsWith("manual:") ? "manual-selection" : "automatic";
     const fullImagePlan = () => planRecognitionUnits({
       surfaceId: task.surfaceId,
       naturalSize: task.naturalSize,
       maxTileHeight: task.naturalSize.height,
       overlapRatio: 0,
-      reason: "automatic",
+      reason,
       preprocessingVersion: "none-v1",
     });
     if (task.naturalSize.height <= DIRECT_OCR_TILE_HEIGHT_THRESHOLD) {
       return { plan: fullImagePlan(), requiredTileCount: 1 };
     }
-    const requiredPlan = this.planRecognitionUnits(task);
+    const requiredPlan = this.planRecognitionUnits(task, reason);
     const requiredTileCount = requiredPlan.units.length;
     const cap = Math.max(1, Math.trunc(this.settings.directOcr.maxOcrTilesPerImage));
     if (requiredTileCount > cap) {
@@ -267,13 +280,13 @@ export class DirectClient implements TranslatorClient {
     return { plan: requiredPlan, requiredTileCount };
   }
 
-  private planRecognitionUnits(task: SurfaceTask): RecognitionPlan {
+  private planRecognitionUnits(task: SurfaceTask, reason: "automatic" | "manual-selection"): RecognitionPlan {
     return planRecognitionUnits({
       surfaceId: task.surfaceId,
       naturalSize: task.naturalSize,
       maxTileHeight: DIRECT_OCR_MAX_TILE_HEIGHT,
       overlapRatio: DIRECT_OCR_TILE_OVERLAP_RATIO,
-      reason: "automatic",
+      reason,
       preprocessingVersion: DIRECT_OCR_TILE_PREPROCESSING_VERSION,
     });
   }
@@ -317,6 +330,25 @@ export class DirectClient implements TranslatorClient {
       tileCount: failure.tileCount,
       crop: { ...failure.recognitionUnit.crop },
       error: failure.error.message,
+    });
+    if (this.diagnostics.length > 100) this.diagnostics.length = 100;
+  }
+
+  private recordOcrRescueDiagnostic(imageHash: string, diagnostic: CoreOcrRescueDiagnostic): void {
+    this.diagnostics.unshift({
+      type: "ocr-quality-rescue",
+      imageId: anonymousImageId(imageHash),
+      reasons: [...diagnostic.reasons],
+      variant: diagnostic.variant,
+      usedBudget: diagnostic.usedBudget,
+      remainingBudget: diagnostic.remainingBudget,
+      originalScore: diagnostic.originalScore,
+      ...(diagnostic.rescueScore !== undefined ? { rescueScore: diagnostic.rescueScore } : {}),
+      selected: diagnostic.selected,
+      regionCount: diagnostic.regionCount,
+      characterCount: diagnostic.characterCount,
+      crop: { ...diagnostic.crop },
+      ...(diagnostic.errorKind ? { errorKind: diagnostic.errorKind } : {}),
     });
     if (this.diagnostics.length > 100) this.diagnostics.length = 100;
   }

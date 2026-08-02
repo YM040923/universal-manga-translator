@@ -1,5 +1,7 @@
 export * from "./api-key-pool.js";
 export * from "./generic-ocr.js";
+export * from "./ocr-preprocess.js";
+export * from "./ocr-quality.js";
 export * from "./openai-translator.js";
 export * from "./pipeline.js";
 export * from "./pipeline-stage.js";

@@ -101,6 +101,7 @@ test("loadSettings includes plugin-only direct API defaults", async () => {
     confidencePaths: ["score", "confidence"],
     maxAutoOcrPages: 80,
     maxOcrTilesPerImage: 6,
+    maxOcrRescueCallsPerImage: 1,
     stopAfterConsecutiveFailures: 4,
   });
   assert.deepEqual(settings.directTranslator, {
@@ -126,6 +127,7 @@ test("normalizeSettings accepts direct mode API configuration", () => {
       confidencePaths: [" score "],
       maxAutoOcrPages: 80,
       maxOcrTilesPerImage: 9,
+      maxOcrRescueCallsPerImage: 2,
       stopAfterConsecutiveFailures: 4,
     },
     directTranslator: {
@@ -148,6 +150,7 @@ test("normalizeSettings accepts direct mode API configuration", () => {
     confidencePaths: ["score"],
     maxAutoOcrPages: 80,
     maxOcrTilesPerImage: 9,
+    maxOcrRescueCallsPerImage: 2,
     stopAfterConsecutiveFailures: 4,
   });
   assert.deepEqual(settings.directTranslator, {
@@ -388,6 +391,12 @@ test("normalizeSettings clamps OCR cost protection fields", () => {
     normalizeSettings({ directOcr: { ...DEFAULT_SETTINGS.directOcr, maxOcrTilesPerImage: 0 } }).directOcr.maxOcrTilesPerImage,
     6,
   );
+  assert.equal(normalizeSettings({
+    directOcr: { ...DEFAULT_SETTINGS.directOcr, maxOcrRescueCallsPerImage: 99 },
+  }).directOcr.maxOcrRescueCallsPerImage, 3);
+  assert.equal(normalizeSettings({
+    directOcr: { ...DEFAULT_SETTINGS.directOcr, maxOcrRescueCallsPerImage: 0 },
+  }).directOcr.maxOcrRescueCallsPerImage, 0);
 });
 
 test("saveSettings persists the independent per-image OCR tile cap", async () => {
@@ -404,4 +413,19 @@ test("saveSettings persists the independent per-image OCR tile cap", async () =>
   const saved = storage.saved as { directOcr: { maxAutoOcrPages: number; maxOcrTilesPerImage: number } };
   assert.equal(saved.directOcr.maxAutoOcrPages, 25);
   assert.equal(saved.directOcr.maxOcrTilesPerImage, 8);
+});
+
+test("saveSettings persists the independent per-image OCR rescue budget", async () => {
+  const storage = fakeStorage();
+
+  const settings = await saveSettings({
+    directOcr: {
+      ...DEFAULT_SETTINGS.directOcr,
+      maxOcrRescueCallsPerImage: 2,
+    },
+  }, storage);
+
+  assert.equal(DEFAULT_SETTINGS.directOcr.maxOcrRescueCallsPerImage, 1);
+  assert.equal(settings.directOcr.maxOcrRescueCallsPerImage, 2);
+  assert.equal((storage.saved as { directOcr: { maxOcrRescueCallsPerImage: number } }).directOcr.maxOcrRescueCallsPerImage, 2);
 });
