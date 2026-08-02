@@ -40,6 +40,7 @@ export interface DirectOcrSettings {
   boxPaths: string[];
   confidencePaths: string[];
   maxAutoOcrPages: number;
+  maxOcrTilesPerImage: number;
   stopAfterConsecutiveFailures: number;
 }
 
@@ -138,6 +139,7 @@ export const DEFAULT_SETTINGS: ExtensionSettings = {
     boxPaths: ["location", "box", "bbox", "vertexes_location"],
     confidencePaths: ["score", "confidence"],
     maxAutoOcrPages: 80,
+    maxOcrTilesPerImage: 6,
     stopAfterConsecutiveFailures: 4,
   },
   directTranslator: {
@@ -197,6 +199,7 @@ function normalizeDirectOcr(value: unknown): DirectOcrSettings {
     boxPaths: normalizeStringList(raw.boxPaths, DEFAULT_SETTINGS.directOcr.boxPaths),
     confidencePaths: normalizeStringList(raw.confidencePaths, DEFAULT_SETTINGS.directOcr.confidencePaths),
     maxAutoOcrPages: normalizeInteger(raw.maxAutoOcrPages, 1, 120, DEFAULT_SETTINGS.directOcr.maxAutoOcrPages),
+    maxOcrTilesPerImage: normalizeInteger(raw.maxOcrTilesPerImage, 1, 12, DEFAULT_SETTINGS.directOcr.maxOcrTilesPerImage),
     stopAfterConsecutiveFailures: normalizeInteger(raw.stopAfterConsecutiveFailures, 1, 10, DEFAULT_SETTINGS.directOcr.stopAfterConsecutiveFailures),
   };
 }

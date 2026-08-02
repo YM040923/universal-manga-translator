@@ -376,6 +376,7 @@ const DIRECT_CONFIG_FIELDS = [
   "direct-ocr-confidence-paths",
   "direct-ocr-static-fields",
   "direct-ocr-max-auto-pages",
+  "direct-ocr-max-tiles-per-image",
   "direct-ocr-stop-after-failures",
   "glossary-text",
 ] as const;
@@ -405,9 +406,10 @@ function apiSettingsMarkup(settings: ExtensionSettings, selfTestSummary: string)
       <label><span>staticFields JSON</span><textarea data-field="direct-ocr-static-fields" rows="2">${escapeHtml(settings.directOcr.staticFieldsText)}</textarea></label>
     </details>
     <details class="advanced-config"><summary>OCR 成本保护</summary>
-      <small>自动翻译会按第一页优先；达到页数或连续失败上限后停止，避免无意义扣费。</small>
+      <small>自动翻译按第一页优先；自动页数、单图长图分块数和连续失败分别限额。</small>
       <div class="config-grid">
         <label><span>每次自动最多 OCR 页</span><input data-field="direct-ocr-max-auto-pages" type="number" min="1" max="120" value="${settings.directOcr.maxAutoOcrPages}"></label>
+        <label><span>单张长图最多 OCR 分块数</span><input data-field="direct-ocr-max-tiles-per-image" type="number" min="1" max="12" value="${settings.directOcr.maxOcrTilesPerImage}"></label>
         <label><span>连续失败后停止</span><input data-field="direct-ocr-stop-after-failures" type="number" min="1" max="10" value="${settings.directOcr.stopAfterConsecutiveFailures}"></label>
       </div>
     </details>

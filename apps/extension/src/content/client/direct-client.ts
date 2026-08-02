@@ -47,6 +47,12 @@ interface DirectClientSettings extends ExtensionSettings {
   __testRecognitionTileCropper?: RecognitionTileCropper;
 }
 
+interface DirectRecognitionDecision {
+  plan: RecognitionPlan;
+  requiredTileCount: number;
+  note?: string;
+}
+
 export class DirectClient implements TranslatorClient {
   private readonly fetchImpl: FetchLike;
   private readonly ocrCache: DirectOcrCache;
@@ -174,11 +180,12 @@ export class DirectClient implements TranslatorClient {
       const previousTranslations = this.chapterMemory.previousTranslationsFor(imageHash);
       const chapterContext = this.chapterMemory.chapterContextFor(imageHash);
       const termCandidates = this.chapterMemory.termCandidatesFor(imageHash);
-      const recognitionPlan = this.createRecognitionPlan(task);
+      const recognitionDecision = this.createRecognitionPlan(task);
+      const recognitionPlan = recognitionDecision.plan;
       const preCroppedOcrInputs = recognitionPlan.units.length > 1
         ? await this.createPreCroppedOcrInputs(task.imageData, recognitionPlan)
         : undefined;
-      this.recordRecognitionPlan(task, recognitionPlan);
+      this.recordRecognitionPlan(task, recognitionDecision);
       const pipeline = new OcrTranslatePipeline({
         profile: this.providerProfile(),
         ocr: this.ocrClient,
@@ -233,7 +240,7 @@ export class DirectClient implements TranslatorClient {
     });
   }
 
-  private createRecognitionPlan(task: SurfaceTask): RecognitionPlan {
+  private createRecognitionPlan(task: SurfaceTask): DirectRecognitionDecision {
     const fullImagePlan = () => planRecognitionUnits({
       surfaceId: task.surfaceId,
       naturalSize: task.naturalSize,
@@ -242,31 +249,27 @@ export class DirectClient implements TranslatorClient {
       reason: "automatic",
       preprocessingVersion: "none-v1",
     });
-    const maxOcrCalls = Math.max(1, Math.trunc(this.settings.directOcr.maxAutoOcrPages));
-    if (task.naturalSize.height <= DIRECT_OCR_TILE_HEIGHT_THRESHOLD || maxOcrCalls === 1) return fullImagePlan();
-
-    let minimumTileHeight = DIRECT_OCR_MAX_TILE_HEIGHT;
-    let maximumTileHeight = task.naturalSize.height;
-    let plan = this.planRecognitionUnits(task, minimumTileHeight);
-    if (plan.units.length <= maxOcrCalls) return plan;
-
-    while (minimumTileHeight < maximumTileHeight) {
-      const candidateHeight = Math.floor((minimumTileHeight + maximumTileHeight) / 2);
-      const candidate = this.planRecognitionUnits(task, candidateHeight);
-      if (candidate.units.length > maxOcrCalls) minimumTileHeight = candidateHeight + 1;
-      else {
-        plan = candidate;
-        maximumTileHeight = candidateHeight;
-      }
+    if (task.naturalSize.height <= DIRECT_OCR_TILE_HEIGHT_THRESHOLD) {
+      return { plan: fullImagePlan(), requiredTileCount: 1 };
     }
-    return plan.units.length <= maxOcrCalls ? plan : fullImagePlan();
+    const requiredPlan = this.planRecognitionUnits(task);
+    const requiredTileCount = requiredPlan.units.length;
+    const cap = Math.max(1, Math.trunc(this.settings.directOcr.maxOcrTilesPerImage));
+    if (requiredTileCount > cap) {
+      return {
+        plan: fullImagePlan(),
+        requiredTileCount,
+        note: `tiling skipped: required ${requiredTileCount} > cap ${cap}`,
+      };
+    }
+    return { plan: requiredPlan, requiredTileCount };
   }
 
-  private planRecognitionUnits(task: SurfaceTask, maxTileHeight: number): RecognitionPlan {
+  private planRecognitionUnits(task: SurfaceTask): RecognitionPlan {
     return planRecognitionUnits({
       surfaceId: task.surfaceId,
       naturalSize: task.naturalSize,
-      maxTileHeight,
+      maxTileHeight: DIRECT_OCR_MAX_TILE_HEIGHT,
       overlapRatio: DIRECT_OCR_TILE_OVERLAP_RATIO,
       reason: "automatic",
       preprocessingVersion: DIRECT_OCR_TILE_PREPROCESSING_VERSION,
@@ -283,14 +286,17 @@ export class DirectClient implements TranslatorClient {
     }));
   }
 
-  private recordRecognitionPlan(task: SurfaceTask, plan: RecognitionPlan): void {
+  private recordRecognitionPlan(task: SurfaceTask, decision: DirectRecognitionDecision): void {
+    const { plan } = decision;
     this.diagnostics.unshift({
       type: "recognition-tiling",
       surfaceId: task.surfaceId,
       naturalSize: { ...task.naturalSize },
       tileCount: plan.units.length,
+      requiredTileCount: decision.requiredTileCount,
       overlapPx: plan.overlapPx,
       crops: plan.units.map((unit) => ({ ...unit.crop })),
+      ...(decision.note ? { note: decision.note } : {}),
     });
     if (this.diagnostics.length > 100) this.diagnostics.length = 100;
   }

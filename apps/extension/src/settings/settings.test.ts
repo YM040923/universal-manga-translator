@@ -100,6 +100,7 @@ test("loadSettings includes plugin-only direct API defaults", async () => {
     boxPaths: ["location", "box", "bbox", "vertexes_location"],
     confidencePaths: ["score", "confidence"],
     maxAutoOcrPages: 80,
+    maxOcrTilesPerImage: 6,
     stopAfterConsecutiveFailures: 4,
   });
   assert.deepEqual(settings.directTranslator, {
@@ -124,6 +125,7 @@ test("normalizeSettings accepts direct mode API configuration", () => {
       boxPaths: [" box "],
       confidencePaths: [" score "],
       maxAutoOcrPages: 80,
+      maxOcrTilesPerImage: 9,
       stopAfterConsecutiveFailures: 4,
     },
     directTranslator: {
@@ -145,6 +147,7 @@ test("normalizeSettings accepts direct mode API configuration", () => {
     boxPaths: ["box"],
     confidencePaths: ["score"],
     maxAutoOcrPages: 80,
+    maxOcrTilesPerImage: 9,
     stopAfterConsecutiveFailures: 4,
   });
   assert.deepEqual(settings.directTranslator, {
@@ -372,11 +375,33 @@ test("normalizeSettings clamps OCR cost protection fields", () => {
     directOcr: {
       ...DEFAULT_SETTINGS.directOcr,
       maxAutoOcrPages: 999,
+      maxOcrTilesPerImage: 999,
       stopAfterConsecutiveFailures: 99,
-    } as never,
+    },
   });
 
   assert.equal(settings.directOcr.maxAutoOcrPages, 120);
+  assert.equal(settings.directOcr.maxOcrTilesPerImage, 12);
   assert.equal(settings.directOcr.stopAfterConsecutiveFailures, 10);
   assert.equal(normalizeSettings({ directOcr: { ...DEFAULT_SETTINGS.directOcr, maxAutoOcrPages: 0, stopAfterConsecutiveFailures: 0 } as never }).directOcr.maxAutoOcrPages, DEFAULT_SETTINGS.directOcr.maxAutoOcrPages);
+  assert.equal(
+    normalizeSettings({ directOcr: { ...DEFAULT_SETTINGS.directOcr, maxOcrTilesPerImage: 0 } }).directOcr.maxOcrTilesPerImage,
+    6,
+  );
+});
+
+test("saveSettings persists the independent per-image OCR tile cap", async () => {
+  const storage = fakeStorage();
+
+  await saveSettings({
+    directOcr: {
+      ...DEFAULT_SETTINGS.directOcr,
+      maxAutoOcrPages: 25,
+      maxOcrTilesPerImage: 8,
+    },
+  }, storage);
+
+  const saved = storage.saved as { directOcr: { maxAutoOcrPages: number; maxOcrTilesPerImage: number } };
+  assert.equal(saved.directOcr.maxAutoOcrPages, 25);
+  assert.equal(saved.directOcr.maxOcrTilesPerImage, 8);
 });

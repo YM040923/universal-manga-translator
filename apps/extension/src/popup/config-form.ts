@@ -18,6 +18,7 @@ export function readDirectConfigFromDom(root: HTMLElement, settings: ExtensionSe
       confidencePaths: splitLines(value("direct-ocr-confidence-paths")),
       staticFieldsText: value("direct-ocr-static-fields"),
       maxAutoOcrPages: Number(value("direct-ocr-max-auto-pages")),
+      maxOcrTilesPerImage: Number(value("direct-ocr-max-tiles-per-image")),
       stopAfterConsecutiveFailures: Number(value("direct-ocr-stop-after-failures")),
     },
     directTranslator: {

@@ -1,7 +1,8 @@
 ﻿import test from "node:test";
 import assert from "node:assert/strict";
+import { planRecognitionUnits } from "@umt/core";
 import type { SurfaceTask } from "@umt/shared/types";
-import { DirectClient } from "./direct-client.js";
+import { DIRECT_OCR_MAX_TILE_HEIGHT, DIRECT_OCR_TILE_OVERLAP_RATIO, DirectClient } from "./direct-client.js";
 import type { ExtensionSettings } from "../../settings/settings.js";
 import { DEFAULT_SETTINGS } from "../../settings/settings.js";
 import { DirectOcrCache } from "../cache/direct-ocr-cache.js";
@@ -48,13 +49,13 @@ function settingsWithCache(fetchImpl: typeof fetch, cache: DirectOcrCache): Exte
   return { ...settings(fetchImpl), __testOcrCache: cache } as ExtensionSettings & { __testFetch: typeof fetch; __testOcrCache: DirectOcrCache };
 }
 
-function settingsWithTileCropper(fetchImpl: typeof fetch, cropper: RecognitionTileCropper, maxOcrCalls = DEFAULT_SETTINGS.directOcr.maxAutoOcrPages): ExtensionSettings {
+function settingsWithTileCropper(fetchImpl: typeof fetch, cropper: RecognitionTileCropper, maxOcrTilesPerImage = DEFAULT_SETTINGS.directOcr.maxOcrTilesPerImage, maxAutoOcrPages = DEFAULT_SETTINGS.directOcr.maxAutoOcrPages): ExtensionSettings {
   const base = settings(fetchImpl);
   return {
     ...base,
-    directOcr: { ...base.directOcr, maxAutoOcrPages: maxOcrCalls },
+    directOcr: { ...base.directOcr, maxAutoOcrPages, maxOcrTilesPerImage },
     __testRecognitionTileCropper: cropper,
-  } as ExtensionSettings & { __testFetch: typeof fetch; __testRecognitionTileCropper: RecognitionTileCropper };
+  } as ExtensionSettings;
 }
 
 test("DirectClient submits imageData through OCR and translator", async () => {
@@ -526,4 +527,64 @@ test("DirectClient keeps a tall image whole when the OCR call cap is one", async
 
   assert.equal(response.ok, true);
   assert.equal(ocrCalls, 1);
+});
+
+test("DirectClient uses fixed 4096px tiles only when the independent per-image cap can cover the full image", async () => {
+  const naturalSize = { width: 1000, height: 16000 };
+  const requiredPlan = planRecognitionUnits({
+    surfaceId: "required",
+    naturalSize,
+    maxTileHeight: DIRECT_OCR_MAX_TILE_HEIGHT,
+    overlapRatio: DIRECT_OCR_TILE_OVERLAP_RATIO,
+    reason: "automatic",
+  });
+  const required = requiredPlan.units.length;
+
+  for (const cap of [2, 3, 4, 5, 6]) {
+    let ocrCalls = 0;
+    let cropperCalls = 0;
+    let croppedUnits = requiredPlan.units.slice(0, 0);
+    const cropper: RecognitionTileCropper = async (_imageData, units) => {
+      cropperCalls += 1;
+      croppedUnits = units;
+      return units.map((unit, index) => ({
+        unit,
+        imageData: `data:image/png;base64,${index % 2 === 0 ? "AQ==" : "Ag=="}`,
+        imageBytes: new Uint8Array([index + 1]),
+        mimeType: "image/png",
+      }));
+    };
+    const fetchImpl = (async (url) => {
+      if (String(url).includes("ocr")) {
+        ocrCalls += 1;
+        return new Response(JSON.stringify({
+          words_result: [{ words: `CAP ${cap}`, location: { left: 10, top: 20, width: 80, height: 20 } }],
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      return new Response(JSON.stringify({ choices: [{ message: { content: "" } }] }), { status: 200, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+    const client = new DirectClient(settingsWithTileCropper(fetchImpl, cropper, cap, 1));
+
+    const response = await client.submit(task({ naturalSize, renderSize: naturalSize }));
+
+    assert.equal(response.ok, true, `cap=${cap}`);
+    const diagnostics = await client.recentDiagnostics();
+    assert.equal(diagnostics.ok, true);
+    const record = diagnostics.ok ? diagnostics.records[0] : undefined;
+    if (required > cap) {
+      assert.equal(ocrCalls, 1, `cap=${cap} must fall back to one whole-image OCR`);
+      assert.equal(cropperCalls, 0, `cap=${cap} must not crop a partial page`);
+      assert.equal(record?.tileCount, 1);
+      assert.equal(record?.note, `tiling skipped: required ${required} > cap ${cap}`);
+    } else {
+      assert.equal(ocrCalls, required, `cap=${cap} must use every required tile`);
+      assert.equal(cropperCalls, 1);
+      assert.equal(croppedUnits.length, required);
+      assert.equal(croppedUnits.every((unit) => unit.crop.height <= DIRECT_OCR_MAX_TILE_HEIGHT), true);
+      const last = croppedUnits.at(-1)!;
+      assert.equal(last.crop.y + last.crop.height, naturalSize.height);
+      assert.equal(record?.tileCount, required);
+      assert.equal(record?.note, undefined);
+    }
+  }
 });
