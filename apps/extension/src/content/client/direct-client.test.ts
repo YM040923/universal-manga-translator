@@ -67,6 +67,23 @@ function settingsWithTileCropper(fetchImpl: typeof fetch, cropper: RecognitionTi
   } as ExtensionSettings;
 }
 
+function translatorResponse(init: RequestInit | undefined, translatedText: string): Response {
+  const body = JSON.parse(String(init?.body));
+  const prompt = String(body.messages[0].content);
+  const payload = JSON.parse(prompt.slice(prompt.lastIndexOf("\n") + 1)) as {
+    items: Array<{ id: string }>;
+  };
+  return new Response(JSON.stringify({
+    choices: [{
+      message: {
+        content: JSON.stringify({
+          items: payload.items.map((item) => ({ id: item.id, translatedText })),
+        }),
+      },
+    }],
+  }), { status: 200, headers: { "content-type": "application/json" } });
+}
+
 test("DirectClient submits imageData through OCR and translator", async () => {
   const calls: string[] = [];
   const fetchImpl = (async (url, init) => {
@@ -78,7 +95,7 @@ test("DirectClient submits imageData through OCR and translator", async () => {
     }
     const auth = new Headers(init?.headers).get("authorization");
     assert.equal(auth, "Bearer llm-key");
-    return new Response(JSON.stringify({ choices: [{ message: { content: '{"items":[{"id":"network-ocr-1","translatedText":"你好"}]}' } }] }), { status: 200, headers: { "content-type": "application/json" } });
+    return translatorResponse(init, "你好");
   }) as typeof fetch;
   const client = new DirectClient(settings(fetchImpl));
 
@@ -250,21 +267,22 @@ test("DirectClient persists manual overrides and applies them to later cached re
   let translatorCalls = 0;
   const storage = fakeStorage();
   const cache = new DirectOcrCache(storage);
-  const fetchImpl = (async (url) => {
+  const fetchImpl = (async (url, init) => {
     if (String(url).includes("ocr")) {
       ocrCalls += 1;
       return new Response(JSON.stringify({ words_result: [{ words: "HELLO", location: { left: 10, top: 20, width: 60, height: 20 } }] }), { status: 200, headers: { "content-type": "application/json" } });
     }
     translatorCalls += 1;
-    return new Response(JSON.stringify({ choices: [{ message: { content: '{"items":[{"id":"network-ocr-1","translatedText":"原始翻译"}]}' } }] }), { status: 200, headers: { "content-type": "application/json" } });
+    return translatorResponse(init, "原始翻译");
   }) as typeof fetch;
 
   const first = new DirectClient({ ...settingsWithCache(fetchImpl, cache), __testManualOverrideStorage: storage } as ExtensionSettings & { __testFetch: typeof fetch; __testOcrCache: DirectOcrCache; __testManualOverrideStorage: ReturnType<typeof fakeStorage> });
   const firstResponse = await first.submit(task());
   assert.equal(firstResponse.ok && firstResponse.result?.regions[0]?.translatedText, "原始翻译");
   const imageHash = firstResponse.ok ? firstResponse.result!.imageHash : "";
+  const regionId = firstResponse.ok ? firstResponse.result!.regions[0]!.id : "";
 
-  await first.saveManualOverride({ imageHash, targetLanguage: "zh-CN", regionId: "network-ocr-1", translatedText: "人工修正" });
+  await first.saveManualOverride({ imageHash, targetLanguage: "zh-CN", regionId, translatedText: "人工修正" });
 
   const second = new DirectClient({ ...settingsWithCache(fetchImpl, cache), __testManualOverrideStorage: storage } as ExtensionSettings & { __testFetch: typeof fetch; __testOcrCache: DirectOcrCache; __testManualOverrideStorage: ReturnType<typeof fakeStorage> });
   const secondResponse = await second.submit(task());
@@ -375,7 +393,7 @@ test("DirectClient carries previous chapter translations into later page prompts
     const body = JSON.parse(String(init?.body));
     prompts.push(body.messages[0].content);
     const translatedText = prompts.length === 1 ? "克拉克来了" : "克拉克回来了";
-    return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ items: [{ id: "network-ocr-1", translatedText }] }) } }] }), { status: 200, headers: { "content-type": "application/json" } });
+    return translatorResponse(init, translatedText);
   }) as typeof fetch;
   const client = new DirectClient(settingsWithCache(fetchImpl, cache));
 
@@ -396,7 +414,7 @@ test("DirectClient sends previous page translation when retranslating", async ()
     const body = JSON.parse(String(init?.body));
     prompts.push(body.messages[0].content);
     const translatedText = prompts.length === 1 ? "我会回来的" : "我还会回来";
-    return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ items: [{ id: "network-ocr-1", translatedText }] }) } }] }), { status: 200, headers: { "content-type": "application/json" } });
+    return translatorResponse(init, translatedText);
   }) as typeof fetch;
   const client = new DirectClient(settingsWithCache(fetchImpl, cache));
 
@@ -465,13 +483,18 @@ test("DirectClient uses saved manual override as previous translation guidance o
     const body = JSON.parse(String(init?.body));
     prompts.push(body.messages[0].content);
     const translatedText = prompts.length === 1 ? "我将返回" : "我会回来的";
-    return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ items: [{ id: "network-ocr-1", translatedText }] }) } }] }), { status: 200, headers: { "content-type": "application/json" } });
+    return translatorResponse(init, translatedText);
   }) as typeof fetch;
   const client = new DirectClient(settingsWithCache(fetchImpl, cache));
 
   const first = await client.submit(task());
   assert.equal(first.ok, true);
-  await client.saveManualOverride({ imageHash: first.ok ? first.result!.imageHash : "", targetLanguage: "zh-CN", regionId: "network-ocr-1", translatedText: "我一定会回来的" });
+  await client.saveManualOverride({
+    imageHash: first.ok ? first.result!.imageHash : "",
+    targetLanguage: "zh-CN",
+    regionId: first.ok ? first.result!.regions[0]!.id : "",
+    translatedText: "我一定会回来的",
+  });
   await client.retranslate(task());
 
   assert.match(prompts[1] ?? "", /Previous translations/i);
@@ -488,13 +511,18 @@ test("DirectClient excludes deleted manual overrides from retranslate guidance",
     }
     const body = JSON.parse(String(init?.body));
     prompts.push(body.messages[0].content);
-    return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ items: [{ id: "network-ocr-1", translatedText: "不要翻译这个" }] }) } }] }), { status: 200, headers: { "content-type": "application/json" } });
+    return translatorResponse(init, "不要翻译这个");
   }) as typeof fetch;
   const client = new DirectClient(settingsWithCache(fetchImpl, cache));
 
   const first = await client.submit(task());
   assert.equal(first.ok, true);
-  await client.saveManualOverride({ imageHash: first.ok ? first.result!.imageHash : "", targetLanguage: "zh-CN", regionId: "network-ocr-1", translatedText: "" });
+  await client.saveManualOverride({
+    imageHash: first.ok ? first.result!.imageHash : "",
+    targetLanguage: "zh-CN",
+    regionId: first.ok ? first.result!.regions[0]!.id : "",
+    translatedText: "",
+  });
   await client.retranslate(task());
 
   assert.doesNotMatch(prompts[1] ?? "", /Previous translations/);

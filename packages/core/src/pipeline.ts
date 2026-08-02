@@ -450,12 +450,32 @@ function remapBubbleEvidenceToParent(
     touchesBoundary: evidence.touchesBoundary,
   };
   if (evidence.manualGroupId) remapped.manualGroupId = `${unit.id}:${evidence.manualGroupId}`;
-  if (evidence.visualGroupId) remapped.visualGroupId = `${unit.id}:${evidence.visualGroupId}`;
   if (evidence.shape) remapped.shape = evidence.shape;
+  let parentComponentBox: Rect | undefined;
   if (evidence.componentBox) {
-    remapped.componentBox = remapRectToParent(evidence.componentBox, unit, parentWidth, parentHeight);
+    parentComponentBox = remapRectToParent(evidence.componentBox, unit, parentWidth, parentHeight);
+    remapped.componentBox = parentComponentBox;
+  }
+  if (evidence.visualGroupId) {
+    remapped.visualGroupId = parentComponentBox
+      ? canonicalVisualGroupKey(evidence.shape ?? "free-text", parentComponentBox)
+      : evidence.visualGroupId;
   }
   return remapped;
+}
+
+function canonicalVisualGroupKey(
+  shape: NonNullable<BubbleOwnershipEvidence["shape"]>,
+  box: Rect,
+): string {
+  const quantum = 4;
+  const edges = [
+    box.x,
+    box.y,
+    box.x + box.width,
+    box.y + box.height,
+  ].map((value) => Math.round(value / quantum));
+  return `visual:${shape}:${edges.join(":")}`;
 }
 
 function remapRectToParent(

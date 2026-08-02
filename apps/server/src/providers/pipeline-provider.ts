@@ -1,4 +1,3 @@
-import { reconstructBubbles } from "@umt/core";
 import type { Rect, TextRegion } from "@umt/shared";
 import type { OcrCacheStore } from "../cache/ocr-cache.js";
 import type { ApiKeyPoolStatus } from "./api-key-pool.js";
@@ -111,29 +110,52 @@ export function buildOcrCacheKey(profile: string, input: ProviderInput): string 
 }
 
 export function groupOcrRegionsIntoTextBlocks(regions: OcrRegion[]): OcrRegion[] {
-  const reconstructable = regions.filter(isReconstructableRegion);
-  const reconstructed = reconstructBubbles(reconstructable).map((bubble): OcrRegion => ({
-    id: bubble.id,
-    box: bubble.box,
-    sourceText: bubble.sourceText,
-    confidence: bubble.confidence,
-    orientation: bubble.orientation,
-    kind: bubble.kind,
-  }));
-  const unsupported = regions.filter((region) => !isReconstructableRegion(region));
-  return [...reconstructed, ...unsupported]
+  const candidates = dedupeOcrRegions(regions)
     .filter((region) => region.sourceText.trim().length > 0 && region.box.width > 1 && region.box.height > 1)
     .sort(compareOcrReadingOrder);
+  const groups: OcrRegion[][] = [];
+  for (const region of candidates) {
+    const lastGroup = groups.at(-1);
+    if (lastGroup && shouldJoinGroup(lastGroup, region)) lastGroup.push(region);
+    else groups.push([region]);
+  }
+  return groups.map((group) => group.length === 1 ? group[0]! : mergeGroup(group));
 }
 
-function isReconstructableRegion(
-  region: OcrRegion,
-): region is OcrRegion & {
-  orientation: "horizontal" | "vertical";
-  kind: "dialogue" | "narration" | "sfx";
-} {
-  return (region.orientation === "horizontal" || region.orientation === "vertical")
-    && (region.kind === "dialogue" || region.kind === "narration" || region.kind === "sfx");
+function shouldJoinGroup(group: OcrRegion[], next: OcrRegion): boolean {
+  const previous = group.at(-1)!;
+  if (previous.orientation !== next.orientation) return false;
+  if (previous.kind !== next.kind) return false;
+  if (previous.kind === "sfx" || next.kind === "sfx") return false;
+  if (next.orientation === "vertical") return false;
+  const union = unionRect(group.map((region) => region.box));
+  const averageHeight = (previous.box.height + next.box.height) / 2;
+  if (verticalOverlap(union, next.box) >= Math.min(union.height, next.box.height) * 0.55) {
+    const horizontalGap = Math.max(0, next.box.x - (union.x + union.width));
+    const maxSameLineGap = Math.max(80, averageHeight * 3.5);
+    if (next.kind === "narration" && horizontalGap <= maxSameLineGap) return true;
+    if (next.kind === "dialogue" && horizontalGap <= Math.max(60, averageHeight * 2.4)) return true;
+  }
+  const previousBottom = previous.box.y + previous.box.height;
+  const verticalGap = next.box.y - previousBottom;
+  const groupCenterX = union.x + union.width / 2;
+  const nextCenterX = next.box.x + next.box.width / 2;
+  const centerDistance = Math.abs(groupCenterX - nextCenterX);
+  const overlap = horizontalOverlap(union, next.box);
+  const merged = unionRect([...group.map((region) => region.box), next.box]);
+  const mergedHeight = merged.height;
+  const mergedWidth = merged.width;
+  const looksLikeSameLargeBubble =
+    next.kind === "dialogue"
+    && verticalGap >= -averageHeight * 0.45
+    && verticalGap <= Math.max(72, averageHeight * 1.75)
+    && centerDistance <= Math.max(mergedWidth * 0.48, averageHeight * 3.2)
+    && mergedHeight <= Math.max(360, averageHeight * 6.2)
+    && mergedWidth <= Math.max(900, averageHeight * 12);
+  if (looksLikeSameLargeBubble) return true;
+  if (verticalGap < -averageHeight * 0.35 || verticalGap > Math.max(28, averageHeight * 0.9)) return false;
+  const maxReasonableDistance = Math.max(union.width, next.box.width) * 0.45;
+  return centerDistance <= maxReasonableDistance || overlap >= Math.min(union.width, next.box.width) * 0.25;
 }
 
 function classifyRegionKind(region: OcrRegion, imageWidth: number, imageHeight: number): OcrRegion {
@@ -155,9 +177,63 @@ function looksLikeActionLettering(region: OcrRegion, imageWidth: number, imageHe
   return largeActionBox && uppercaseRatio >= 0.78 && lines.length <= 4 && averageLineLength <= 9;
 }
 
+function mergeGroup(group: OcrRegion[]): OcrRegion {
+  const union = unionRect(group.map((region) => region.box));
+  const padX = Math.max(8, Math.round(union.width * 0.03));
+  const padY = Math.max(8, Math.round(union.height * 0.05));
+  return {
+    id: `block-${group[0]!.id}`,
+    box: { x: union.x - padX, y: union.y - padY, width: union.width + padX * 2, height: union.height + padY * 2 },
+    sourceText: group.map((region) => region.sourceText.trim()).join("\n"),
+    confidence: group.reduce((sum, region) => sum + region.confidence, 0) / group.length,
+    orientation: group[0]!.orientation,
+    kind: group[0]!.kind,
+  };
+}
+
+function unionRect(rects: Rect[]): Rect {
+  const left = Math.min(...rects.map((rect) => rect.x));
+  const top = Math.min(...rects.map((rect) => rect.y));
+  const right = Math.max(...rects.map((rect) => rect.x + rect.width));
+  const bottom = Math.max(...rects.map((rect) => rect.y + rect.height));
+  return { x: left, y: top, width: right - left, height: bottom - top };
+}
+
+function horizontalOverlap(a: Rect, b: Rect): number {
+  return Math.max(0, Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x));
+}
+
+function verticalOverlap(a: Rect, b: Rect): number {
+  return Math.max(0, Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y));
+}
+
+function dedupeOcrRegions(regions: OcrRegion[]): OcrRegion[] {
+  const sorted = [...regions].sort((a, b) => b.confidence - a.confidence);
+  const kept: OcrRegion[] = [];
+  for (const region of sorted) {
+    const duplicate = kept.some((existing) => normalizeText(existing.sourceText) === normalizeText(region.sourceText) && rectIoU(existing.box, region.box) > 0.65);
+    if (!duplicate) kept.push(region);
+  }
+  return kept.sort(compareOcrReadingOrder);
+}
+
 function compareOcrReadingOrder(a: OcrRegion, b: OcrRegion): number {
   const sameHorizontalBand = Math.abs(a.box.y - b.box.y) <= Math.max(a.box.height, b.box.height) * 0.35;
   if (sameHorizontalBand) return a.box.x - b.box.x;
   return a.box.y - b.box.y || a.box.x - b.box.x;
+}
+
+function normalizeText(text: string): string {
+  return text.replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+function rectIoU(a: Rect, b: Rect): number {
+  const left = Math.max(a.x, b.x);
+  const top = Math.max(a.y, b.y);
+  const right = Math.min(a.x + a.width, b.x + b.width);
+  const bottom = Math.min(a.y + a.height, b.y + b.height);
+  const intersection = Math.max(0, right - left) * Math.max(0, bottom - top);
+  const union = a.width * a.height + b.width * b.height - intersection;
+  return union > 0 ? intersection / union : 0;
 }
 

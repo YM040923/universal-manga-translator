@@ -53,6 +53,8 @@ test("content main does not enable heuristic paid rescue for automatic empty OCR
   assert.doesNotMatch(main, /new\s+DirectClient\(current\s*,/);
   assert.match(directClient, /Bubble extraction is observation-driven only/);
   assert.match(directClient, /Do not infer likelyTextEvidence from raw pixels/);
+  assert.match(directClient, /Bubble-aware reconstruction is limited to the direct extension path/);
+  assert.match(directClient, /Legacy server translation remains outside this reconstruction path/);
 });
 
 test("manifest uses dynamic injection and does not expose an options page", () => {

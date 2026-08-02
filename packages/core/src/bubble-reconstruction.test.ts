@@ -121,6 +121,17 @@ test("reconstructBubbles uses an independent conservative rule for vertical colu
   assert.deepEqual(bubbles[0]?.observationIds, ["right-column", "left-column"]);
 });
 
+test("reconstructBubbles never geometrically merges vertical text without visual ownership", () => {
+  const observations = [
+    region("vertical-a", "A", 160, 80, 24, 120, "vertical"),
+    region("vertical-b", "B", 132, 82, 24, 118, "vertical"),
+  ];
+
+  const bubbles = reconstructBubbles(observations);
+
+  assert.equal(bubbles.length, 2);
+});
+
 test("reconstructBubbles leaves borderless nearby text separate without strong fallback geometry", () => {
   const observations = [
     region("borderless-a", "First", 40, 50, 130, 28),
@@ -131,6 +142,22 @@ test("reconstructBubbles leaves borderless nearby text separate without strong f
 
   assert.equal(bubbles.length, 2);
   assert.deepEqual(bubbles.map((bubble) => bubble.shape), ["free-text", "free-text"]);
+});
+
+test("reconstructBubbles derives the same deterministic id when OCR observation ids change", () => {
+  const first = reconstructBubbles([
+    region("provider-a-1", "Same words", 80, 60, 120, 28),
+  ], [
+    visualEvidence("provider-a-1", "raw-a", { x: 50, y: 30, width: 180, height: 100 }, "ellipse"),
+  ]);
+  const second = reconstructBubbles([
+    region("provider-b-99", " Same   words ", 80, 60, 120, 28),
+  ], [
+    visualEvidence("provider-b-99", "raw-b", { x: 51, y: 31, width: 179, height: 101 }, "ellipse"),
+  ]);
+
+  assert.equal(first[0]?.id, second[0]?.id);
+  assert.match(first[0]?.id ?? "", /^bubble-[a-f0-9]{8}$/);
 });
 
 test("reconstructBubbles accepts shared OcrObservation inputs and manual ownership wins over visual ownership", () => {

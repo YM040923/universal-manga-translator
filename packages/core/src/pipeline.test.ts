@@ -32,7 +32,7 @@ test("groupOcrRegionsIntoTextBlocks dedupes overlapping OCR fragments", () => {
   ]);
 
   assert.equal(blocks.length, 1);
-  assert.equal(blocks[0]?.id, "high");
+  assert.match(blocks[0]?.id ?? "", /^bubble-[a-f0-9]{8}$/);
 });
 
 test("OcrTranslatePipeline does not cache empty OCR results", async () => {
@@ -58,7 +58,7 @@ test("OcrTranslatePipeline can reuse cached OCR regions during retranslate", asy
   const pipeline = new OcrTranslatePipeline({
     profile: "network-ocr:image+openai-compatible:gpt",
     ocr: { recognize: async () => { ocrCalls += 1; return []; } },
-    translator: { translate: async (_items: TextTranslationItem[], _target: string, _source: string, options?: TextTranslationOptions) => [{ id: "r1", translatedText: options?.retranslate ? "重新翻译" : "你好" }] },
+    translator: { translate: async (items: TextTranslationItem[], _target: string, _source: string, options?: TextTranslationOptions) => items.map((item) => ({ id: item.id, translatedText: options?.retranslate ? "\u91cd\u65b0\u7ffb\u8bd1" : "\u4f60\u597d" })) },
     ocrCache: cache,
   });
 

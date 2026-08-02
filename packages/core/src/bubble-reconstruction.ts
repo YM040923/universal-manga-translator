@@ -37,6 +37,7 @@ type BubbleObservation = OcrObservation | GenericOcrRegion;
 interface ObservationEntry {
   observation: BubbleObservation;
   evidence: BubbleOwnershipEvidence | undefined;
+  observationIds: string[];
 }
 
 interface ObservationGroup {
@@ -51,10 +52,17 @@ export function reconstructBubbles(
   observations: readonly BubbleObservation[],
   ownershipEvidence: readonly BubbleOwnershipEvidence[] = [],
 ): BubbleCandidate[] {
-  const evidenceByObservationId = new Map(ownershipEvidence.map((item) => [item.observationId, item]));
-  const candidates = dedupeObservations(observations)
+  const evidenceByObservationId = groupEvidenceByObservationId(ownershipEvidence);
+  const candidates = dedupeObservationEntries(observations
     .filter(isUsableObservation)
-    .map((observation) => ({ observation, evidence: evidenceByObservationId.get(observation.id) }))
+    .map((observation) => ({
+      observation,
+      evidence: selectPreferredEvidence(
+        evidenceByObservationId.get(observation.id) ?? [],
+        observation.id,
+      ),
+      observationIds: [observation.id],
+    })))
     .sort(compareReadingOrder);
   const groups: ObservationGroup[] = [];
 
@@ -103,9 +111,8 @@ function canFallbackJoin(group: ObservationGroup, next: ObservationEntry): boole
   if (next.evidence?.manualGroupId || isHighConfidenceVisualEvidence(next.evidence)) return false;
   if (next.evidence?.shape === "free-text" || group.entries.some((entry) => entry.evidence?.shape === "free-text")) return false;
   if (group.entries.some((entry) => hasConflictingOwnership(entry.evidence, next.evidence))) return false;
-  return next.observation.orientation === "vertical"
-    ? canJoinVertical(group.entries, next)
-    : canJoinHorizontal(group.entries, next);
+  if (next.observation.orientation === "vertical") return false;
+  return canJoinHorizontal(group.entries, next);
 }
 
 function canJoinHorizontal(group: ObservationEntry[], next: ObservationEntry): boolean {
@@ -131,20 +138,6 @@ function canJoinHorizontal(group: ObservationEntry[], next: ObservationEntry): b
     averageHeight * 1.6,
   );
   return strongHorizontalOverlap || centersClose;
-}
-
-function canJoinVertical(group: ObservationEntry[], next: ObservationEntry): boolean {
-  const union = unionRect(group.map((entry) => entry.observation.box));
-  const previous = group.at(-1)!.observation.box;
-  const box = next.observation.box;
-  const averageWidth = (previous.width + box.width) / 2;
-  const horizontalGap = gapBetween(union.x, union.width, box.x, box.width);
-  if (horizontalGap > Math.max(8, averageWidth * 0.55)) return false;
-  const overlapY = overlapLength(union.y, union.height, box.y, box.height);
-  const minimumHeight = Math.min(union.height, box.height);
-  const centerDistance = Math.abs(centerY(union) - centerY(box));
-  return overlapY >= minimumHeight * 0.65
-    || centerDistance <= Math.max(union.height, box.height) * 0.22;
 }
 
 function hasConflictingOwnership(
@@ -189,9 +182,16 @@ function toBubbleCandidate(group: ObservationGroup): BubbleCandidate {
     touchesBoundary: evidence.some((item) => item.touchesBoundary),
     ...(group.groupId ? { groupId: group.groupId } : {}),
   };
-  const ids = observations.map((observation) => observation.id);
+  const ids = ordered.flatMap((entry) => entry.observationIds);
+  const sourceText = observations.map((observation) => observation.sourceText.trim()).join("\n");
   return {
-    id: observations.length === 1 ? observations[0]!.id : `block-${observations[0]!.id}`,
+    id: createStableBubbleId(
+      selectedShape,
+      box,
+      sourceText,
+      observations[0]!.orientation,
+      observations[0]!.kind,
+    ),
     box,
     shape: selectedShape,
     observationIds: ids,
@@ -199,7 +199,7 @@ function toBubbleCandidate(group: ObservationGroup): BubbleCandidate {
       ? clampConfidence(observationConfidence * 0.7 + evidenceConfidence * 0.3)
       : observationConfidence,
     evidence: evidenceSummary,
-    sourceText: observations.map((observation) => observation.sourceText.trim()).join("\n"),
+    sourceText,
     orientation: observations[0]!.orientation,
     kind: observations[0]!.kind,
   };
@@ -263,17 +263,79 @@ function isHighConfidenceVisualEvidence(
   );
 }
 
-function dedupeObservations(observations: readonly BubbleObservation[]): BubbleObservation[] {
-  const sorted = [...observations].sort((left, right) => right.confidence - left.confidence);
-  const kept: BubbleObservation[] = [];
-  for (const observation of sorted) {
-    const duplicate = kept.some((existing) => (
-      normalizeText(existing.sourceText) === normalizeText(observation.sourceText)
-      && rectIoU(existing.box, observation.box) > 0.65
-    ));
-    if (!duplicate) kept.push(observation);
+function groupEvidenceByObservationId(
+  ownershipEvidence: readonly BubbleOwnershipEvidence[],
+): Map<string, BubbleOwnershipEvidence[]> {
+  const grouped = new Map<string, BubbleOwnershipEvidence[]>();
+  for (const evidence of ownershipEvidence) {
+    const items = grouped.get(evidence.observationId);
+    if (items) items.push(evidence);
+    else grouped.set(evidence.observationId, [evidence]);
   }
-  return kept;
+  return grouped;
+}
+
+function dedupeObservationEntries(entries: ObservationEntry[]): ObservationEntry[] {
+  const clusters: ObservationEntry[][] = [];
+  for (const entry of entries) {
+    const cluster = clusters.find((items) => isDuplicateObservation(items[0]!.observation, entry.observation));
+    if (cluster) cluster.push(entry);
+    else clusters.push([entry]);
+  }
+  return clusters.map((cluster) => {
+    const representative = [...cluster].sort((left, right) => (
+      right.observation.confidence - left.observation.confidence
+      || compareReadingOrder(left, right)
+      || left.observation.id.localeCompare(right.observation.id)
+    ))[0]!;
+    const evidence = selectPreferredEvidence(
+      cluster.flatMap((entry) => entry.evidence ? [entry.evidence] : []),
+      representative.observation.id,
+    );
+    return {
+      observation: representative.observation,
+      evidence,
+      observationIds: cluster.flatMap((entry) => entry.observationIds).sort(),
+    };
+  });
+}
+
+function isDuplicateObservation(left: BubbleObservation, right: BubbleObservation): boolean {
+  return normalizeText(left.sourceText) === normalizeText(right.sourceText)
+    && rectIoU(left.box, right.box) > 0.65;
+}
+
+function selectPreferredEvidence(
+  evidenceItems: readonly BubbleOwnershipEvidence[],
+  observationId: string,
+): BubbleOwnershipEvidence | undefined {
+  const selected = [...evidenceItems].sort((left, right) => (
+    evidenceConsistencyScore(right, evidenceItems) - evidenceConsistencyScore(left, evidenceItems)
+    || evidenceQualityScore(right) - evidenceQualityScore(left)
+  ))[0];
+  return selected ? { ...selected, observationId } : undefined;
+}
+
+function evidenceConsistencyScore(
+  candidate: BubbleOwnershipEvidence,
+  evidenceItems: readonly BubbleOwnershipEvidence[],
+): number {
+  const candidateBox = candidate.componentBox;
+  if (!candidateBox) return 0;
+  return evidenceItems.filter((other) => (
+    other !== candidate
+    && other.componentBox !== undefined
+    && other.shape === candidate.shape
+    && rectIoU(other.componentBox, candidateBox) >= 0.8
+  )).length;
+}
+
+function evidenceQualityScore(evidence: BubbleOwnershipEvidence): number {
+  const manual = evidence.manualGroupId ? 100 : 0;
+  const enclosedVisual = isHighConfidenceVisualEvidence(evidence) ? 50 : 0;
+  const enclosed = evidence.touchesBoundary ? 0 : 10;
+  const component = evidence.componentBox ? 5 : 0;
+  return manual + enclosedVisual + enclosed + component + clampConfidence(evidence.confidence);
 }
 
 function isUsableObservation(observation: BubbleObservation): boolean {
@@ -306,10 +368,6 @@ function centerX(rect: Rect): number {
   return rect.x + rect.width / 2;
 }
 
-function centerY(rect: Rect): number {
-  return rect.y + rect.height / 2;
-}
-
 function rectIoU(left: Rect, right: Rect): number {
   const intersectionWidth = overlapLength(left.x, left.width, right.x, right.width);
   const intersectionHeight = overlapLength(left.y, left.height, right.y, right.height);
@@ -321,6 +379,51 @@ function rectIoU(left: Rect, right: Rect): number {
 
 function normalizeText(text: string): string {
   return text.replace(/\s+/g, "").toLocaleLowerCase();
+}
+
+function createStableBubbleId(
+  shape: BubbleShape,
+  box: Rect,
+  sourceText: string,
+  orientation: BubbleCandidate["orientation"],
+  kind: BubbleCandidate["kind"],
+): string {
+  const identity = [
+    shape,
+    kind,
+    orientation,
+    quantizedRectKey(box),
+    normalizeIdentityText(sourceText),
+  ].join("|");
+  return `bubble-${fnv1a32(identity).toString(16).padStart(8, "0")}`;
+}
+
+function quantizedRectKey(box: Rect): string {
+  const quantum = 4;
+  return [
+    box.x,
+    box.y,
+    box.x + box.width,
+    box.y + box.height,
+  ].map((value) => Math.round(value / quantum)).join(":");
+}
+
+function normalizeIdentityText(text: string): string {
+  return text
+    .normalize("NFKC")
+    .split(/\n+/)
+    .map((line) => line.trim().replace(/\s+/g, " ").toLocaleLowerCase())
+    .filter(Boolean)
+    .join("\n");
+}
+
+function fnv1a32(value: string): number {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return hash >>> 0;
 }
 
 function clampConfidence(value: number): number {

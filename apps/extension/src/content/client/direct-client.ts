@@ -224,6 +224,8 @@ export class DirectClient implements TranslatorClient {
         // Bubble extraction is observation-driven only. Do not infer likelyTextEvidence from raw pixels.
         // Manual selections remain the only production empty-OCR rescue signal.
         ...(preCroppedOcrInputLoader ? { preCroppedOcrInputLoader } : {}),
+        // Bubble-aware reconstruction is limited to the direct extension path.
+        // Legacy server translation remains outside this reconstruction path.
         bubbleEvidenceExtractor: this.bubbleEvidenceExtractor,
         maxOcrRescueCallsPerImage: this.settings.directOcr.maxOcrRescueCallsPerImage,
         ocrPreprocessLoader: this.ocrPreprocessLoader,
