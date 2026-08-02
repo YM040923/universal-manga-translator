@@ -1,29 +1,38 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import type { RecognitionUnit } from "@umt/shared";
-import { cropRecognitionTiles } from "./recognition-tile-cropper.js";
+import { cropRecognitionTiles, type CroppedRecognitionTile } from "./recognition-tile-cropper.js";
 
-test("cropRecognitionTiles returns lossless PNG data and bytes in plan order", async () => {
+test("cropRecognitionTiles streams lossless PNG bytes in plan order and releases each tile after consumption", async () => {
   const units = [
     unit("tile-1", 0, 4096),
     unit("tile-2", 3584, 4096),
   ];
   const crops: RecognitionUnit["crop"][] = [];
+  const consumed: number[][] = [];
+  const retainedTiles: CroppedRecognitionTile[] = [];
 
-  const result = await cropRecognitionTiles(
+  await cropRecognitionTiles(
     "data:image/jpeg;base64,full",
     units,
+    async (tile, index, tileCount) => {
+      assert.equal(index, consumed.length);
+      assert.equal(tileCount, 2);
+      assert.equal("imageData" in tile, false);
+      consumed.push([...tile.imageBytes]);
+      retainedTiles.push(tile);
+    },
     async (_imageData, crop) => {
       crops.push(crop);
-      return `data:image/png;base64,${crop.y === 0 ? "AQ==" : "Ag=="}`;
+      return new Uint8Array([crop.y === 0 ? 1 : 2]);
     },
   );
 
   assert.deepEqual(crops, units.map((item) => item.crop));
-  assert.deepEqual(result.map((item) => item.unit.id), ["tile-1", "tile-2"]);
-  assert.deepEqual(result.map((item) => item.mimeType), ["image/png", "image/png"]);
-  assert.deepEqual(result.map((item) => [...item.imageBytes]), [[1], [2]]);
-  assert.equal(result.every((item) => item.imageData.startsWith("data:image/png;base64,")), true);
+  assert.deepEqual(consumed, [[1], [2]]);
+  assert.deepEqual(retainedTiles.map((tile) => tile.unit.id), ["tile-1", "tile-2"]);
+  assert.deepEqual(retainedTiles.map((tile) => tile.mimeType), ["image/png", "image/png"]);
+  assert.deepEqual(retainedTiles.map((tile) => tile.imageBytes.byteLength), [0, 0]);
 });
 
 function unit(id: string, y: number, height: number): RecognitionUnit {

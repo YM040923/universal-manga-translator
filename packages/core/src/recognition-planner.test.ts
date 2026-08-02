@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { planRecognitionUnits } from "./recognition-planner.js";
+import { MAX_RECOGNITION_UNITS, planRecognitionUnits } from "./recognition-planner.js";
 
 test("planRecognitionUnits keeps short images as one full-image unit", () => {
   const plan = planRecognitionUnits({
@@ -66,4 +66,42 @@ test("planRecognitionUnits does not add a redundant overlap-only tail tile", () 
 
   assert.equal(plan.units.length, 2);
   assert.equal(plan.units.at(-1)!.crop.y + plan.units.at(-1)!.crop.height, 7201);
+});
+
+test("planRecognitionUnits accepts safe integer bounds and rejects unsafe or non-finite parameters", () => {
+  assert.equal(planRecognitionUnits({
+    surfaceId: "surface:max-safe",
+    naturalSize: { width: Number.MAX_SAFE_INTEGER, height: 1 },
+    maxTileHeight: 1,
+    overlapRatio: 0,
+    reason: "automatic",
+  }).units.length, 1);
+
+  assert.throws(() => planRecognitionUnits({
+    surfaceId: "surface:unsafe",
+    naturalSize: { width: Number.MAX_SAFE_INTEGER + 1, height: 100 },
+    maxTileHeight: 100,
+    overlapRatio: 0,
+    reason: "automatic",
+  }), /safe integer/i);
+  assert.throws(() => planRecognitionUnits({
+    surfaceId: "surface:infinite-overlap",
+    naturalSize: { width: 100, height: 100 },
+    maxTileHeight: 100,
+    overlapRatio: Number.POSITIVE_INFINITY,
+    reason: "automatic",
+  }), /overlapRatio.*finite/i);
+});
+
+test("planRecognitionUnits rejects plans above the hard unit limit before allocating tiles", () => {
+  const maxTileHeight = 100;
+  const height = (MAX_RECOGNITION_UNITS + 1) * maxTileHeight;
+
+  assert.throws(() => planRecognitionUnits({
+    surfaceId: "surface:too-many",
+    naturalSize: { width: 1000, height },
+    maxTileHeight,
+    overlapRatio: 0,
+    reason: "automatic",
+  }), new RegExp(`${MAX_RECOGNITION_UNITS + 1}.*maximum.*${MAX_RECOGNITION_UNITS}`, "i"));
 });

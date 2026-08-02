@@ -2,44 +2,69 @@ import type { RecognitionUnit, Rect } from "@umt/shared";
 
 export interface CroppedRecognitionTile {
   unit: RecognitionUnit;
-  imageData: string;
   imageBytes: Uint8Array;
   mimeType: "image/png";
 }
 
-export type RecognitionTilePngRenderer = (fullImageData: string, crop: Rect) => Promise<string>;
-export type RecognitionTileCropper = (fullImageData: string, units: RecognitionUnit[]) => Promise<CroppedRecognitionTile[]>;
+export type RecognitionTileConsumer = (tile: CroppedRecognitionTile, index: number, tileCount: number) => Promise<void>;
+export type RecognitionTilePngRenderer = (fullImageData: string, crop: Rect) => Promise<Uint8Array>;
+export type RecognitionTileCropper = (
+  fullImageData: string,
+  units: RecognitionUnit[],
+  consume: RecognitionTileConsumer,
+) => Promise<void>;
+
+const RELEASED_TILE_BYTES = new Uint8Array(0);
 
 export async function cropRecognitionTiles(
   fullImageData: string,
   units: RecognitionUnit[],
+  consume: RecognitionTileConsumer,
   renderPngCrop?: RecognitionTilePngRenderer,
-): Promise<CroppedRecognitionTile[]> {
-  const image = renderPngCrop ? undefined : await loadImage(fullImageData);
-  const tiles: CroppedRecognitionTile[] = [];
-  for (const unit of units) {
-    const imageData = renderPngCrop
-      ? await renderPngCrop(fullImageData, unit.crop)
-      : cropLoadedImageToPng(image!, unit.crop);
-    if (!imageData.startsWith("data:image/png;base64,")) throw new Error("Recognition tile cropper must return a base64 PNG data URL.");
-    tiles.push({
-      unit,
-      imageData,
-      imageBytes: base64DataUrlToBytes(imageData),
-      mimeType: "image/png",
-    });
+): Promise<void> {
+  let image: HTMLImageElement | undefined;
+  try {
+    if (!renderPngCrop) image = await loadImage(fullImageData);
+    for (const [index, unit] of units.entries()) {
+      const imageBytes = renderPngCrop
+        ? await renderPngCrop(fullImageData, unit.crop)
+        : await cropLoadedImageToPngBytes(image!, unit.crop);
+      const tile: CroppedRecognitionTile = { unit, imageBytes, mimeType: "image/png" };
+      try {
+        await consume(tile, index, units.length);
+      } finally {
+        tile.imageBytes = RELEASED_TILE_BYTES;
+      }
+    }
+  } finally {
+    if (image) image.src = "";
+    image = undefined;
   }
-  return tiles;
 }
 
-function cropLoadedImageToPng(image: HTMLImageElement, crop: Rect): string {
+async function cropLoadedImageToPngBytes(image: HTMLImageElement, crop: Rect): Promise<Uint8Array> {
   const canvas = document.createElement("canvas");
   canvas.width = Math.max(1, Math.round(crop.width));
   canvas.height = Math.max(1, Math.round(crop.height));
-  const context = canvas.getContext("2d");
-  if (!context) throw new Error("Canvas 2D context is unavailable");
-  context.drawImage(image, crop.x, crop.y, crop.width, crop.height, 0, 0, canvas.width, canvas.height);
-  return canvas.toDataURL("image/png");
+  try {
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("Canvas 2D context is unavailable");
+    context.drawImage(image, crop.x, crop.y, crop.width, crop.height, 0, 0, canvas.width, canvas.height);
+    const blob = await canvasToBlob(canvas);
+    return new Uint8Array(await blob.arrayBuffer());
+  } finally {
+    canvas.width = 0;
+    canvas.height = 0;
+  }
+}
+
+function canvasToBlob(canvas: HTMLCanvasElement): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (blob) resolve(blob);
+      else reject(new Error("Failed to encode recognition tile as PNG"));
+    }, "image/png");
+  });
 }
 
 function loadImage(dataUrl: string): Promise<HTMLImageElement> {
@@ -49,13 +74,4 @@ function loadImage(dataUrl: string): Promise<HTMLImageElement> {
     image.onerror = () => reject(new Error("Failed to load recognition source image"));
     image.src = dataUrl;
   });
-}
-
-function base64DataUrlToBytes(dataUrl: string): Uint8Array {
-  const comma = dataUrl.indexOf(",");
-  if (comma < 0) throw new Error("Invalid recognition tile data URL.");
-  const binary = atob(dataUrl.slice(comma + 1));
-  const bytes = new Uint8Array(binary.length);
-  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
-  return bytes;
 }

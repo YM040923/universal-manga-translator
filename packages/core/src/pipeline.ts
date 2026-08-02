@@ -17,10 +17,24 @@ export interface CorePipelineInput extends GenericOcrImageInput {
   previousTranslations?: Array<{ id: string; translatedText: string }>;
   termCandidates?: string[];
   preCroppedOcrInputs?: CorePreCroppedOcrInput[];
+  preCroppedOcrInputLoader?: CorePreCroppedOcrInputLoader;
+  onOcrTileError?: (failure: CoreOcrTileFailure) => void;
 }
 
 export interface CorePreCroppedOcrInput extends GenericOcrImageInput {
   recognitionUnit: RecognitionUnit;
+}
+
+export interface CorePreCroppedOcrInputLoader {
+  tileCount: number;
+  forEach(consume: (input: CorePreCroppedOcrInput, index: number) => Promise<void>): Promise<void>;
+}
+
+export interface CoreOcrTileFailure {
+  tileIndex: number;
+  tileCount: number;
+  recognitionUnit: RecognitionUnit;
+  error: Error;
 }
 
 export interface CoreOcrProvider {
@@ -92,15 +106,38 @@ export class OcrTranslatePipeline {
   }
 
   private async readOcrRegions(input: CorePipelineInput): Promise<GenericOcrRegion[]> {
+    if (input.preCroppedOcrInputLoader) {
+      return this.readTiledOcrRegions(
+        input,
+        input.preCroppedOcrInputLoader.tileCount,
+        input.preCroppedOcrInputLoader.forEach,
+      );
+    }
     if (input.preCroppedOcrInputs?.length) {
-      const regions: GenericOcrRegion[] = [];
-      for (const ocrInput of input.preCroppedOcrInputs) {
-        const localRegions = await this.readSingleOcrInput(input, ocrInput);
-        regions.push(...localRegions.map((region) => remapRegionToParent(region, ocrInput.recognitionUnit, input.width, input.height)));
-      }
-      return regions;
+      return this.readTiledOcrRegions(input, input.preCroppedOcrInputs.length, async (consume) => {
+        for (const [index, ocrInput] of input.preCroppedOcrInputs!.entries()) await consume(ocrInput, index);
+      });
     }
     return this.readSingleOcrInput(input, input);
+  }
+
+  private async readTiledOcrRegions(
+    input: CorePipelineInput,
+    tileCount: number,
+    forEach: CorePreCroppedOcrInputLoader["forEach"],
+  ): Promise<GenericOcrRegion[]> {
+    const regions: GenericOcrRegion[] = [];
+    await forEach(async (ocrInput, index) => {
+      try {
+        const localRegions = await this.readSingleOcrInput(input, ocrInput);
+        regions.push(...localRegions.map((region) => remapRegionToParent(region, ocrInput.recognitionUnit, input.width, input.height)));
+      } catch (cause) {
+        const error = createOcrTileError(cause, index + 1, tileCount, ocrInput.recognitionUnit);
+        input.onOcrTileError?.({ tileIndex: index + 1, tileCount, recognitionUnit: ocrInput.recognitionUnit, error });
+        throw error;
+      }
+    });
+    return regions;
   }
 
   private async readSingleOcrInput(
@@ -169,6 +206,24 @@ function remapRegionToParent(
 
 function clamp(value: number, minimum: number, maximum: number): number {
   return Math.min(maximum, Math.max(minimum, value));
+}
+
+function createOcrTileError(cause: unknown, tileIndex: number, tileCount: number, unit: RecognitionUnit): Error {
+  const { crop } = unit;
+  const message = `OCR tile ${tileIndex}/${tileCount} (x=${formatDiagnosticNumber(crop.x)},y=${formatDiagnosticNumber(crop.y)},w=${formatDiagnosticNumber(crop.width)},h=${formatDiagnosticNumber(crop.height)}) failed: ${safeErrorMessage(cause)}`;
+  return new Error(message, { cause });
+}
+
+function safeErrorMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return message
+    .replace(/data:[^\s)]+/gi, "[redacted-image]")
+    .replace(/https?:\/\/[^\s)]+/gi, "[redacted-url]")
+    .slice(0, 500);
+}
+
+function formatDiagnosticNumber(value: number): string {
+  return String(normalizeCacheNumber(value));
 }
 
 function buildTranslationItems(regions: GenericOcrRegion[]): TextTranslationItem[] {
@@ -291,12 +346,26 @@ export function buildOcrCacheKey(
     sourceLanguage: input.sourceLanguage,
   };
   if (!input.recognitionUnit) return JSON.stringify(base);
+  const unit = input.recognitionUnit;
   return JSON.stringify({
     ...base,
     v: 2,
-    crop: input.recognitionUnit.crop,
-    preprocessingVersion: input.recognitionUnit.preprocessingVersion,
+    cropX: normalizeCacheNumber(unit.crop.x),
+    cropY: normalizeCacheNumber(unit.crop.y),
+    cropWidth: normalizeCacheNumber(unit.crop.width),
+    cropHeight: normalizeCacheNumber(unit.crop.height),
+    pixelWidth: normalizeCacheNumber(unit.pixelSize.width),
+    pixelHeight: normalizeCacheNumber(unit.pixelSize.height),
+    scaleX: normalizeCacheNumber(unit.scaleX),
+    scaleY: normalizeCacheNumber(unit.scaleY),
+    preprocessingVersion: unit.preprocessingVersion,
   });
+}
+
+function normalizeCacheNumber(value: number): number {
+  if (!Number.isFinite(value)) throw new Error("OCR cache key geometry must contain only finite numbers.");
+  const normalized = Math.round(value * 1_000_000) / 1_000_000;
+  return Object.is(normalized, -0) ? 0 : normalized;
 }
 
 export function groupOcrRegionsIntoTextBlocks(regions: GenericOcrRegion[]): GenericOcrRegion[] {

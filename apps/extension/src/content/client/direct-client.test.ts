@@ -190,7 +190,6 @@ test("DirectClient clearCache clears direct OCR cache entries", async () => {
   assert.equal(response.ok && response.deleted, 1);
 });
 
-
 test("DirectClient persists manual overrides and applies them to later cached results", async () => {
   let ocrCalls = 0;
   let translatorCalls = 0;
@@ -401,7 +400,6 @@ test("DirectClient carries remembered term candidates into later prompts", async
   assert.match(prompts[1] ?? "", /Clark/);
 });
 
-
 test("DirectClient uses saved manual override as previous translation guidance on retranslate", async () => {
   const prompts: string[] = [];
   const cache = new DirectOcrCache(fakeStorage());
@@ -452,15 +450,12 @@ test("DirectClient sends tall images through multiple ordered OCR tiles and one 
   let ocrCalls = 0;
   let translatorCalls = 0;
   const croppedYs: number[] = [];
-  const cropper: RecognitionTileCropper = async (_imageData, units) => units.map((unit, index) => {
-    croppedYs.push(unit.crop.y);
-    return {
-      unit,
-      imageData: `data:image/png;base64,${index % 2 === 0 ? "AQ==" : "Ag=="}`,
-      imageBytes: new Uint8Array([index + 1]),
-      mimeType: "image/png",
-    };
-  });
+  const cropper: RecognitionTileCropper = async (_imageData, units, consume) => {
+    for (const [index, unit] of units.entries()) {
+      croppedYs.push(unit.crop.y);
+      await consume({ unit, imageBytes: new Uint8Array([index + 1]), mimeType: "image/png" }, index, units.length);
+    }
+  };
   const fetchImpl = (async (url) => {
     if (String(url).includes("ocr")) {
       ocrCalls += 1;
@@ -472,8 +467,9 @@ test("DirectClient sends tall images through multiple ordered OCR tiles and one 
     return new Response(JSON.stringify({ choices: [{ message: { content: "" } }] }), { status: 200, headers: { "content-type": "application/json" } });
   }) as typeof fetch;
   const client = new DirectClient(settingsWithTileCropper(fetchImpl, cropper));
+  const signedSurfaceId = "surface:https://cdn.example/page.jpg?token=secret-token&X-Amz-Signature=secret-signature";
 
-  const response = await client.submit(task({ naturalSize: { width: 1000, height: 16000 }, renderSize: { width: 1000, height: 16000 } }));
+  const response = await client.submit(task({ surfaceId: signedSurfaceId, naturalSize: { width: 1000, height: 16000 }, renderSize: { width: 1000, height: 16000 } }));
 
   assert.equal(response.ok, true);
   assert.equal(ocrCalls > 1, true);
@@ -483,7 +479,13 @@ test("DirectClient sends tall images through multiple ordered OCR tiles and one 
   const diagnostics = await client.recentDiagnostics();
   assert.equal(diagnostics.ok, true);
   assert.equal(diagnostics.ok && Number(diagnostics.records[0]?.tileCount) > 1, true);
-  assert.equal(JSON.stringify(diagnostics).includes("imageData"), false);
+  assert.match(String(diagnostics.ok ? diagnostics.records[0]?.imageId : ""), /^image:[a-f0-9]{12}$/);
+  const diagnosticText = JSON.stringify(diagnostics);
+  assert.equal(diagnosticText.includes("imageData"), false);
+  assert.equal(diagnosticText.includes(signedSurfaceId), false);
+  assert.equal(diagnosticText.includes("secret-token"), false);
+  assert.equal(diagnosticText.includes("X-Amz-Signature"), false);
+  assert.equal(diagnosticText.includes("secret-signature"), false);
 });
 
 test("DirectClient keeps short images on one OCR request without invoking the tile cropper", async () => {
@@ -544,15 +546,12 @@ test("DirectClient uses fixed 4096px tiles only when the independent per-image c
     let ocrCalls = 0;
     let cropperCalls = 0;
     let croppedUnits = requiredPlan.units.slice(0, 0);
-    const cropper: RecognitionTileCropper = async (_imageData, units) => {
+    const cropper: RecognitionTileCropper = async (_imageData, units, consume) => {
       cropperCalls += 1;
       croppedUnits = units;
-      return units.map((unit, index) => ({
-        unit,
-        imageData: `data:image/png;base64,${index % 2 === 0 ? "AQ==" : "Ag=="}`,
-        imageBytes: new Uint8Array([index + 1]),
-        mimeType: "image/png",
-      }));
+      for (const [index, unit] of units.entries()) {
+        await consume({ unit, imageBytes: new Uint8Array([index + 1]), mimeType: "image/png" }, index, units.length);
+      }
     };
     const fetchImpl = (async (url) => {
       if (String(url).includes("ocr")) {
@@ -587,4 +586,89 @@ test("DirectClient uses fixed 4096px tiles only when the independent per-image c
       assert.equal(record?.note, undefined);
     }
   }
+});
+
+test("DirectClient records anonymous failed tile diagnostics", async () => {
+  let ocrCalls = 0;
+  const cropper: RecognitionTileCropper = async (_imageData, units, consume) => {
+    for (const [index, unit] of units.entries()) {
+      await consume({ unit, imageBytes: new Uint8Array([index + 1]), mimeType: "image/png" }, index, units.length);
+    }
+  };
+  const fetchImpl = (async (url) => {
+    if (String(url).includes("ocr")) {
+      ocrCalls += 1;
+      if (ocrCalls >= 2) {
+        return new Response(JSON.stringify({ message: "provider timeout" }), { status: 400, headers: { "content-type": "application/json" } });
+      }
+      return new Response(JSON.stringify({ words_result: [] }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    throw new Error("translator must not run after a tile OCR failure");
+  }) as typeof fetch;
+  const client = new DirectClient(settingsWithTileCropper(fetchImpl, cropper));
+  const signedSurfaceId = "surface:https://cdn.example/page.jpg?token=secret-token&X-Amz-Signature=secret-signature";
+
+  const response = await client.submit(task({
+    surfaceId: signedSurfaceId,
+    naturalSize: { width: 1000, height: 16000 },
+    renderSize: { width: 1000, height: 16000 },
+  }));
+
+  assert.equal(response.ok, false);
+  assert.match(response.ok ? "" : response.error, /^OCR tile 2\/5 \(x=0,y=3584,w=1000,h=4096\) failed: Network OCR failed: 400 provider timeout/);
+  const diagnostics = await client.recentDiagnostics();
+  assert.equal(diagnostics.ok, true);
+  const failure = diagnostics.ok ? diagnostics.records.find((record) => record.type === "recognition-tile-failure") : undefined;
+  assert.match(String(failure?.imageId), /^image:[a-f0-9]{12}$/);
+  assert.equal(failure?.tileIndex, 2);
+  assert.equal(failure?.tileCount, 5);
+  assert.deepEqual(failure?.crop, { x: 0, y: 3584, width: 1000, height: 4096 });
+  const diagnosticText = JSON.stringify(diagnostics);
+  assert.equal(diagnosticText.includes("secret-token"), false);
+  assert.equal(diagnosticText.includes("X-Amz-Signature"), false);
+  assert.equal(diagnosticText.includes("data:image"), false);
+});
+
+test("DirectClient keeps at most one tile byte buffer active during OCR", async () => {
+  let activeTileBytes = 0;
+  let maxActiveTileBytes = 0;
+  let ocrCalls = 0;
+  let translatorCalls = 0;
+  const releasedTiles: number[] = [];
+  const cropper: RecognitionTileCropper = async (_imageData, units, consume) => {
+    for (const [index, unit] of units.entries()) {
+      assert.equal(activeTileBytes, 0);
+      activeTileBytes += 1;
+      maxActiveTileBytes = Math.max(maxActiveTileBytes, activeTileBytes);
+      await consume({ unit, imageBytes: new Uint8Array([index + 1]), mimeType: "image/png" }, index, units.length);
+      assert.equal(ocrCalls, index + 1);
+      activeTileBytes -= 1;
+      releasedTiles.push(index + 1);
+    }
+  };
+  const fetchImpl = (async (url) => {
+    if (String(url).includes("ocr")) {
+      assert.equal(activeTileBytes, 1);
+      assert.deepEqual(releasedTiles, Array.from({ length: ocrCalls }, (_, index) => index + 1));
+      ocrCalls += 1;
+      return new Response(JSON.stringify({
+        words_result: [{ words: `STREAM ${ocrCalls}`, location: { left: 10, top: 20, width: 80, height: 20 } }],
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    translatorCalls += 1;
+    assert.equal(activeTileBytes, 0);
+    assert.deepEqual(releasedTiles, [1, 2, 3, 4, 5]);
+    return new Response(JSON.stringify({ choices: [{ message: { content: "" } }] }), { status: 200, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+  const client = new DirectClient(settingsWithTileCropper(fetchImpl, cropper));
+
+  const response = await client.submit(task({
+    naturalSize: { width: 1000, height: 16000 },
+    renderSize: { width: 1000, height: 16000 },
+  }));
+
+  assert.equal(response.ok, true);
+  assert.equal(maxActiveTileBytes, 1);
+  assert.equal(ocrCalls, 5);
+  assert.equal(translatorCalls, 1);
 });

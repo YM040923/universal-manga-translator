@@ -3,7 +3,8 @@ import {
   OpenAICompatibleTextTranslator,
   OcrTranslatePipeline,
   planRecognitionUnits,
-  type CorePreCroppedOcrInput,
+  type CorePreCroppedOcrInputLoader,
+  type CoreOcrTileFailure,
   type RecognitionPlan,
 } from "@umt/core";
 import type {
@@ -182,10 +183,10 @@ export class DirectClient implements TranslatorClient {
       const termCandidates = this.chapterMemory.termCandidatesFor(imageHash);
       const recognitionDecision = this.createRecognitionPlan(task);
       const recognitionPlan = recognitionDecision.plan;
-      const preCroppedOcrInputs = recognitionPlan.units.length > 1
-        ? await this.createPreCroppedOcrInputs(task.imageData, recognitionPlan)
+      const preCroppedOcrInputLoader = recognitionPlan.units.length > 1
+        ? this.createPreCroppedOcrInputLoader(task.imageData, recognitionPlan)
         : undefined;
-      this.recordRecognitionPlan(task, recognitionDecision);
+      this.recordRecognitionPlan(imageHash, task.naturalSize, recognitionDecision);
       const pipeline = new OcrTranslatePipeline({
         profile: this.providerProfile(),
         ocr: this.ocrClient,
@@ -204,7 +205,8 @@ export class DirectClient implements TranslatorClient {
         chapterContext,
         previousTranslations,
         termCandidates,
-        ...(preCroppedOcrInputs ? { preCroppedOcrInputs } : {}),
+        ...(preCroppedOcrInputLoader ? { preCroppedOcrInputLoader } : {}),
+        onOcrTileError: (failure) => this.recordRecognitionTileFailure(imageHash, failure),
       });
       const regions = result.regions.map((region) => toOverlayRegion(region));
       const rawSurfaceResult: SurfaceResult = {
@@ -276,27 +278,45 @@ export class DirectClient implements TranslatorClient {
     });
   }
 
-  private async createPreCroppedOcrInputs(imageData: string, plan: RecognitionPlan): Promise<CorePreCroppedOcrInput[]> {
-    const tiles = await this.recognitionTileCropper(imageData, plan.units);
-    return tiles.map((tile, index) => ({
-      imageBytes: tile.imageBytes,
-      fileName: `recognition-tile-${index + 1}.png`,
-      mimeType: tile.mimeType,
-      recognitionUnit: tile.unit,
-    }));
+  private createPreCroppedOcrInputLoader(imageData: string, plan: RecognitionPlan): CorePreCroppedOcrInputLoader {
+    return {
+      tileCount: plan.units.length,
+      forEach: async (consume) => {
+        await this.recognitionTileCropper(imageData, plan.units, async (tile, index) => {
+          await consume({
+            imageBytes: tile.imageBytes,
+            fileName: `recognition-tile-${index + 1}.png`,
+            mimeType: tile.mimeType,
+            recognitionUnit: tile.unit,
+          }, index);
+        });
+      },
+    };
   }
 
-  private recordRecognitionPlan(task: SurfaceTask, decision: DirectRecognitionDecision): void {
+  private recordRecognitionPlan(imageHash: string, naturalSize: SurfaceTask["naturalSize"], decision: DirectRecognitionDecision): void {
     const { plan } = decision;
     this.diagnostics.unshift({
       type: "recognition-tiling",
-      surfaceId: task.surfaceId,
-      naturalSize: { ...task.naturalSize },
+      imageId: anonymousImageId(imageHash),
+      naturalSize: { ...naturalSize },
       tileCount: plan.units.length,
       requiredTileCount: decision.requiredTileCount,
       overlapPx: plan.overlapPx,
       crops: plan.units.map((unit) => ({ ...unit.crop })),
       ...(decision.note ? { note: decision.note } : {}),
+    });
+    if (this.diagnostics.length > 100) this.diagnostics.length = 100;
+  }
+
+  private recordRecognitionTileFailure(imageHash: string, failure: CoreOcrTileFailure): void {
+    this.diagnostics.unshift({
+      type: "recognition-tile-failure",
+      imageId: anonymousImageId(imageHash),
+      tileIndex: failure.tileIndex,
+      tileCount: failure.tileCount,
+      crop: { ...failure.recognitionUnit.crop },
+      error: failure.error.message,
     });
     if (this.diagnostics.length > 100) this.diagnostics.length = 100;
   }
@@ -325,4 +345,8 @@ export class DirectClient implements TranslatorClient {
   providerProfile(): string {
     return `direct:${this.settings.directOcr.inputMode}:${directOcrConfigHash(this.settings)}+openai-compatible:${this.settings.directTranslator.model}+style:${TRANSLATION_STYLE_VERSION}+${effectiveGlossaryHash(this.settings)}`;
   }
+}
+
+function anonymousImageId(imageHash: string): string {
+  return `image:${imageHash.slice(0, 12)}`;
 }

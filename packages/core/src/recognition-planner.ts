@@ -1,5 +1,7 @@
 import type { RecognitionReason, RecognitionUnit, Size } from "@umt/shared";
 
+export const MAX_RECOGNITION_UNITS = 256;
+
 export interface RecognitionPlan {
   units: RecognitionUnit[];
   overlapPx: number;
@@ -15,16 +17,20 @@ export interface PlanRecognitionUnitsInput {
 }
 
 export function planRecognitionUnits(input: PlanRecognitionUnitsInput): RecognitionPlan {
-  const width = positiveInteger(input.naturalSize.width, "naturalSize.width");
-  const height = positiveInteger(input.naturalSize.height, "naturalSize.height");
-  const maxTileHeight = positiveInteger(input.maxTileHeight, "maxTileHeight");
-  const overlapRatio = Number.isFinite(input.overlapRatio)
-    ? Math.max(0, Math.min(0.95, input.overlapRatio))
-    : 0;
+  const width = positiveSafeInteger(input.naturalSize.width, "naturalSize.width");
+  const height = positiveSafeInteger(input.naturalSize.height, "naturalSize.height");
+  const maxTileHeight = positiveSafeInteger(input.maxTileHeight, "maxTileHeight");
+  if (!Number.isFinite(input.overlapRatio)) throw new Error("overlapRatio must be finite.");
+  if (input.overlapRatio < 0 || input.overlapRatio >= 1) throw new Error("overlapRatio must be at least 0 and less than 1.");
+  const overlapRatio = input.overlapRatio;
   const overlapPx = height > maxTileHeight
     ? Math.min(maxTileHeight - 1, Math.max(0, Math.round(maxTileHeight * overlapRatio)))
     : 0;
   const step = Math.max(1, maxTileHeight - overlapPx);
+  const estimatedUnitCount = height <= maxTileHeight ? 1 : Math.ceil((height - maxTileHeight) / step) + 1;
+  if (estimatedUnitCount > MAX_RECOGNITION_UNITS) {
+    throw new Error(`Recognition plan would create ${estimatedUnitCount} units; maximum is ${MAX_RECOGNITION_UNITS}.`);
+  }
   const preprocessingVersion = input.preprocessingVersion?.trim() || "none-v1";
   const units: RecognitionUnit[] = [];
 
@@ -49,7 +55,9 @@ export function planRecognitionUnits(input: PlanRecognitionUnitsInput): Recognit
   return { units, overlapPx };
 }
 
-function positiveInteger(value: number, name: string): number {
-  if (!Number.isFinite(value) || value <= 0) throw new Error(`${name} must be finite and greater than 0.`);
-  return Math.max(1, Math.round(value));
+function positiveSafeInteger(value: number, name: string): number {
+  if (!Number.isFinite(value) || !Number.isSafeInteger(value) || value <= 0) {
+    throw new Error(`${name} must be a finite positive safe integer.`);
+  }
+  return value;
 }
