@@ -295,6 +295,81 @@ test("OcrTranslatePipeline dedupes overlap observations and translates the whole
   assert.equal(translatedItems, 1);
 });
 
+test("OcrTranslatePipeline reconstructs logical bubbles from tile evidence before one translator call", async () => {
+  let translatorCalls = 0;
+  let translatedItems: TextTranslationItem[] = [];
+  let extractorSawBytes = 0;
+  const pipeline = new OcrTranslatePipeline({
+    profile: "network-ocr:image+openai-compatible:gpt",
+    ocr: {
+      recognize: async () => [
+        region("line-a", "FIRST", 40, 50, 90, 24),
+        region("line-b", "SECOND", 35, 82, 100, 24),
+        region("other", "OTHER", 250, 55, 80, 24),
+      ],
+    },
+    translator: {
+      translate: async (items) => {
+        translatorCalls += 1;
+        translatedItems = items;
+        return items.map((item) => ({ id: item.id, translatedText: `translated:${item.text}` }));
+      },
+    },
+  });
+
+  const result = await pipeline.process({
+    imageBytes: new Uint8Array([0]),
+    imageHash: "parent-hash",
+    width: 1000,
+    height: 16000,
+    targetLanguage: "zh-CN",
+    sourceLanguage: "auto",
+    preCroppedOcrInputs: [{
+      imageBytes: new Uint8Array([7, 8, 9]),
+      mimeType: "image/png",
+      recognitionUnit: recognitionUnit("tile-evidence", { x: 100, y: 1000, width: 500, height: 500 }, 2),
+    }],
+    bubbleEvidenceExtractor: async (input) => {
+      extractorSawBytes = input.imageBytes.byteLength;
+      assert.equal(input.width, 1000);
+      assert.equal(input.height, 1000);
+      assert.deepEqual(input.observations.map((observation) => observation.id), ["line-a", "line-b", "other"]);
+      return [
+        {
+          observationId: "line-a",
+          visualGroupId: "ellipse-one",
+          componentBox: { x: 20, y: 20, width: 200, height: 140 },
+          shape: "ellipse",
+          confidence: 0.95,
+          touchesBoundary: false,
+        },
+        {
+          observationId: "line-b",
+          visualGroupId: "ellipse-one",
+          componentBox: { x: 20, y: 20, width: 200, height: 140 },
+          shape: "ellipse",
+          confidence: 0.95,
+          touchesBoundary: false,
+        },
+        {
+          observationId: "other",
+          visualGroupId: "ellipse-two",
+          componentBox: { x: 225, y: 20, width: 150, height: 120 },
+          shape: "ellipse",
+          confidence: 0.93,
+          touchesBoundary: false,
+        },
+      ];
+    },
+  });
+
+  assert.equal(extractorSawBytes, 3);
+  assert.equal(translatorCalls, 1);
+  assert.deepEqual(translatedItems.map((item) => item.text), ["FIRST\nSECOND", "OTHER"]);
+  assert.equal(result.regions.length, 2);
+  assert.deepEqual(result.regions[0]?.box, { x: 110, y: 1010, width: 100, height: 70 });
+});
+
 test("buildOcrCacheKey isolates crops and preprocessing while preserving full-image v1 semantics", () => {
   const fullInput = { imageHash: "same-image", width: 1000, height: 16000, sourceLanguage: "auto" };
   const oldKey = JSON.stringify({

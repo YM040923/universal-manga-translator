@@ -36,6 +36,10 @@ import { toOverlayRegion } from "./direct-overlay-region.js";
 import type { TranslatorClient } from "./translator-client.js";
 import { cropRecognitionTiles, type RecognitionTileCropper } from "../capture/recognition-tile-cropper.js";
 import { createBrowserOcrPreprocessLoader } from "../capture/browser-ocr-preprocess.js";
+import {
+  createBrowserBubbleEvidenceExtractor,
+  type BrowserBubbleEvidenceExtractor,
+} from "../capture/bubble-evidence-extractor.js";
 
 type FetchLike = typeof fetch;
 const TRANSLATION_STYLE_VERSION = "manga-v2";
@@ -50,6 +54,7 @@ interface DirectClientSettings extends ExtensionSettings {
   __testManualOverrideStorage?: ManualOverrideStorage;
   __testRecognitionTileCropper?: RecognitionTileCropper;
   __testOcrPreprocessLoader?: CoreOcrPreprocessLoader;
+  __testBubbleEvidenceExtractor?: BrowserBubbleEvidenceExtractor;
 }
 
 interface DirectRecognitionDecision {
@@ -66,6 +71,7 @@ export class DirectClient implements TranslatorClient {
   private readonly chapterMemory: ChapterTranslationMemory;
   private readonly recognitionTileCropper: RecognitionTileCropper;
   private readonly ocrPreprocessLoader: CoreOcrPreprocessLoader;
+  private readonly bubbleEvidenceExtractor: BrowserBubbleEvidenceExtractor;
   private readonly diagnostics: Array<Record<string, unknown>> = [];
 
   constructor(private readonly settings: DirectClientSettings) {
@@ -76,6 +82,7 @@ export class DirectClient implements TranslatorClient {
     this.chapterMemory = new ChapterTranslationMemory();
     this.recognitionTileCropper = settings.__testRecognitionTileCropper ?? cropRecognitionTiles;
     this.ocrPreprocessLoader = settings.__testOcrPreprocessLoader ?? createBrowserOcrPreprocessLoader();
+    this.bubbleEvidenceExtractor = settings.__testBubbleEvidenceExtractor ?? createBrowserBubbleEvidenceExtractor();
   }
 
   async health(): Promise<boolean> {
@@ -214,10 +221,10 @@ export class DirectClient implements TranslatorClient {
         ...(recognitionPlan.units.length === 1 && recognitionPlan.units[0]
           ? { recognitionUnit: recognitionPlan.units[0] }
           : {}),
-        // Automatic empty rescue is deferred until Task 6 can provide bubble-aware
-        // structural evidence. Do not infer likelyTextEvidence from raw pixels.
+        // Bubble extraction is observation-driven only. Do not infer likelyTextEvidence from raw pixels.
         // Manual selections remain the only production empty-OCR rescue signal.
         ...(preCroppedOcrInputLoader ? { preCroppedOcrInputLoader } : {}),
+        bubbleEvidenceExtractor: this.bubbleEvidenceExtractor,
         maxOcrRescueCallsPerImage: this.settings.directOcr.maxOcrRescueCallsPerImage,
         ocrPreprocessLoader: this.ocrPreprocessLoader,
         onOcrRescueDiagnostic: (diagnostic) => this.recordOcrRescueDiagnostic(imageHash, diagnostic),

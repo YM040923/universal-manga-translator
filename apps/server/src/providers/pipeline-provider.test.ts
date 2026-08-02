@@ -79,6 +79,30 @@ test("OcrThenTranslateProvider groups nearby OCR lines into one dialogue block b
   assert.equal(regions[0]!.translatedText, "那个邪恶微笑的恶魔会对那些挑衅他、引起他兴趣的人着迷。");
 });
 
+test("OcrThenTranslateProvider keeps adjacent bubbles separate without visual ownership", async () => {
+  const provider = new OcrThenTranslateProvider({
+    profile: "ocr-then-translate:test",
+    ocr: {
+      async recognize() {
+        return [
+          { id: "first", box: { x: 100, y: 100, width: 100, height: 30 }, sourceText: "FIRST", confidence: 0.95, orientation: "horizontal", kind: "dialogue" },
+          { id: "second", box: { x: 140, y: 160, width: 100, height: 30 }, sourceText: "SECOND", confidence: 0.95, orientation: "horizontal", kind: "dialogue" },
+        ];
+      },
+    },
+    translator: {
+      async translate(items) {
+        assert.equal(items.length, 2);
+        return items.map((item) => ({ id: item.id, translatedText: item.text }));
+      },
+    },
+  });
+
+  const regions = await provider.process(input);
+
+  assert.equal(regions.length, 2);
+});
+
 test("OcrThenTranslateProvider dedupes overlapping OCR fragments before translation", async () => {
   const provider = new OcrThenTranslateProvider({
     profile: "ocr-then-translate:test",
@@ -105,7 +129,7 @@ test("OcrThenTranslateProvider dedupes overlapping OCR fragments before translat
   assert.equal(regions[0]!.sourceText, "GIVE ME\nEVERYTHING!!");
 });
 
-test("OcrThenTranslateProvider merges horizontally separated narration lines in one caption box", async () => {
+test("OcrThenTranslateProvider keeps horizontally separated narration fragments separate without ownership", async () => {
   const provider = new OcrThenTranslateProvider({
     profile: "ocr-then-translate:test",
     ocr: {
@@ -118,20 +142,19 @@ test("OcrThenTranslateProvider merges horizontally separated narration lines in 
       },
     },
     translator: {
-      async translate(items: Array<{ id: string; text: string }>) {
-        assert.equal(items.length, 1);
-        assert.equal(items[0]!.text, "NO.\nEVERYONE WANTS\nA REASONABLE PLAN.");
-        return [{ id: items[0]!.id, translatedText: "没错。每个人都想出一个合理的计划。" }];
+      async translate(items) {
+        assert.equal(items.length, 3);
+        return items.map((item) => ({ id: item.id, translatedText: item.text }));
       },
     },
   });
 
   const regions = await provider.process(input);
 
-  assert.equal(regions.length, 1);
+  assert.equal(regions.length, 3);
 });
 
-test("OcrThenTranslateProvider merges same speech bubble lines even when OCR splits side fragments", async () => {
+test("OcrThenTranslateProvider conservatively splits side fragments without visual ownership", async () => {
   const provider = new OcrThenTranslateProvider({
     profile: "ocr-then-translate:test",
     ocr: {
@@ -145,21 +168,21 @@ test("OcrThenTranslateProvider merges same speech bubble lines even when OCR spl
       },
     },
     translator: {
-      async translate(items: Array<{ id: string; text: string }>) {
-        assert.equal(items.length, 1);
-        assert.equal(items[0]!.text, "APPEARED IN\nFLOWER STREET\nBRING\nA GROUP!!");
-        return [{ id: items[0]!.id, translatedText: "出现在花街，带了一群人！！" }];
+      async translate(items) {
+        assert.equal(items.length, 2);
+        assert.deepEqual(items.map((item) => item.text), ["APPEARED IN\nFLOWER STREET", "BRING\nA GROUP!!"]);
+        return items.map((item) => ({ id: item.id, translatedText: item.text }));
       },
     },
   });
 
   const regions = await provider.process(input);
 
-  assert.equal(regions.length, 1);
+  assert.equal(regions.length, 2);
 });
 
 
-test("OcrThenTranslateProvider merges vertically separated centered narration lines in one caption panel", async () => {
+test("OcrThenTranslateProvider conservatively splits vertically separated narration without ownership", async () => {
   const provider = new OcrThenTranslateProvider({
     profile: "ocr-then-translate:test",
     ocr: {
@@ -175,17 +198,16 @@ test("OcrThenTranslateProvider merges vertically separated centered narration li
     },
     translator: {
       async translate(items) {
-        assert.equal(items.length, 1);
-        assert.equal(items[0]!.text, "FIRST,\nTHOSE BASTARDS\nUSING SOUL ENERGY\nMETHOD\nSOUL ENERGY.");
-        return [{ id: items[0]!.id, translatedText: "首先，那些混蛋运用灵魂能量的方式。" }];
+        assert.equal(items.length, 3);
+        return items.map((item) => ({ id: item.id, translatedText: item.text }));
       },
     },
   });
 
   const regions = await provider.process({ ...input, width: 800, height: 900 });
 
-  assert.equal(regions.length, 1);
-  assert.equal(regions[0]!.kind, "narration");
+  assert.equal(regions.length, 3);
+  assert.equal(regions.every((region) => region.kind === "narration"), true);
 });
 
 test("OcrThenTranslateProvider classifies oversized action lettering as sfx instead of dialogue", async () => {

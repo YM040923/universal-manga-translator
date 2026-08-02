@@ -2,7 +2,7 @@
 import type { ManualOverridePayload } from "@umt/shared/protocol";
 import type { OverlayRegion, Size, SurfaceResult } from "@umt/shared/types";
 import { DEFAULT_SETTINGS, normalizeOverlayAppearance, type OverlayAppearance } from "../../settings/settings.js";
-import { mergeRenderableRegions, rectFromStyle, rectsOverlapSignificantly, type RenderedRect } from "./overlay-geometry.js";
+import { rectFromStyle, rectsOverlapSignificantly, type RenderedRect } from "./overlay-geometry.js";
 import { overlayHostForElement } from "./overlay-host.js";
 import { maskPaddingForBox, maskStyleForRegion } from "./overlay-mask.js";
 import { createStableTextLayout, normalizeOverlayText } from "./text-layout.js";
@@ -105,7 +105,7 @@ export class OverlayRenderer {
     const seenRegionIds = new Set<string>();
     const isManualSelection = isManualSelectionSurface(result.surfaceId);
     const currentManualBoxes: RenderedRect[] = [];
-    const renderRegions = mergeRenderableRegions(result.regions);
+    const renderRegions = result.regions;
     for (const region of renderRegions) {
       const clampedNaturalBox = clampRectToBounds(region.box, naturalSize);
       if (!clampedNaturalBox) continue;

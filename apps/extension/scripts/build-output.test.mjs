@@ -51,7 +51,7 @@ test("content main does not enable heuristic paid rescue for automatic empty OCR
   assert.doesNotMatch(main, /ocr-text-evidence|OcrTextEvidenceProvider|createBrowserOcrTextEvidenceProvider/);
   assert.match(main, /new\s+DirectClient\(current\)/);
   assert.doesNotMatch(main, /new\s+DirectClient\(current\s*,/);
-  assert.match(directClient, /Automatic empty rescue is deferred until Task 6/);
+  assert.match(directClient, /Bubble extraction is observation-driven only/);
   assert.match(directClient, /Do not infer likelyTextEvidence from raw pixels/);
 });
 

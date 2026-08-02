@@ -566,7 +566,7 @@ test("renders sfx/action lettering without a huge opaque speech-bubble mask", ()
 
 
 
-test("merges overlapping split text regions before rendering to avoid stacked bubbles", () => {
+test("does not merge overlapping logical bubbles a second time in the renderer", () => {
   const { img } = setupDomWithImage({ x: 0, y: 0, width: 800, height: 620 });
   const renderer = new OverlayRenderer();
   const result = fakeResult("split-caption-merge");
@@ -590,11 +590,8 @@ test("merges overlapping split text regions before rendering to avoid stacked bu
   renderer.render(img, { width: 800, height: 620 }, result);
 
   const wrappers = document.querySelectorAll<HTMLElement>("[data-umt-region-id]");
-  assert.equal(wrappers.length, 1);
-  assert.equal(wrappers[0]!.textContent!.includes("\u9996\u5148"), true);
-  assert.equal(wrappers[0]!.textContent!.includes("\u7075\u9b42\u80fd\u91cf"), true);
-  assert.equal(wrappers[0]!.textContent!.includes("\\n"), false);
-  assert.equal(wrappers[0]!.textContent!.includes("\n"), true);
+  assert.equal(wrappers.length, 2);
+  assert.deepEqual([...wrappers].map((wrapper) => wrapper.dataset.umtRegionId), ["top", "bottom"]);
 });
 
 test("adds glyph-safe inset for large CJK text so strokes are not clipped", () => {

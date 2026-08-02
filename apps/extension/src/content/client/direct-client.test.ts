@@ -14,6 +14,7 @@ import {
 import type { ExtensionSettings } from "../../settings/settings.js";
 import { DEFAULT_SETTINGS } from "../../settings/settings.js";
 import { DirectOcrCache } from "../cache/direct-ocr-cache.js";
+import type { BrowserBubbleEvidenceExtractor } from "../capture/bubble-evidence-extractor.js";
 import type { RecognitionTileCropper } from "../capture/recognition-tile-cropper.js";
 
 function task(overrides: Partial<SurfaceTask> = {}): SurfaceTask {
@@ -89,6 +90,52 @@ test("DirectClient submits imageData through OCR and translator", async () => {
   assert.equal(response.result?.regions[0]?.translatedText, "你好");
   assert.equal(response.result?.regions[0]?.box.x, 10);
   assert.deepEqual(calls, ["https://ocr.example/ocr", "https://api.example/v1/chat/completions"]);
+});
+
+test("DirectClient injects bubble evidence and sends translator items by logical bubble count", async () => {
+  let extractorCalls = 0;
+  let translatorItems = 0;
+  const extractor: BrowserBubbleEvidenceExtractor = async (input) => {
+    extractorCalls += 1;
+    assert.equal(input.imageBytes.byteLength > 0, true);
+    assert.deepEqual(input.observations.map((observation) => observation.id), ["network-ocr-1", "network-ocr-2"]);
+    return input.observations.map((observation) => ({
+      observationId: observation.id,
+      visualGroupId: "one-ellipse",
+      componentBox: { x: 5, y: 5, width: 120, height: 145 },
+      shape: "ellipse",
+      confidence: 0.94,
+      touchesBoundary: false,
+    }));
+  };
+  const fetchImpl = (async (url, init) => {
+    if (String(url).includes("ocr")) {
+      return new Response(JSON.stringify({
+        words_result: [
+          { words: "FIRST", location: { left: 20, top: 25, width: 80, height: 20 } },
+          { words: "SECOND", location: { left: 18, top: 105, width: 88, height: 20 } },
+        ],
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    const body = JSON.parse(String(init?.body));
+    const prompt = String(body.messages[0].content);
+    const payload = JSON.parse(prompt.slice(prompt.lastIndexOf("\n") + 1)) as { items: Array<{ id: string; text: string }> };
+    translatorItems = payload.items.length;
+    return new Response(JSON.stringify({
+      choices: [{ message: { content: JSON.stringify({ items: payload.items.map((item) => ({ id: item.id, translatedText: item.text })) }) } }],
+    }), { status: 200, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+  const client = new DirectClient({
+    ...settings(fetchImpl),
+    __testBubbleEvidenceExtractor: extractor,
+  } as ReturnType<typeof settings> & { __testBubbleEvidenceExtractor: BrowserBubbleEvidenceExtractor });
+
+  const response = await client.submit(task({ naturalSize: { width: 140, height: 160 }, renderSize: { width: 140, height: 160 } }));
+
+  assert.equal(response.ok, true);
+  assert.equal(extractorCalls, 1);
+  assert.equal(translatorItems, 1);
+  assert.equal(response.ok ? response.result?.regions.length : 0, 1);
 });
 
 test("DirectClient sends user glossary to translator and includes glossary version in profile", async () => {
@@ -834,6 +881,7 @@ test("DirectClient keeps at most one tile byte buffer active during OCR", async 
   let activeTileBytes = 0;
   let maxActiveTileBytes = 0;
   let ocrCalls = 0;
+  let evidenceCalls = 0;
   let translatorCalls = 0;
   const releasedTiles: number[] = [];
   const cropper: RecognitionTileCropper = async (_imageData, units, consume) => {
@@ -861,7 +909,16 @@ test("DirectClient keeps at most one tile byte buffer active during OCR", async 
     assert.deepEqual(releasedTiles, [1, 2, 3, 4, 5]);
     return new Response(JSON.stringify({ choices: [{ message: { content: "" } }] }), { status: 200, headers: { "content-type": "application/json" } });
   }) as typeof fetch;
-  const client = new DirectClient(settingsWithTileCropper(fetchImpl, cropper));
+  const bubbleEvidenceExtractor: BrowserBubbleEvidenceExtractor = async (input) => {
+    evidenceCalls += 1;
+    assert.equal(activeTileBytes, 1);
+    assert.equal(input.imageBytes.byteLength, 1);
+    return [];
+  };
+  const client = new DirectClient({
+    ...settingsWithTileCropper(fetchImpl, cropper),
+    __testBubbleEvidenceExtractor: bubbleEvidenceExtractor,
+  } as ExtensionSettings & { __testBubbleEvidenceExtractor: BrowserBubbleEvidenceExtractor });
 
   const response = await client.submit(task({
     naturalSize: { width: 1000, height: 16000 },
@@ -871,6 +928,7 @@ test("DirectClient keeps at most one tile byte buffer active during OCR", async 
   assert.equal(response.ok, true);
   assert.equal(maxActiveTileBytes, 1);
   assert.equal(ocrCalls, 5);
+  assert.equal(evidenceCalls, 5);
   assert.equal(translatorCalls, 1);
 });
 
