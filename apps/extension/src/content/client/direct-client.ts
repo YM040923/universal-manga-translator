@@ -394,16 +394,27 @@ export class DirectClient implements TranslatorClient {
         recognitionUnit,
       });
     } catch {
-      assessment = { likelyText: false, edgeDensity: 0, contrast: 0, candidateWindowCount: 0 };
+      assessment = {
+        likelyText: false,
+        edgeDensity: 0,
+        contrast: 0,
+        candidateWindowCount: 0,
+        candidateClusterCount: 0,
+        glyphLikeComponentCount: 0,
+      };
     }
     const edgeDensity = normalizeEvidenceMetric(assessment.edgeDensity);
     const contrast = normalizeEvidenceMetric(assessment.contrast);
     const candidateWindowCount = normalizeEvidenceCount(assessment.candidateWindowCount);
+    const candidateClusterCount = normalizeEvidenceCount(assessment.candidateClusterCount);
+    const glyphLikeComponentCount = normalizeEvidenceCount(assessment.glyphLikeComponentCount);
     const safeAssessment: DirectOcrTextEvidenceAssessment = {
       likelyText: assessment.likelyText === true,
       edgeDensity: edgeDensity ?? 0,
       contrast: contrast ?? 0,
       candidateWindowCount,
+      candidateClusterCount,
+      glyphLikeComponentCount,
     };
     this.diagnostics.unshift({
       type: "ocr-text-evidence",
@@ -412,6 +423,8 @@ export class DirectClient implements TranslatorClient {
       edgeDensity: safeAssessment.edgeDensity,
       contrast: safeAssessment.contrast,
       candidateWindowCount: safeAssessment.candidateWindowCount,
+      candidateClusterCount: safeAssessment.candidateClusterCount,
+      glyphLikeComponentCount: safeAssessment.glyphLikeComponentCount,
     });
     if (this.diagnostics.length > 100) this.diagnostics.length = 100;
     return safeAssessment;

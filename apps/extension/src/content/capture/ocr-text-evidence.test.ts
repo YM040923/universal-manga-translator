@@ -19,8 +19,64 @@ test("analyzeOcrTextEvidencePixels accepts bright glyph-like stroke windows", ()
 
   assert.equal(result.likelyText, true);
   assert.equal(result.candidateWindowCount >= 2, true);
+  assert.equal(result.candidateClusterCount >= 1, true);
+  assert.equal(result.glyphLikeComponentCount >= 4, true);
   assert.equal(result.edgeDensity > 0, true);
   assert.equal(result.contrast > 0, true);
+});
+
+test("analyzeOcrTextEvidencePixels keeps small glyph-like text detectable", () => {
+  const pixels = solidPixels(128, 128, [248, 248, 248, 255]);
+  drawSmallGlyphLikeText(pixels, 45, 57);
+
+  const result = analyzeOcrTextEvidencePixels(pixels);
+
+  assert.equal(result.likelyText, true);
+  assert.equal(result.candidateClusterCount >= 1, true);
+  assert.equal(result.glyphLikeComponentCount >= 4, true);
+});
+
+test("analyzeOcrTextEvidencePixels deduplicates overlapping windows into one glyph cluster", () => {
+  const pixels = solidPixels(128, 128, [248, 248, 248, 255]);
+  drawGlyphLikeText(pixels, 40, 48);
+
+  const result = analyzeOcrTextEvidencePixels(pixels);
+
+  assert.equal(result.likelyText, true);
+  assert.equal(result.candidateWindowCount > 1, true);
+  assert.equal(result.candidateClusterCount, 1);
+});
+
+test("analyzeOcrTextEvidencePixels rejects a two-pixel manga panel grid", () => {
+  const pixels = solidPixels(128, 128, [248, 248, 248, 255]);
+  fillRect(pixels, 63, 0, 2, 128, 24);
+  fillRect(pixels, 0, 63, 128, 2, 24);
+
+  assert.equal(analyzeOcrTextEvidencePixels(pixels).likelyText, false);
+});
+
+test("analyzeOcrTextEvidencePixels rejects empty outlined rectangles", () => {
+  const pixels = solidPixels(128, 128, [248, 248, 248, 255]);
+  drawRectOutline(pixels, 18, 22, 38, 30, 2, 24);
+  drawRectOutline(pixels, 70, 72, 40, 32, 2, 24);
+
+  assert.equal(analyzeOcrTextEvidencePixels(pixels).likelyText, false);
+});
+
+test("analyzeOcrTextEvidencePixels rejects sparse diagonal lines", () => {
+  const pixels = solidPixels(128, 128, [248, 248, 248, 255]);
+  drawDiagonalLine(pixels, 14, 18, 42, 46, 2, 24);
+  drawDiagonalLine(pixels, 48, 30, 78, 60, 2, 24);
+  drawDiagonalLine(pixels, 78, 66, 112, 100, 2, 24);
+
+  assert.equal(analyzeOcrTextEvidencePixels(pixels).likelyText, false);
+});
+
+test("analyzeOcrTextEvidencePixels rejects an empty speech bubble outline", () => {
+  const pixels = solidPixels(128, 128, [248, 248, 248, 255]);
+  drawEllipseOutline(pixels, 64, 62, 44, 29, 2, 24);
+
+  assert.equal(analyzeOcrTextEvidencePixels(pixels).likelyText, false);
 });
 
 test("analyzeOcrTextEvidencePixels rejects flat white and black images", () => {
@@ -114,7 +170,14 @@ test("browser OCR evidence provider uses bounded pixels and safely degrades fail
   assert.equal(reads, 1);
   assert.equal(positive.likelyText, true);
   assert.equal(failed.likelyText, false);
-  assert.deepEqual(failed, { likelyText: false, edgeDensity: 0, contrast: 0, candidateWindowCount: 0 });
+  assert.deepEqual(failed, {
+    likelyText: false,
+    edgeDensity: 0,
+    contrast: 0,
+    candidateWindowCount: 0,
+    candidateClusterCount: 0,
+    glyphLikeComponentCount: 0,
+  });
   assert.equal(OCR_TEXT_EVIDENCE_MAX_LONG_EDGE, 256);
   assert.equal(OCR_TEXT_EVIDENCE_MAX_PIXEL_AREA, 256 * 256);
 });
@@ -215,6 +278,66 @@ function drawGlyphLikeText(pixels: OcrTextEvidencePixelInput, startX: number, st
     fillRect(pixels, x, startY, 3, 22, 24);
     fillRect(pixels, x, startY, 7, 3, 24);
     fillRect(pixels, x, startY + 10, 6, 3, 24);
+  }
+}
+
+function drawSmallGlyphLikeText(pixels: OcrTextEvidencePixelInput, startX: number, startY: number): void {
+  for (let glyph = 0; glyph < 4; glyph += 1) {
+    const x = startX + glyph * 6;
+    fillRect(pixels, x, startY, 2, 10, 24);
+    fillRect(pixels, x, startY, 5, 2, 24);
+    fillRect(pixels, x, startY + 5, 4, 2, 24);
+  }
+}
+
+function drawRectOutline(
+  pixels: OcrTextEvidencePixelInput,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  thickness: number,
+  value: number,
+): void {
+  fillRect(pixels, x, y, width, thickness, value);
+  fillRect(pixels, x, y + height - thickness, width, thickness, value);
+  fillRect(pixels, x, y, thickness, height, value);
+  fillRect(pixels, x + width - thickness, y, thickness, height, value);
+}
+
+function drawDiagonalLine(
+  pixels: OcrTextEvidencePixelInput,
+  startX: number,
+  startY: number,
+  endX: number,
+  endY: number,
+  thickness: number,
+  value: number,
+): void {
+  const steps = Math.max(Math.abs(endX - startX), Math.abs(endY - startY));
+  for (let step = 0; step <= steps; step += 1) {
+    const x = Math.round(startX + (endX - startX) * step / steps);
+    const y = Math.round(startY + (endY - startY) * step / steps);
+    fillRect(pixels, x, y, thickness, thickness, value);
+  }
+}
+
+function drawEllipseOutline(
+  pixels: OcrTextEvidencePixelInput,
+  centerX: number,
+  centerY: number,
+  radiusX: number,
+  radiusY: number,
+  thickness: number,
+  value: number,
+): void {
+  for (let y = centerY - radiusY - thickness; y <= centerY + radiusY + thickness; y += 1) {
+    for (let x = centerX - radiusX - thickness; x <= centerX + radiusX + thickness; x += 1) {
+      const distance = ((x - centerX) / radiusX) ** 2 + ((y - centerY) / radiusY) ** 2;
+      if (Math.abs(distance - 1) <= thickness / Math.min(radiusX, radiusY)) {
+        fillRect(pixels, x, y, 1, 1, value);
+      }
+    }
   }
 }
 

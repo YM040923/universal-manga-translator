@@ -658,6 +658,8 @@ test("DirectClient rescues automatic empty OCR only when the injected evidence p
     assert.equal(Number(evidence?.edgeDensity) >= 0, true);
     assert.equal(Number(evidence?.contrast) >= 0, true);
     assert.equal(likelyText ? Number(evidence?.candidateWindowCount) >= 2 : evidence?.candidateWindowCount === 0, true);
+    assert.equal(likelyText ? Number(evidence?.candidateClusterCount) >= 1 : evidence?.candidateClusterCount === 0, true);
+    assert.equal(likelyText ? Number(evidence?.glyphLikeComponentCount) >= 4 : evidence?.glyphLikeComponentCount === 0, true);
     const diagnosticText = JSON.stringify(evidence);
     assert.equal(diagnosticText.includes("data:image"), false);
     assert.equal(diagnosticText.includes("https://"), false);
@@ -741,11 +743,15 @@ test("DirectClient safely treats evidence provider failures as false", async () 
     edgeDensity: evidence?.edgeDensity,
     contrast: evidence?.contrast,
     candidateWindowCount: evidence?.candidateWindowCount,
+    candidateClusterCount: evidence?.candidateClusterCount,
+    glyphLikeComponentCount: evidence?.glyphLikeComponentCount,
   }, {
     likelyText: false,
     edgeDensity: 0,
     contrast: 0,
     candidateWindowCount: 0,
+    candidateClusterCount: 0,
+    glyphLikeComponentCount: 0,
   });
 });
 
