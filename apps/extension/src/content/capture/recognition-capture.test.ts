@@ -91,6 +91,48 @@ test("createRecognitionCapture parses data URL bytes and MIME without trusting h
   }
 });
 
+test("createRecognitionCapture requires a semicolon before the base64 marker", () => {
+  const capture = createRecognitionCapture({
+    parentSurfaceId: "surface:base64-media-type",
+    imageData: "data:base64,YQ==",
+    naturalSize: { width: 1, height: 1 },
+    pixelSize: { width: 1, height: 1 },
+    priority: "p2",
+    reason: "automatic",
+    captureSource: "inline-image-data",
+  });
+
+  assert.equal(capture.byteLength, 4);
+});
+
+test("createRecognitionCapture accepts trailing ASCII whitespace on the final base64 marker", () => {
+  const capture = createRecognitionCapture({
+    parentSurfaceId: "surface:base64-trailing-space",
+    imageData: "data:image/png;base64 ,YQ==",
+    naturalSize: { width: 1, height: 1 },
+    pixelSize: { width: 1, height: 1 },
+    priority: "p2",
+    reason: "automatic",
+    captureSource: "inline-image-data",
+  });
+
+  assert.equal(capture.byteLength, 1);
+});
+
+test("createRecognitionCapture accepts leading ASCII whitespace on the final base64 marker", () => {
+  const capture = createRecognitionCapture({
+    parentSurfaceId: "surface:base64-leading-space",
+    imageData: "data:image/png; base64,YQ==",
+    naturalSize: { width: 1, height: 1 },
+    pixelSize: { width: 1, height: 1 },
+    priority: "p2",
+    reason: "automatic",
+    captureSource: "inline-image-data",
+  });
+
+  assert.equal(capture.byteLength, 1);
+});
+
 test("createRecognitionCapture rejects invalid or truncated base64 payloads", () => {
   for (const imageData of [
     "data:image/png;base64,Y",

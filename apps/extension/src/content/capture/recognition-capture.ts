@@ -31,6 +31,7 @@ export interface CreateRecognitionCaptureInput {
 const PREPROCESSING_VERSION = "none-v1";
 const DEFAULT_MIME_TYPE = "application/octet-stream";
 const MEDIA_TYPE_PATTERN = /^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/;
+const BASE64_METADATA_TOKEN_PATTERN = /^[\t\n\f\r ]*base64[\t\n\f\r ]*$/i;
 
 export function createRecognitionCapture(input: CreateRecognitionCaptureInput): RecognitionCapture {
   const crop = input.crop ?? { x: 0, y: 0, width: input.naturalSize.width, height: input.naturalSize.height };
@@ -129,11 +130,12 @@ function parseDataUrl(imageData: string | undefined): { header: string; payload:
   const commaIndex = imageData.indexOf(",");
   if (commaIndex < 0) throw new Error("Invalid image data URL: missing comma separator.");
   const header = imageData.slice(5, commaIndex);
-  const finalMetadataToken = header.split(";").at(-1) ?? "";
+  const finalParameterSeparatorIndex = header.lastIndexOf(";");
+  const finalMetadataToken = finalParameterSeparatorIndex < 0 ? undefined : header.slice(finalParameterSeparatorIndex + 1);
   return {
     header,
     payload: imageData.slice(commaIndex + 1),
-    isBase64: finalMetadataToken.toLowerCase() === "base64",
+    isBase64: finalMetadataToken !== undefined && BASE64_METADATA_TOKEN_PATTERN.test(finalMetadataToken),
   };
 }
 
