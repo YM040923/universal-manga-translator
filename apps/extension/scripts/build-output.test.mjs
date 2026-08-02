@@ -44,6 +44,17 @@ test("content main wires automatic and manual capture APIs through safe summary 
   assert.equal(main.includes('logger.info("recognition capture"'), false);
 });
 
+test("content main injects the production browser OCR text evidence provider into DirectClient", () => {
+  const main = readFileSync(resolve("src/content/main.ts"), "utf8");
+
+  assert.match(
+    main,
+    /import\s+\{\s*createBrowserOcrTextEvidenceProvider\s*\}\s+from\s+["']\.\/capture\/ocr-text-evidence["'];/,
+  );
+  assert.match(main, /const\s+ocrTextEvidenceProvider\s*=\s*createBrowserOcrTextEvidenceProvider\(\)/);
+  assert.match(main, /new\s+DirectClient\(current,\s*\{\s*ocrTextEvidenceProvider\s*\}\s*\)/);
+});
+
 test("manifest uses dynamic injection and does not expose an options page", () => {
   const manifest = JSON.parse(readFileSync(resolve(dist, "manifest.json"), "utf8"));
   assert.equal(manifest.host_permissions.includes("<all_urls>"), true);

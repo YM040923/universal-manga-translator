@@ -10,12 +10,15 @@ import {
   DIRECT_OCR_MAX_TILE_HEIGHT,
   DIRECT_OCR_TILE_OVERLAP_RATIO,
   DirectClient,
-  type DirectOcrTextEvidenceProvider,
 } from "./direct-client.js";
 import type { ExtensionSettings } from "../../settings/settings.js";
 import { DEFAULT_SETTINGS } from "../../settings/settings.js";
 import { DirectOcrCache } from "../cache/direct-ocr-cache.js";
 import type { RecognitionTileCropper } from "../capture/recognition-tile-cropper.js";
+import {
+  createBrowserOcrTextEvidenceProvider,
+  type OcrTextEvidencePixelInput,
+} from "../capture/ocr-text-evidence.js";
 
 function task(overrides: Partial<SurfaceTask> = {}): SurfaceTask {
   return {
@@ -612,12 +615,15 @@ test("DirectClient rescues automatic empty OCR only when the injected evidence p
         });
       },
     };
-    const evidenceProvider: DirectOcrTextEvidenceProvider = async (evidenceInput) => {
-      evidenceCalls += 1;
-      assert.equal(evidenceInput.imageBytes.byteLength > 0, true);
-      assert.deepEqual(evidenceInput.imageSize, { width: 100, height: 100 });
-      return { likelyText, edgeDensity: 0.18, contrast: 0.34 };
-    };
+    const evidenceProvider = createBrowserOcrTextEvidenceProvider({
+      readPixels: async (evidenceInput) => {
+        evidenceCalls += 1;
+        assert.equal(evidenceInput.imageBytes.byteLength > 0, true);
+        assert.deepEqual(evidenceInput.imageSize, { width: 100, height: 100 });
+        assert.equal(evidenceInput.recognitionUnit.reason, "automatic");
+        return likelyText ? glyphEvidencePixels() : blankEvidencePixels();
+      },
+    });
     const fetchImpl = (async (url) => {
       if (String(url).includes("ocr")) {
         ocrCalls += 1;
@@ -649,8 +655,9 @@ test("DirectClient rescues automatic empty OCR only when the injected evidence p
     const diagnostics = await client.recentDiagnostics();
     const evidence = diagnostics.ok ? diagnostics.records.find((record) => record.type === "ocr-text-evidence") : undefined;
     assert.equal(evidence?.likelyText, likelyText);
-    assert.equal(evidence?.edgeDensity, 0.18);
-    assert.equal(evidence?.contrast, 0.34);
+    assert.equal(Number(evidence?.edgeDensity) >= 0, true);
+    assert.equal(Number(evidence?.contrast) >= 0, true);
+    assert.equal(likelyText ? Number(evidence?.candidateWindowCount) >= 2 : evidence?.candidateWindowCount === 0, true);
     const diagnosticText = JSON.stringify(evidence);
     assert.equal(diagnosticText.includes("data:image"), false);
     assert.equal(diagnosticText.includes("https://"), false);
@@ -695,6 +702,51 @@ test("DirectClient fails submit and skips translator when rescue OCR returns a p
   assert.equal(response.ok, false);
   assert.match(response.ok ? "" : response.error, /^OCR rescue \(grayscale-contrast, unit x=0,y=0,w=100,h=100\) failed:/);
   assert.equal(translatorCalls, 0);
+});
+
+test("DirectClient safely treats evidence provider failures as false", async () => {
+  let ocrCalls = 0;
+  let preprocessCalls = 0;
+  const preprocessLoader: CoreOcrPreprocessLoader = {
+    withVariant: async () => {
+      preprocessCalls += 1;
+      throw new Error("must not preprocess");
+    },
+  };
+  const fetchImpl = (async (url) => {
+    if (String(url).includes("ocr")) {
+      ocrCalls += 1;
+      return new Response(JSON.stringify({ words_result: [] }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    return new Response(JSON.stringify({ choices: [{ message: { content: "" } }] }), { status: 200, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+  const base = settings(fetchImpl);
+  const client = new DirectClient({
+    ...base,
+    __testOcrPreprocessLoader: preprocessLoader,
+  } as ExtensionSettings & { __testOcrPreprocessLoader: CoreOcrPreprocessLoader }, {
+    ocrTextEvidenceProvider: async () => { throw new Error("local decode failed"); },
+  });
+
+  const response = await client.submit(task());
+
+  assert.equal(response.ok, true);
+  assert.equal(response.status, "empty");
+  assert.equal(ocrCalls, 1);
+  assert.equal(preprocessCalls, 0);
+  const diagnostics = await client.recentDiagnostics();
+  const evidence = diagnostics.ok ? diagnostics.records.find((record) => record.type === "ocr-text-evidence") : undefined;
+  assert.deepEqual({
+    likelyText: evidence?.likelyText,
+    edgeDensity: evidence?.edgeDensity,
+    contrast: evidence?.contrast,
+    candidateWindowCount: evidence?.candidateWindowCount,
+  }, {
+    likelyText: false,
+    edgeDensity: 0,
+    contrast: 0,
+    candidateWindowCount: 0,
+  });
 });
 
 test("DirectClient keeps short images on one OCR request without invoking the tile cropper", async () => {
@@ -912,3 +964,53 @@ test("DirectClient rejects browser-unsafe image dimensions before invoking the t
   assert.equal(cropperCalls, 0);
   assert.equal(fetchCalls, 0);
 });
+
+function blankEvidencePixels(): OcrTextEvidencePixelInput {
+  return createEvidencePixels((data) => {
+    data.fill(255);
+  });
+}
+
+function glyphEvidencePixels(): OcrTextEvidencePixelInput {
+  return createEvidencePixels((data, width) => {
+    data.fill(255);
+    for (const [startX, startY] of [[22, 34], [68, 76]] as const) {
+      for (let glyph = 0; glyph < 4; glyph += 1) {
+        const x = startX + glyph * 9;
+        fillEvidenceRect(data, width, x, startY, 3, 22, 24);
+        fillEvidenceRect(data, width, x, startY, 7, 3, 24);
+        fillEvidenceRect(data, width, x, startY + 10, 6, 3, 24);
+      }
+    }
+  });
+}
+
+function createEvidencePixels(
+  draw: (data: Uint8ClampedArray, width: number, height: number) => void,
+): OcrTextEvidencePixelInput {
+  const width = 128;
+  const height = 128;
+  const data = new Uint8ClampedArray(width * height * 4);
+  draw(data, width, height);
+  for (let pixel = 0; pixel < width * height; pixel += 1) data[pixel * 4 + 3] = 255;
+  return { width, height, data };
+}
+
+function fillEvidenceRect(
+  data: Uint8ClampedArray,
+  imageWidth: number,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  value: number,
+): void {
+  for (let row = y; row < y + height; row += 1) {
+    for (let column = x; column < x + width; column += 1) {
+      const offset = (row * imageWidth + column) * 4;
+      data[offset] = value;
+      data[offset + 1] = value;
+      data[offset + 2] = value;
+    }
+  }
+}

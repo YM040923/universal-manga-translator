@@ -36,6 +36,16 @@ import { toOverlayRegion } from "./direct-overlay-region.js";
 import type { TranslatorClient } from "./translator-client.js";
 import { cropRecognitionTiles, type RecognitionTileCropper } from "../capture/recognition-tile-cropper.js";
 import { createBrowserOcrPreprocessLoader } from "../capture/browser-ocr-preprocess.js";
+import type {
+  DirectOcrTextEvidenceAssessment,
+  DirectOcrTextEvidenceProvider,
+} from "../capture/ocr-text-evidence.js";
+
+export type {
+  DirectOcrTextEvidenceAssessment,
+  DirectOcrTextEvidenceInput,
+  DirectOcrTextEvidenceProvider,
+} from "../capture/ocr-text-evidence.js";
 
 type FetchLike = typeof fetch;
 const TRANSLATION_STYLE_VERSION = "manga-v2";
@@ -57,21 +67,6 @@ interface DirectRecognitionDecision {
   requiredTileCount: number;
   note?: string;
 }
-
-export interface DirectOcrTextEvidenceInput {
-  imageBytes: Uint8Array;
-  imageSize: SurfaceTask["naturalSize"];
-}
-
-export interface DirectOcrTextEvidenceAssessment {
-  likelyText: boolean;
-  edgeDensity?: number;
-  contrast?: number;
-}
-
-export type DirectOcrTextEvidenceProvider = (
-  input: DirectOcrTextEvidenceInput,
-) => Promise<DirectOcrTextEvidenceAssessment> | DirectOcrTextEvidenceAssessment;
 
 export interface DirectClientDependencies {
   ocrTextEvidenceProvider?: DirectOcrTextEvidenceProvider;
@@ -383,24 +378,40 @@ export class DirectClient implements TranslatorClient {
     task: SurfaceTask,
     plan: RecognitionPlan,
   ): Promise<DirectOcrTextEvidenceAssessment | undefined> {
-    if (plan.units[0]?.reason === "manual-selection" || !this.dependencies.ocrTextEvidenceProvider) return undefined;
-    const assessment = await this.dependencies.ocrTextEvidenceProvider({
-      imageBytes,
-      imageSize: { ...task.naturalSize },
-    });
+    const recognitionUnit = plan.units.length === 1 ? plan.units[0] : undefined;
+    if (
+      !recognitionUnit
+      || recognitionUnit.reason === "manual-selection"
+      || !this.dependencies.ocrTextEvidenceProvider
+    ) {
+      return undefined;
+    }
+    let assessment: DirectOcrTextEvidenceAssessment;
+    try {
+      assessment = await this.dependencies.ocrTextEvidenceProvider({
+        imageBytes,
+        imageSize: { ...task.naturalSize },
+        recognitionUnit,
+      });
+    } catch {
+      assessment = { likelyText: false, edgeDensity: 0, contrast: 0, candidateWindowCount: 0 };
+    }
     const edgeDensity = normalizeEvidenceMetric(assessment.edgeDensity);
     const contrast = normalizeEvidenceMetric(assessment.contrast);
+    const candidateWindowCount = normalizeEvidenceCount(assessment.candidateWindowCount);
     const safeAssessment: DirectOcrTextEvidenceAssessment = {
       likelyText: assessment.likelyText === true,
-      ...(edgeDensity !== undefined ? { edgeDensity } : {}),
-      ...(contrast !== undefined ? { contrast } : {}),
+      edgeDensity: edgeDensity ?? 0,
+      contrast: contrast ?? 0,
+      candidateWindowCount,
     };
     this.diagnostics.unshift({
       type: "ocr-text-evidence",
       imageId: anonymousImageId(imageHash),
       likelyText: safeAssessment.likelyText,
-      ...(safeAssessment.edgeDensity !== undefined ? { edgeDensity: safeAssessment.edgeDensity } : {}),
-      ...(safeAssessment.contrast !== undefined ? { contrast: safeAssessment.contrast } : {}),
+      edgeDensity: safeAssessment.edgeDensity,
+      contrast: safeAssessment.contrast,
+      candidateWindowCount: safeAssessment.candidateWindowCount,
     });
     if (this.diagnostics.length > 100) this.diagnostics.length = 100;
     return safeAssessment;
@@ -439,4 +450,9 @@ function anonymousImageId(imageHash: string): string {
 function normalizeEvidenceMetric(value: number | undefined): number | undefined {
   if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
   return Math.round(Math.max(0, Math.min(1, value)) * 10_000) / 10_000;
+}
+
+function normalizeEvidenceCount(value: number | undefined): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(10_000, Math.trunc(value)));
 }
