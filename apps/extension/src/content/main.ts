@@ -8,7 +8,7 @@ import { ExtensionManualOverrideStore } from "./cache/manual-overrides";
 import { createSurfaceTask, createSurfaceTaskWithImageData, createSurfaceTaskWithImageDataCapture } from "./capture/surface-capture";
 import { createScreenshotSurfaceCapture, readImageSize } from "./capture/screenshot-crop";
 import { requestVisibleTabScreenshot } from "./capture/screenshot-request";
-import { formatRecognitionCaptureSummary } from "./capture/recognition-capture";
+import { captureWithRecognitionSummary } from "./capture/recognition-capture-log";
 import { DebugOverlayRenderer } from "./debug-overlay-renderer";
 import { createContentLogger } from "./content-logger";
 import type { ServerEvent } from "@umt/shared/protocol";
@@ -262,8 +262,10 @@ async function bootstrap(): Promise<boolean> {
     try {
       const detected = toDetectedSurface(surface);
       eventResultRouter.track(surface.surfaceId, surface.element, surface.naturalSize);
-      const { task, capture } = await createSurfaceTaskWithImageDataCapture(detected, "p2", settings.targetLanguage, { allowImageUrlFallback: settings.runMode !== "direct" });
-      logger.info("recognition capture", formatRecognitionCaptureSummary(capture));
+      const { task } = await captureWithRecognitionSummary(
+        () => createSurfaceTaskWithImageDataCapture(detected, "p2", settings.targetLanguage, { allowImageUrlFallback: settings.runMode !== "direct" }),
+        logger,
+      );
       logger.info("submit surface", `${surface.surfaceId} | #${surface.index} | ${task.imageData ? "imageData" : "imageUrl"}`);
       markSurface(surface.surfaceId, "ocr");
       const response = force ? await client.retranslate(task, jobSessionId) : await client.submit(task, jobSessionId);
@@ -367,16 +369,18 @@ async function bootstrap(): Promise<boolean> {
     try {
       const screenshotDataUrl = await requestVisibleTabScreenshot();
       const screenshotSize = await readImageSize(screenshotDataUrl);
-      const { surface, capture } = await createScreenshotSurfaceCapture({
-        screenshotDataUrl,
-        viewportRect: rect,
-        viewportSize: { width: window.innerWidth, height: window.innerHeight },
-        screenshotSize,
-        devicePixelRatio: window.devicePixelRatio,
-        surfaceId: `manual:${Date.now()}:${Math.round(rect.x)}:${Math.round(rect.y)}`,
-        element: document.body,
-      });
-      logger.info("recognition capture", formatRecognitionCaptureSummary(capture));
+      const { surface } = await captureWithRecognitionSummary(
+        () => createScreenshotSurfaceCapture({
+          screenshotDataUrl,
+          viewportRect: rect,
+          viewportSize: { width: window.innerWidth, height: window.innerHeight },
+          screenshotSize,
+          devicePixelRatio: window.devicePixelRatio,
+          surfaceId: `manual:${Date.now()}:${Math.round(rect.x)}:${Math.round(rect.y)}`,
+          element: document.body,
+        }),
+        logger,
+      );
       const response = await client.submit(createSurfaceTask(surface, "p0", settings.targetLanguage), jobSessionId);
       if (response.ok && isRenderableSurfaceResult(response.result)) {
         const result = await manualOverrides.applyToResult(response.result, settings.targetLanguage);

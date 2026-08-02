@@ -129,10 +129,11 @@ function parseDataUrl(imageData: string | undefined): { header: string; payload:
   const commaIndex = imageData.indexOf(",");
   if (commaIndex < 0) throw new Error("Invalid image data URL: missing comma separator.");
   const header = imageData.slice(5, commaIndex);
+  const finalMetadataToken = header.split(";").at(-1) ?? "";
   return {
     header,
     payload: imageData.slice(commaIndex + 1),
-    isBase64: /(?:^|;)base64(?:;|$)/i.test(header),
+    isBase64: finalMetadataToken.toLowerCase() === "base64",
   };
 }
 
@@ -149,15 +150,15 @@ function readBase64ByteLength(payload: string): number {
     decodedPayload += String.fromCharCode(Number.parseInt(hex, 16));
     index += 2;
   }
-  const normalized = decodedPayload.replace(/[\t\n\f\r ]+/g, "");
-  if (
-    normalized.length % 4 !== 0
-    || !/^(?:[a-z0-9+/]{4})*(?:[a-z0-9+/]{2}==|[a-z0-9+/]{3}=)?$/i.test(normalized)
-  ) {
+  let normalized = decodedPayload.replace(/[\t\n\f\r ]+/g, "");
+  if (normalized.length % 4 === 0) {
+    if (normalized.endsWith("==")) normalized = normalized.slice(0, -2);
+    else if (normalized.endsWith("=")) normalized = normalized.slice(0, -1);
+  }
+  if (normalized.length % 4 === 1 || !/^[a-z0-9+/]*$/i.test(normalized)) {
     throw new Error("Invalid base64 image data: payload is malformed or truncated.");
   }
-  const padding = normalized.endsWith("==") ? 2 : normalized.endsWith("=") ? 1 : 0;
-  return normalized.length / 4 * 3 - padding;
+  return Math.floor(normalized.length * 6 / 8);
 }
 
 function readPercentEncodedByteLength(payload: string): number {

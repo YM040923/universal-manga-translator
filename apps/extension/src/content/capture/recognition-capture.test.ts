@@ -39,6 +39,16 @@ test("createRecognitionCapture parses data URL bytes and MIME without trusting h
       expectedByteLength: 1,
     },
     {
+      imageData: "data:image/png;base64,YQ",
+      expectedMimeType: "image/png",
+      expectedByteLength: 1,
+    },
+    {
+      imageData: "data:image/png;base64,YWI",
+      expectedMimeType: "image/png",
+      expectedByteLength: 2,
+    },
+    {
       imageData: "data:application/octet-stream,%89PNG",
       expectedMimeType: "application/octet-stream",
       expectedByteLength: 4,
@@ -57,6 +67,11 @@ test("createRecognitionCapture parses data URL bytes and MIME without trusting h
       imageData: "data:IMAGE/PNG;name=secret\r\nheader;base64,YQ==",
       expectedMimeType: "image/png",
       expectedByteLength: 1,
+    },
+    {
+      imageData: "data:image/png;base64;charset=utf-8,YQ==",
+      expectedMimeType: "image/png",
+      expectedByteLength: 4,
     },
   ] as const;
 
@@ -78,8 +93,11 @@ test("createRecognitionCapture parses data URL bytes and MIME without trusting h
 
 test("createRecognitionCapture rejects invalid or truncated base64 payloads", () => {
   for (const imageData of [
+    "data:image/png;base64,Y",
     "data:image/png;base64,YQ=",
     "data:image/png;base64,YQ===",
+    "data:image/png;base64,YQ=A",
+    "data:image/png;base64,YQ==A",
     "data:image/png;base64,Y?==",
     "data:image/png;base64,%8",
   ]) {
