@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 
 const root = path.resolve(import.meta.dirname, "..");
 
@@ -19,6 +20,26 @@ test("@umt/extension test builds workspace dependencies before compiling tests",
     script.indexOf("pnpm --filter @umt/core build") < script.indexOf("pnpm build:test"),
     "core must be built before extension test compilation",
   );
+});
+
+test("@umt/core standard test command uses the cross-platform runner and gates 78+ tests", () => {
+  const pkg = JSON.parse(readFileSync(path.join(root, "packages", "core", "package.json"), "utf8"));
+  const script = pkg.scripts?.test ?? "";
+
+  assert.match(script, /node scripts\/run-tests\.mjs/);
+  assert.doesNotMatch(script, /dist\/\*\*\/\*\.test\.js/);
+
+  const result = spawnSync("pnpm --filter @umt/core test", {
+    cwd: root,
+    encoding: "utf8",
+    env: Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("NODE_TEST"))),
+    shell: true,
+    timeout: 60_000,
+  });
+  const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
+  assert.equal(result.status, 0, output);
+  const count = Number(output.match(/CORE_TEST_COUNT=(\d+)/)?.[1] ?? 0);
+  assert.equal(count >= 78, true, `expected CORE_TEST_COUNT >= 78, got ${count}\n${output}`);
 });
 
 test("root test:e2e builds the extension before launching browser tests", () => {

@@ -315,7 +315,7 @@ export class OcrTranslatePipeline {
         crop: { ...sourceInput.recognitionUnit.crop },
         errorKind: classifyGenericOcrError(error).kind,
       });
-      return originalRegions;
+      throw createOcrRescueError(error, variant.id, sourceInput.recognitionUnit);
     }
   }
 }
@@ -328,7 +328,7 @@ interface CoreOcrRescueBudget {
 }
 
 function createOcrRescueBudget(value: number | undefined): CoreOcrRescueBudget {
-  const maximum = Number.isFinite(value) ? Math.max(0, Math.min(3, Math.trunc(value!))) : 0;
+  const maximum = Number.isFinite(value) ? Math.max(0, Math.min(3, Math.trunc(value!))) : 1;
   return { maximum, used: 0 };
 }
 
@@ -401,6 +401,12 @@ function clamp(value: number, minimum: number, maximum: number): number {
 function createOcrTileError(cause: unknown, tileIndex: number, tileCount: number, unit: RecognitionUnit): Error {
   const { crop } = unit;
   const message = `OCR tile ${tileIndex}/${tileCount} (x=${formatDiagnosticNumber(crop.x)},y=${formatDiagnosticNumber(crop.y)},w=${formatDiagnosticNumber(crop.width)},h=${formatDiagnosticNumber(crop.height)}) failed: ${safeErrorMessage(cause)}`;
+  return new Error(message, { cause });
+}
+
+function createOcrRescueError(cause: unknown, variant: OcrPreprocessVariantId, unit: RecognitionUnit): Error {
+  const { crop } = unit;
+  const message = `OCR rescue (${variant}, unit x=${formatDiagnosticNumber(crop.x)},y=${formatDiagnosticNumber(crop.y)},w=${formatDiagnosticNumber(crop.width)},h=${formatDiagnosticNumber(crop.height)}) failed: ${safeErrorMessage(cause)}`;
   return new Error(message, { cause });
 }
 

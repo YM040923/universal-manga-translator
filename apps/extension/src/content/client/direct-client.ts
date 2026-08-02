@@ -58,6 +58,25 @@ interface DirectRecognitionDecision {
   note?: string;
 }
 
+export interface DirectOcrTextEvidenceInput {
+  imageBytes: Uint8Array;
+  imageSize: SurfaceTask["naturalSize"];
+}
+
+export interface DirectOcrTextEvidenceAssessment {
+  likelyText: boolean;
+  edgeDensity?: number;
+  contrast?: number;
+}
+
+export type DirectOcrTextEvidenceProvider = (
+  input: DirectOcrTextEvidenceInput,
+) => Promise<DirectOcrTextEvidenceAssessment> | DirectOcrTextEvidenceAssessment;
+
+export interface DirectClientDependencies {
+  ocrTextEvidenceProvider?: DirectOcrTextEvidenceProvider;
+}
+
 export class DirectClient implements TranslatorClient {
   private readonly fetchImpl: FetchLike;
   private readonly ocrCache: DirectOcrCache;
@@ -68,7 +87,10 @@ export class DirectClient implements TranslatorClient {
   private readonly ocrPreprocessLoader: CoreOcrPreprocessLoader;
   private readonly diagnostics: Array<Record<string, unknown>> = [];
 
-  constructor(private readonly settings: DirectClientSettings) {
+  constructor(
+    private readonly settings: DirectClientSettings,
+    private readonly dependencies: DirectClientDependencies = {},
+  ) {
     this.fetchImpl = settings.__testFetch ?? createExtensionProxyFetch();
     this.ocrCache = settings.__testOcrCache ?? new DirectOcrCache();
     this.manualOverrides = new ExtensionManualOverrideStore(settings.__testManualOverrideStorage);
@@ -189,6 +211,7 @@ export class DirectClient implements TranslatorClient {
       const termCandidates = this.chapterMemory.termCandidatesFor(imageHash);
       const recognitionDecision = this.createRecognitionPlan(task);
       const recognitionPlan = recognitionDecision.plan;
+      const textEvidence = await this.assessAutomaticTextEvidence(imageHash, imageBytes, task, recognitionPlan);
       const preCroppedOcrInputLoader = recognitionPlan.units.length > 1
         ? this.createPreCroppedOcrInputLoader(task.imageData, recognitionPlan)
         : undefined;
@@ -214,6 +237,7 @@ export class DirectClient implements TranslatorClient {
         ...(recognitionPlan.units.length === 1 && recognitionPlan.units[0]
           ? { recognitionUnit: recognitionPlan.units[0] }
           : {}),
+        ...(textEvidence?.likelyText === true ? { likelyTextEvidence: true } : {}),
         ...(preCroppedOcrInputLoader ? { preCroppedOcrInputLoader } : {}),
         maxOcrRescueCallsPerImage: this.settings.directOcr.maxOcrRescueCallsPerImage,
         ocrPreprocessLoader: this.ocrPreprocessLoader,
@@ -353,6 +377,35 @@ export class DirectClient implements TranslatorClient {
     if (this.diagnostics.length > 100) this.diagnostics.length = 100;
   }
 
+  private async assessAutomaticTextEvidence(
+    imageHash: string,
+    imageBytes: Uint8Array,
+    task: SurfaceTask,
+    plan: RecognitionPlan,
+  ): Promise<DirectOcrTextEvidenceAssessment | undefined> {
+    if (plan.units[0]?.reason === "manual-selection" || !this.dependencies.ocrTextEvidenceProvider) return undefined;
+    const assessment = await this.dependencies.ocrTextEvidenceProvider({
+      imageBytes,
+      imageSize: { ...task.naturalSize },
+    });
+    const edgeDensity = normalizeEvidenceMetric(assessment.edgeDensity);
+    const contrast = normalizeEvidenceMetric(assessment.contrast);
+    const safeAssessment: DirectOcrTextEvidenceAssessment = {
+      likelyText: assessment.likelyText === true,
+      ...(edgeDensity !== undefined ? { edgeDensity } : {}),
+      ...(contrast !== undefined ? { contrast } : {}),
+    };
+    this.diagnostics.unshift({
+      type: "ocr-text-evidence",
+      imageId: anonymousImageId(imageHash),
+      likelyText: safeAssessment.likelyText,
+      ...(safeAssessment.edgeDensity !== undefined ? { edgeDensity: safeAssessment.edgeDensity } : {}),
+      ...(safeAssessment.contrast !== undefined ? { contrast: safeAssessment.contrast } : {}),
+    });
+    if (this.diagnostics.length > 100) this.diagnostics.length = 100;
+    return safeAssessment;
+  }
+
   private createTranslator(): OpenAICompatibleTextTranslator {
     return new OpenAICompatibleTextTranslator({
       baseUrl: this.settings.directTranslator.baseUrl,
@@ -381,4 +434,9 @@ export class DirectClient implements TranslatorClient {
 
 function anonymousImageId(imageHash: string): string {
   return `image:${imageHash.slice(0, 12)}`;
+}
+
+function normalizeEvidenceMetric(value: number | undefined): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
+  return Math.round(Math.max(0, Math.min(1, value)) * 10_000) / 10_000;
 }

@@ -145,6 +145,40 @@ test("OcrTranslatePipeline preserves provider errors without image rescue", asyn
   }
 });
 
+test("OcrTranslatePipeline propagates rescue-stage provider errors with safe context and skips translation", async () => {
+  for (const message of [
+    "Network OCR failed: 401 unauthorized",
+    "Network OCR failed: 402 quota exhausted",
+    "Network OCR failed: 429 rate limit reached",
+    "fetch failed: network timeout",
+    "Network OCR failed: 500 provider unavailable",
+  ]) {
+    let ocrCalls = 0;
+    let translatorCalls = 0;
+    const rescueError = new Error(message);
+    const pipeline = pipelineWith(async () => {
+      ocrCalls += 1;
+      if (ocrCalls === 1) return [region("low", "H3LL?", 0.2)];
+      throw rescueError;
+    }, () => { translatorCalls += 1; });
+    let caught: unknown;
+
+    try {
+      await pipeline.process(input({
+        ocrPreprocessLoader: loader(),
+        maxOcrRescueCallsPerImage: 1,
+      }));
+    } catch (error) {
+      caught = error;
+    }
+
+    assert.equal(caught instanceof Error, true, message);
+    assert.match((caught as Error).message, /^OCR rescue \(grayscale-contrast, unit x=0,y=0,w=1000,h=1000\) failed:/, message);
+    assert.equal((caught as Error).cause, rescueError, message);
+    assert.equal(translatorCalls, 0, message);
+  }
+});
+
 test("OcrTranslatePipeline disables rescue completely when the per-image budget is zero", async () => {
   let ocrCalls = 0;
   let rescueLoads = 0;
@@ -161,6 +195,23 @@ test("OcrTranslatePipeline disables rescue completely when the per-image budget 
   assert.equal(ocrCalls, 1);
   assert.equal(rescueLoads, 0);
   assert.equal(result.regions[0]?.sourceText, "H3LL?");
+});
+
+test("OcrTranslatePipeline defaults to one rescue call when the budget is omitted", async () => {
+  let ocrCalls = 0;
+  const pipeline = pipelineWith(async () => {
+    ocrCalls += 1;
+    return ocrCalls === 1
+      ? [region("low", "H3LL?", 0.2)]
+      : [region("better", "HELLO", 0.96)];
+  });
+
+  const result = await pipeline.process(input({
+    ocrPreprocessLoader: loader(),
+  }));
+
+  assert.equal(ocrCalls, 2);
+  assert.equal(result.regions[0]?.sourceText, "HELLO");
 });
 
 test("OcrTranslatePipeline spends rescue budget across the whole tiled image", async () => {
