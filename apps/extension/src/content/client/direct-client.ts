@@ -1,4 +1,11 @@
-import { GenericNetworkOcrClient, OpenAICompatibleTextTranslator, OcrTranslatePipeline } from "@umt/core";
+import {
+  GenericNetworkOcrClient,
+  OpenAICompatibleTextTranslator,
+  OcrTranslatePipeline,
+  planRecognitionUnits,
+  type CorePreCroppedOcrInput,
+  type RecognitionPlan,
+} from "@umt/core";
 import type {
   ApiResponse,
   AvailableModelsResponse,
@@ -24,14 +31,20 @@ import { createExtensionProxyFetch } from "./extension-proxy-fetch.js";
 import { dataUrlToBytes, parseStaticFields, sha256Hex } from "./direct-image-utils.js";
 import { toOverlayRegion } from "./direct-overlay-region.js";
 import type { TranslatorClient } from "./translator-client.js";
+import { cropRecognitionTiles, type RecognitionTileCropper } from "../capture/recognition-tile-cropper.js";
 
 type FetchLike = typeof fetch;
 const TRANSLATION_STYLE_VERSION = "manga-v2";
+export const DIRECT_OCR_TILE_HEIGHT_THRESHOLD = 7200;
+export const DIRECT_OCR_MAX_TILE_HEIGHT = 4096;
+export const DIRECT_OCR_TILE_OVERLAP_RATIO = 0.125;
+const DIRECT_OCR_TILE_PREPROCESSING_VERSION = "lossless-png-tile-v1";
 
 interface DirectClientSettings extends ExtensionSettings {
   __testFetch?: FetchLike;
   __testOcrCache?: DirectOcrCache;
   __testManualOverrideStorage?: ManualOverrideStorage;
+  __testRecognitionTileCropper?: RecognitionTileCropper;
 }
 
 export class DirectClient implements TranslatorClient {
@@ -40,6 +53,8 @@ export class DirectClient implements TranslatorClient {
   private readonly manualOverrides: ExtensionManualOverrideStore;
   private readonly ocrClient: GenericNetworkOcrClient;
   private readonly chapterMemory: ChapterTranslationMemory;
+  private readonly recognitionTileCropper: RecognitionTileCropper;
+  private readonly diagnostics: Array<Record<string, unknown>> = [];
 
   constructor(private readonly settings: DirectClientSettings) {
     this.fetchImpl = settings.__testFetch ?? createExtensionProxyFetch();
@@ -47,6 +62,7 @@ export class DirectClient implements TranslatorClient {
     this.manualOverrides = new ExtensionManualOverrideStore(settings.__testManualOverrideStorage);
     this.ocrClient = this.createOcrClient();
     this.chapterMemory = new ChapterTranslationMemory();
+    this.recognitionTileCropper = settings.__testRecognitionTileCropper ?? cropRecognitionTiles;
   }
 
   async health(): Promise<boolean> {
@@ -129,12 +145,15 @@ export class DirectClient implements TranslatorClient {
     return { ok: true, deleted: await this.ocrCache.clearAll() };
   }
 
-  async recentDiagnostics(): Promise<ApiResponse<DiagnosticsResponse>> {
-    return { ok: true, records: [] };
+  async recentDiagnostics(limit = 10): Promise<ApiResponse<DiagnosticsResponse>> {
+    const safeLimit = Math.max(1, Math.min(100, Math.trunc(limit)));
+    return { ok: true, records: this.diagnostics.slice(0, safeLimit) };
   }
 
   async clearDiagnostics(): Promise<ApiResponse<ClearDiagnosticsResponse>> {
-    return { ok: true, deleted: 0 };
+    const deleted = this.diagnostics.length;
+    this.diagnostics.length = 0;
+    return { ok: true, deleted };
   }
 
   async saveManualOverride(override: ManualOverridePayload): Promise<ApiResponse<SaveManualOverrideResponse>> {
@@ -155,6 +174,11 @@ export class DirectClient implements TranslatorClient {
       const previousTranslations = this.chapterMemory.previousTranslationsFor(imageHash);
       const chapterContext = this.chapterMemory.chapterContextFor(imageHash);
       const termCandidates = this.chapterMemory.termCandidatesFor(imageHash);
+      const recognitionPlan = this.createRecognitionPlan(task);
+      const preCroppedOcrInputs = recognitionPlan.units.length > 1
+        ? await this.createPreCroppedOcrInputs(task.imageData, recognitionPlan)
+        : undefined;
+      this.recordRecognitionPlan(task, recognitionPlan);
       const pipeline = new OcrTranslatePipeline({
         profile: this.providerProfile(),
         ocr: this.ocrClient,
@@ -173,6 +197,7 @@ export class DirectClient implements TranslatorClient {
         chapterContext,
         previousTranslations,
         termCandidates,
+        ...(preCroppedOcrInputs ? { preCroppedOcrInputs } : {}),
       });
       const regions = result.regions.map((region) => toOverlayRegion(region));
       const rawSurfaceResult: SurfaceResult = {
@@ -206,6 +231,68 @@ export class DirectClient implements TranslatorClient {
       attempts: Math.max(1, Math.min(5, this.settings.retryCount + 1)),
       fetch: this.fetchImpl,
     });
+  }
+
+  private createRecognitionPlan(task: SurfaceTask): RecognitionPlan {
+    const fullImagePlan = () => planRecognitionUnits({
+      surfaceId: task.surfaceId,
+      naturalSize: task.naturalSize,
+      maxTileHeight: task.naturalSize.height,
+      overlapRatio: 0,
+      reason: "automatic",
+      preprocessingVersion: "none-v1",
+    });
+    const maxOcrCalls = Math.max(1, Math.trunc(this.settings.directOcr.maxAutoOcrPages));
+    if (task.naturalSize.height <= DIRECT_OCR_TILE_HEIGHT_THRESHOLD || maxOcrCalls === 1) return fullImagePlan();
+
+    let minimumTileHeight = DIRECT_OCR_MAX_TILE_HEIGHT;
+    let maximumTileHeight = task.naturalSize.height;
+    let plan = this.planRecognitionUnits(task, minimumTileHeight);
+    if (plan.units.length <= maxOcrCalls) return plan;
+
+    while (minimumTileHeight < maximumTileHeight) {
+      const candidateHeight = Math.floor((minimumTileHeight + maximumTileHeight) / 2);
+      const candidate = this.planRecognitionUnits(task, candidateHeight);
+      if (candidate.units.length > maxOcrCalls) minimumTileHeight = candidateHeight + 1;
+      else {
+        plan = candidate;
+        maximumTileHeight = candidateHeight;
+      }
+    }
+    return plan.units.length <= maxOcrCalls ? plan : fullImagePlan();
+  }
+
+  private planRecognitionUnits(task: SurfaceTask, maxTileHeight: number): RecognitionPlan {
+    return planRecognitionUnits({
+      surfaceId: task.surfaceId,
+      naturalSize: task.naturalSize,
+      maxTileHeight,
+      overlapRatio: DIRECT_OCR_TILE_OVERLAP_RATIO,
+      reason: "automatic",
+      preprocessingVersion: DIRECT_OCR_TILE_PREPROCESSING_VERSION,
+    });
+  }
+
+  private async createPreCroppedOcrInputs(imageData: string, plan: RecognitionPlan): Promise<CorePreCroppedOcrInput[]> {
+    const tiles = await this.recognitionTileCropper(imageData, plan.units);
+    return tiles.map((tile, index) => ({
+      imageBytes: tile.imageBytes,
+      fileName: `recognition-tile-${index + 1}.png`,
+      mimeType: tile.mimeType,
+      recognitionUnit: tile.unit,
+    }));
+  }
+
+  private recordRecognitionPlan(task: SurfaceTask, plan: RecognitionPlan): void {
+    this.diagnostics.unshift({
+      type: "recognition-tiling",
+      surfaceId: task.surfaceId,
+      naturalSize: { ...task.naturalSize },
+      tileCount: plan.units.length,
+      overlapPx: plan.overlapPx,
+      crops: plan.units.map((unit) => ({ ...unit.crop })),
+    });
+    if (this.diagnostics.length > 100) this.diagnostics.length = 100;
   }
 
   private createTranslator(): OpenAICompatibleTextTranslator {

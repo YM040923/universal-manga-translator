@@ -1,4 +1,4 @@
-import type { Rect, TextRegion } from "@umt/shared";
+import type { RecognitionUnit, Rect, TextRegion } from "@umt/shared";
 import type { ApiKeyPoolStatus } from "./api-key-pool.js";
 import type { GenericOcrImageInput, GenericOcrRegion } from "./generic-ocr.js";
 import type { TextTranslationItem, TextTranslationOptions, TextTranslationProvider, TextTranslationResult } from "./openai-translator.js";
@@ -16,10 +16,15 @@ export interface CorePipelineInput extends GenericOcrImageInput {
   chapterContext?: string;
   previousTranslations?: Array<{ id: string; translatedText: string }>;
   termCandidates?: string[];
+  preCroppedOcrInputs?: CorePreCroppedOcrInput[];
+}
+
+export interface CorePreCroppedOcrInput extends GenericOcrImageInput {
+  recognitionUnit: RecognitionUnit;
 }
 
 export interface CoreOcrProvider {
-  recognize(input: CorePipelineInput): Promise<GenericOcrRegion[]>;
+  recognize(input: CorePipelineInput | CorePreCroppedOcrInput): Promise<GenericOcrRegion[]>;
   keyStatus?(): ApiKeyPoolStatus;
 }
 
@@ -87,11 +92,32 @@ export class OcrTranslatePipeline {
   }
 
   private async readOcrRegions(input: CorePipelineInput): Promise<GenericOcrRegion[]> {
+    if (input.preCroppedOcrInputs?.length) {
+      const regions: GenericOcrRegion[] = [];
+      for (const ocrInput of input.preCroppedOcrInputs) {
+        const localRegions = await this.readSingleOcrInput(input, ocrInput);
+        regions.push(...localRegions.map((region) => remapRegionToParent(region, ocrInput.recognitionUnit, input.width, input.height)));
+      }
+      return regions;
+    }
+    return this.readSingleOcrInput(input, input);
+  }
+
+  private async readSingleOcrInput(
+    parentInput: CorePipelineInput,
+    ocrInput: CorePipelineInput | CorePreCroppedOcrInput,
+  ): Promise<GenericOcrRegion[]> {
     if (!this.options.ocrCache) {
       this.lastOcrCacheStatus = "disabled";
-      return this.options.ocr.recognize(input);
+      return this.options.ocr.recognize(ocrInput);
     }
-    const key = buildOcrCacheKey(this.profile, input);
+    const key = buildOcrCacheKey(this.profile, {
+      imageHash: parentInput.imageHash,
+      width: parentInput.width,
+      height: parentInput.height,
+      sourceLanguage: parentInput.sourceLanguage,
+      ...("recognitionUnit" in ocrInput ? { recognitionUnit: ocrInput.recognitionUnit } : {}),
+    });
     const cached = await this.options.ocrCache.get(key);
     if (cached) {
       this.lastOcrCacheStatus = "hit";
@@ -104,7 +130,7 @@ export class OcrTranslatePipeline {
     }
     this.lastOcrCacheStatus = "miss";
     const read = (async () => {
-      const regions = await this.options.ocr.recognize(input);
+      const regions = await this.options.ocr.recognize(ocrInput);
       if (regions.length > 0) await this.options.ocrCache!.set(key, regions);
       return regions;
     })();
@@ -118,6 +144,32 @@ export class OcrTranslatePipeline {
 }
 
 const inFlightOcrReads = new Map<string, Promise<GenericOcrRegion[]>>();
+
+function remapRegionToParent(
+  region: GenericOcrRegion,
+  unit: RecognitionUnit,
+  parentWidth: number,
+  parentHeight: number,
+): GenericOcrRegion {
+  const left = clamp(unit.crop.x + region.box.x / unit.scaleX, 0, parentWidth);
+  const top = clamp(unit.crop.y + region.box.y / unit.scaleY, 0, parentHeight);
+  const right = clamp(unit.crop.x + (region.box.x + region.box.width) / unit.scaleX, 0, parentWidth);
+  const bottom = clamp(unit.crop.y + (region.box.y + region.box.height) / unit.scaleY, 0, parentHeight);
+  return {
+    ...region,
+    id: `${unit.id}:${region.id}`,
+    box: {
+      x: left,
+      y: top,
+      width: Math.max(0, right - left),
+      height: Math.max(0, bottom - top),
+    },
+  };
+}
+
+function clamp(value: number, minimum: number, maximum: number): number {
+  return Math.min(maximum, Math.max(minimum, value));
+}
 
 function buildTranslationItems(regions: GenericOcrRegion[]): TextTranslationItem[] {
   return regions.map((region, index) => ({
@@ -220,14 +272,30 @@ function isSingleNameCandidate(term: string): boolean {
   return /^[A-Z][a-z][A-Za-z'\-]{2,}$/.test(term) && !COMMON_CAPITALIZED_WORDS.has(term);
 }
 
-export function buildOcrCacheKey(profile: string, input: { imageHash: string; width: number; height: number; sourceLanguage: string }): string {
-  return JSON.stringify({
+export function buildOcrCacheKey(
+  profile: string,
+  input: {
+    imageHash: string;
+    width: number;
+    height: number;
+    sourceLanguage: string;
+    recognitionUnit?: RecognitionUnit;
+  },
+): string {
+  const base = {
     v: 1,
     ocrProfile: profile.split("+openai-compatible:")[0],
     imageHash: input.imageHash,
     width: input.width,
     height: input.height,
     sourceLanguage: input.sourceLanguage,
+  };
+  if (!input.recognitionUnit) return JSON.stringify(base);
+  return JSON.stringify({
+    ...base,
+    v: 2,
+    crop: input.recognitionUnit.crop,
+    preprocessingVersion: input.recognitionUnit.preprocessingVersion,
   });
 }
 

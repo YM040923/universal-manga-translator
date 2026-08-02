@@ -5,6 +5,7 @@ import { DirectClient } from "./direct-client.js";
 import type { ExtensionSettings } from "../../settings/settings.js";
 import { DEFAULT_SETTINGS } from "../../settings/settings.js";
 import { DirectOcrCache } from "../cache/direct-ocr-cache.js";
+import type { RecognitionTileCropper } from "../capture/recognition-tile-cropper.js";
 
 function task(overrides: Partial<SurfaceTask> = {}): SurfaceTask {
   return {
@@ -45,6 +46,15 @@ function settings(fetchImpl: typeof fetch): ExtensionSettings {
 
 function settingsWithCache(fetchImpl: typeof fetch, cache: DirectOcrCache): ExtensionSettings {
   return { ...settings(fetchImpl), __testOcrCache: cache } as ExtensionSettings & { __testFetch: typeof fetch; __testOcrCache: DirectOcrCache };
+}
+
+function settingsWithTileCropper(fetchImpl: typeof fetch, cropper: RecognitionTileCropper, maxOcrCalls = DEFAULT_SETTINGS.directOcr.maxAutoOcrPages): ExtensionSettings {
+  const base = settings(fetchImpl);
+  return {
+    ...base,
+    directOcr: { ...base.directOcr, maxAutoOcrPages: maxOcrCalls },
+    __testRecognitionTileCropper: cropper,
+  } as ExtensionSettings & { __testFetch: typeof fetch; __testRecognitionTileCropper: RecognitionTileCropper };
 }
 
 test("DirectClient submits imageData through OCR and translator", async () => {
@@ -435,4 +445,85 @@ test("DirectClient excludes deleted manual overrides from retranslate guidance",
 
   assert.doesNotMatch(prompts[1] ?? "", /Previous translations/);
   assert.doesNotMatch(prompts[1] ?? "", /不要翻译这个/);
+});
+
+test("DirectClient sends tall images through multiple ordered OCR tiles and one translation", async () => {
+  let ocrCalls = 0;
+  let translatorCalls = 0;
+  const croppedYs: number[] = [];
+  const cropper: RecognitionTileCropper = async (_imageData, units) => units.map((unit, index) => {
+    croppedYs.push(unit.crop.y);
+    return {
+      unit,
+      imageData: `data:image/png;base64,${index % 2 === 0 ? "AQ==" : "Ag=="}`,
+      imageBytes: new Uint8Array([index + 1]),
+      mimeType: "image/png",
+    };
+  });
+  const fetchImpl = (async (url) => {
+    if (String(url).includes("ocr")) {
+      ocrCalls += 1;
+      return new Response(JSON.stringify({
+        words_result: [{ words: `TILE ${ocrCalls}`, location: { left: 10, top: 20, width: 80, height: 20 } }],
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    translatorCalls += 1;
+    return new Response(JSON.stringify({ choices: [{ message: { content: "" } }] }), { status: 200, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+  const client = new DirectClient(settingsWithTileCropper(fetchImpl, cropper));
+
+  const response = await client.submit(task({ naturalSize: { width: 1000, height: 16000 }, renderSize: { width: 1000, height: 16000 } }));
+
+  assert.equal(response.ok, true);
+  assert.equal(ocrCalls > 1, true);
+  assert.equal(translatorCalls, 1);
+  assert.equal(croppedYs[0], 0);
+  assert.deepEqual(croppedYs, [...croppedYs].sort((a, b) => a - b));
+  const diagnostics = await client.recentDiagnostics();
+  assert.equal(diagnostics.ok, true);
+  assert.equal(diagnostics.ok && Number(diagnostics.records[0]?.tileCount) > 1, true);
+  assert.equal(JSON.stringify(diagnostics).includes("imageData"), false);
+});
+
+test("DirectClient keeps short images on one OCR request without invoking the tile cropper", async () => {
+  let ocrCalls = 0;
+  let translatorCalls = 0;
+  const fetchImpl = (async (url) => {
+    if (String(url).includes("ocr")) {
+      ocrCalls += 1;
+      return new Response(JSON.stringify({ words_result: [{ words: "SHORT", location: { left: 10, top: 20, width: 80, height: 20 } }] }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    translatorCalls += 1;
+    return new Response(JSON.stringify({ choices: [{ message: { content: "" } }] }), { status: 200, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+  const cropper: RecognitionTileCropper = async () => {
+    throw new Error("short images must not be cropped");
+  };
+  const client = new DirectClient(settingsWithTileCropper(fetchImpl, cropper));
+
+  const response = await client.submit(task({ naturalSize: { width: 1000, height: 6000 }, renderSize: { width: 1000, height: 6000 } }));
+
+  assert.equal(response.ok, true);
+  assert.equal(ocrCalls, 1);
+  assert.equal(translatorCalls, 1);
+});
+
+test("DirectClient keeps a tall image whole when the OCR call cap is one", async () => {
+  let ocrCalls = 0;
+  const fetchImpl = (async (url) => {
+    if (String(url).includes("ocr")) {
+      ocrCalls += 1;
+      return new Response(JSON.stringify({ words_result: [{ words: "WHOLE", location: { left: 10, top: 20, width: 80, height: 20 } }] }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    return new Response(JSON.stringify({ choices: [{ message: { content: "" } }] }), { status: 200, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+  const cropper: RecognitionTileCropper = async () => {
+    throw new Error("cap=1 must preserve whole-image OCR");
+  };
+  const client = new DirectClient(settingsWithTileCropper(fetchImpl, cropper, 1));
+
+  const response = await client.submit(task({ naturalSize: { width: 1000, height: 16000 }, renderSize: { width: 1000, height: 16000 } }));
+
+  assert.equal(response.ok, true);
+  assert.equal(ocrCalls, 1);
 });
