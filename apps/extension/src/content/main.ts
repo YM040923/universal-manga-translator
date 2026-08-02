@@ -9,7 +9,6 @@ import { createSurfaceTask, createSurfaceTaskWithImageData, createSurfaceTaskWit
 import { createScreenshotSurfaceCapture, readImageSize } from "./capture/screenshot-crop";
 import { requestVisibleTabScreenshot } from "./capture/screenshot-request";
 import { captureWithRecognitionSummary } from "./capture/recognition-capture-log";
-import { createBrowserOcrTextEvidenceProvider } from "./capture/ocr-text-evidence";
 import { DebugOverlayRenderer } from "./debug-overlay-renderer";
 import { createContentLogger } from "./content-logger";
 import type { ServerEvent } from "@umt/shared/protocol";
@@ -42,7 +41,6 @@ if (bootstrapWindow.__umtContentBootstrapState !== "starting" && bootstrapWindow
 async function bootstrap(): Promise<boolean> {
   let settings = await loadSettings();
   if (!isSiteEnabled(settings, window.location.href)) return false;
-  const ocrTextEvidenceProvider = createBrowserOcrTextEvidenceProvider();
   let client = createClient(settings);
   let renderer = createRenderer(settings, client);
   const debugRenderer = new DebugOverlayRenderer();
@@ -70,7 +68,7 @@ async function bootstrap(): Promise<boolean> {
   function createClient(current: ExtensionSettings): TranslatorClient {
     return current.runMode === "backend"
       ? new BackendClient(current.backendUrl, { timeoutMs: current.requestTimeoutMs, retryCount: current.retryCount, backendHttp: requestBackendHttp })
-      : new DirectClient(current, { ocrTextEvidenceProvider });
+      : new DirectClient(current);
   }
 
   function createRenderer(current: ExtensionSettings, translator: TranslatorClient): OverlayRenderer {

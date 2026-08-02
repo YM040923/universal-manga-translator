@@ -36,16 +36,6 @@ import { toOverlayRegion } from "./direct-overlay-region.js";
 import type { TranslatorClient } from "./translator-client.js";
 import { cropRecognitionTiles, type RecognitionTileCropper } from "../capture/recognition-tile-cropper.js";
 import { createBrowserOcrPreprocessLoader } from "../capture/browser-ocr-preprocess.js";
-import type {
-  DirectOcrTextEvidenceAssessment,
-  DirectOcrTextEvidenceProvider,
-} from "../capture/ocr-text-evidence.js";
-
-export type {
-  DirectOcrTextEvidenceAssessment,
-  DirectOcrTextEvidenceInput,
-  DirectOcrTextEvidenceProvider,
-} from "../capture/ocr-text-evidence.js";
 
 type FetchLike = typeof fetch;
 const TRANSLATION_STYLE_VERSION = "manga-v2";
@@ -68,10 +58,6 @@ interface DirectRecognitionDecision {
   note?: string;
 }
 
-export interface DirectClientDependencies {
-  ocrTextEvidenceProvider?: DirectOcrTextEvidenceProvider;
-}
-
 export class DirectClient implements TranslatorClient {
   private readonly fetchImpl: FetchLike;
   private readonly ocrCache: DirectOcrCache;
@@ -82,10 +68,7 @@ export class DirectClient implements TranslatorClient {
   private readonly ocrPreprocessLoader: CoreOcrPreprocessLoader;
   private readonly diagnostics: Array<Record<string, unknown>> = [];
 
-  constructor(
-    private readonly settings: DirectClientSettings,
-    private readonly dependencies: DirectClientDependencies = {},
-  ) {
+  constructor(private readonly settings: DirectClientSettings) {
     this.fetchImpl = settings.__testFetch ?? createExtensionProxyFetch();
     this.ocrCache = settings.__testOcrCache ?? new DirectOcrCache();
     this.manualOverrides = new ExtensionManualOverrideStore(settings.__testManualOverrideStorage);
@@ -206,7 +189,6 @@ export class DirectClient implements TranslatorClient {
       const termCandidates = this.chapterMemory.termCandidatesFor(imageHash);
       const recognitionDecision = this.createRecognitionPlan(task);
       const recognitionPlan = recognitionDecision.plan;
-      const textEvidence = await this.assessAutomaticTextEvidence(imageHash, imageBytes, task, recognitionPlan);
       const preCroppedOcrInputLoader = recognitionPlan.units.length > 1
         ? this.createPreCroppedOcrInputLoader(task.imageData, recognitionPlan)
         : undefined;
@@ -232,7 +214,9 @@ export class DirectClient implements TranslatorClient {
         ...(recognitionPlan.units.length === 1 && recognitionPlan.units[0]
           ? { recognitionUnit: recognitionPlan.units[0] }
           : {}),
-        ...(textEvidence?.likelyText === true ? { likelyTextEvidence: true } : {}),
+        // Automatic empty rescue is deferred until Task 6 can provide bubble-aware
+        // structural evidence. Do not infer likelyTextEvidence from raw pixels.
+        // Manual selections remain the only production empty-OCR rescue signal.
         ...(preCroppedOcrInputLoader ? { preCroppedOcrInputLoader } : {}),
         maxOcrRescueCallsPerImage: this.settings.directOcr.maxOcrRescueCallsPerImage,
         ocrPreprocessLoader: this.ocrPreprocessLoader,
@@ -372,64 +356,6 @@ export class DirectClient implements TranslatorClient {
     if (this.diagnostics.length > 100) this.diagnostics.length = 100;
   }
 
-  private async assessAutomaticTextEvidence(
-    imageHash: string,
-    imageBytes: Uint8Array,
-    task: SurfaceTask,
-    plan: RecognitionPlan,
-  ): Promise<DirectOcrTextEvidenceAssessment | undefined> {
-    const recognitionUnit = plan.units.length === 1 ? plan.units[0] : undefined;
-    if (
-      !recognitionUnit
-      || recognitionUnit.reason === "manual-selection"
-      || !this.dependencies.ocrTextEvidenceProvider
-    ) {
-      return undefined;
-    }
-    let assessment: DirectOcrTextEvidenceAssessment;
-    try {
-      assessment = await this.dependencies.ocrTextEvidenceProvider({
-        imageBytes,
-        imageSize: { ...task.naturalSize },
-        recognitionUnit,
-      });
-    } catch {
-      assessment = {
-        likelyText: false,
-        edgeDensity: 0,
-        contrast: 0,
-        candidateWindowCount: 0,
-        candidateClusterCount: 0,
-        glyphLikeComponentCount: 0,
-      };
-    }
-    const edgeDensity = normalizeEvidenceMetric(assessment.edgeDensity);
-    const contrast = normalizeEvidenceMetric(assessment.contrast);
-    const candidateWindowCount = normalizeEvidenceCount(assessment.candidateWindowCount);
-    const candidateClusterCount = normalizeEvidenceCount(assessment.candidateClusterCount);
-    const glyphLikeComponentCount = normalizeEvidenceCount(assessment.glyphLikeComponentCount);
-    const safeAssessment: DirectOcrTextEvidenceAssessment = {
-      likelyText: assessment.likelyText === true,
-      edgeDensity: edgeDensity ?? 0,
-      contrast: contrast ?? 0,
-      candidateWindowCount,
-      candidateClusterCount,
-      glyphLikeComponentCount,
-    };
-    this.diagnostics.unshift({
-      type: "ocr-text-evidence",
-      imageId: anonymousImageId(imageHash),
-      likelyText: safeAssessment.likelyText,
-      edgeDensity: safeAssessment.edgeDensity,
-      contrast: safeAssessment.contrast,
-      candidateWindowCount: safeAssessment.candidateWindowCount,
-      candidateClusterCount: safeAssessment.candidateClusterCount,
-      glyphLikeComponentCount: safeAssessment.glyphLikeComponentCount,
-    });
-    if (this.diagnostics.length > 100) this.diagnostics.length = 100;
-    return safeAssessment;
-  }
-
   private createTranslator(): OpenAICompatibleTextTranslator {
     return new OpenAICompatibleTextTranslator({
       baseUrl: this.settings.directTranslator.baseUrl,
@@ -458,14 +384,4 @@ export class DirectClient implements TranslatorClient {
 
 function anonymousImageId(imageHash: string): string {
   return `image:${imageHash.slice(0, 12)}`;
-}
-
-function normalizeEvidenceMetric(value: number | undefined): number | undefined {
-  if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
-  return Math.round(Math.max(0, Math.min(1, value)) * 10_000) / 10_000;
-}
-
-function normalizeEvidenceCount(value: number | undefined): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) return 0;
-  return Math.max(0, Math.min(10_000, Math.trunc(value)));
 }

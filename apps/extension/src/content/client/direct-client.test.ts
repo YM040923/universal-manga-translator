@@ -15,10 +15,6 @@ import type { ExtensionSettings } from "../../settings/settings.js";
 import { DEFAULT_SETTINGS } from "../../settings/settings.js";
 import { DirectOcrCache } from "../cache/direct-ocr-cache.js";
 import type { RecognitionTileCropper } from "../capture/recognition-tile-cropper.js";
-import {
-  createBrowserOcrTextEvidenceProvider,
-  type OcrTextEvidencePixelInput,
-} from "../capture/ocr-text-evidence.js";
 
 function task(overrides: Partial<SurfaceTask> = {}): SurfaceTask {
   return {
@@ -500,7 +496,7 @@ test("DirectClient sends tall images through multiple ordered OCR tiles and one 
   assert.equal(diagnosticText.includes("secret-signature"), false);
 });
 
-test("DirectClient runs one bounded quality rescue and records safe diagnostics", async () => {
+test("DirectClient rescues automatic non-empty low-confidence OCR and selects the better result", async () => {
   let ocrCalls = 0;
   let translatorCalls = 0;
   const variants: string[] = [];
@@ -559,17 +555,21 @@ test("DirectClient runs one bounded quality rescue and records safe diagnostics"
   assert.equal(diagnosticText.includes("https://"), false);
 });
 
-test("DirectClient can rescue an empty manual selection but not an automatic empty image", async () => {
+test("DirectClient rescues manual empty OCR once but defers automatic empty rescue", async () => {
   for (const mode of ["manual", "automatic"] as const) {
     let ocrCalls = 0;
+    let preprocessCalls = 0;
     const preprocessLoader: CoreOcrPreprocessLoader = {
-      withVariant: async (source, variant, consume) => consume({
-        imageBytes: new Uint8Array([8]),
-        fileName: `${variant.id}.png`,
-        mimeType: "image/png",
-        recognitionUnit: applyOcrPreprocessVariantToUnit(source.recognitionUnit, variant),
-        ocrVariant: variant.id,
-      }),
+      withVariant: async (source, variant, consume) => {
+        preprocessCalls += 1;
+        return consume({
+          imageBytes: new Uint8Array([8]),
+          fileName: `${variant.id}.png`,
+          mimeType: "image/png",
+          recognitionUnit: applyOcrPreprocessVariantToUnit(source.recognitionUnit, variant),
+          ocrVariant: variant.id,
+        });
+      },
     };
     const fetchImpl = (async (url) => {
       if (String(url).includes("ocr")) {
@@ -595,46 +595,30 @@ test("DirectClient can rescue an empty manual selection but not an automatic emp
 
     assert.equal(response.ok, true, mode);
     assert.equal(ocrCalls, mode === "manual" ? 2 : 1, mode);
+    assert.equal(preprocessCalls, mode === "manual" ? 1 : 0, mode);
   }
 });
 
-test("DirectClient rescues automatic empty OCR only when the injected evidence provider returns likely text", async () => {
-  for (const likelyText of [true, false]) {
+test("DirectClient does not infer automatic empty rescue from halftone, face, rivet, or vertical pixel fixtures", async () => {
+  for (const fixture of automaticEmptyPixelFixtures()) {
     let ocrCalls = 0;
-    let evidenceCalls = 0;
     let preprocessCalls = 0;
+    let translatorCalls = 0;
     const preprocessLoader: CoreOcrPreprocessLoader = {
-      withVariant: async (source, variant, consume) => {
+      withVariant: async () => {
         preprocessCalls += 1;
-        return consume({
-          imageBytes: new Uint8Array([8]),
-          fileName: `${variant.id}.png`,
-          mimeType: "image/png",
-          recognitionUnit: applyOcrPreprocessVariantToUnit(source.recognitionUnit, variant),
-          ocrVariant: variant.id,
-        });
+        throw new Error("automatic empty OCR must not preprocess without bubble-aware evidence");
       },
     };
-    const evidenceProvider = createBrowserOcrTextEvidenceProvider({
-      readPixels: async (evidenceInput) => {
-        evidenceCalls += 1;
-        assert.equal(evidenceInput.imageBytes.byteLength > 0, true);
-        assert.deepEqual(evidenceInput.imageSize, { width: 100, height: 100 });
-        assert.equal(evidenceInput.recognitionUnit.reason, "automatic");
-        return likelyText ? glyphEvidencePixels() : blankEvidencePixels();
-      },
-    });
     const fetchImpl = (async (url) => {
       if (String(url).includes("ocr")) {
         ocrCalls += 1;
-        return new Response(JSON.stringify({
-          words_result: ocrCalls === 1 ? [] : [{
-            words: "FOUND",
-            score: 0.95,
-            location: { left: 10, top: 20, width: 80, height: 20 },
-          }],
-        }), { status: 200, headers: { "content-type": "application/json" } });
+        return new Response(JSON.stringify({ words_result: [] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
       }
+      translatorCalls += 1;
       return new Response(JSON.stringify({ choices: [{ message: { content: "" } }] }), { status: 200, headers: { "content-type": "application/json" } });
     }) as typeof fetch;
     const base = settings(fetchImpl);
@@ -642,27 +626,26 @@ test("DirectClient rescues automatic empty OCR only when the injected evidence p
       ...base,
       directOcr: { ...base.directOcr, maxOcrRescueCallsPerImage: 1 },
       __testOcrPreprocessLoader: preprocessLoader,
-    } as ExtensionSettings & { __testOcrPreprocessLoader: CoreOcrPreprocessLoader }, {
-      ocrTextEvidenceProvider: evidenceProvider,
-    });
+    } as ExtensionSettings & { __testOcrPreprocessLoader: CoreOcrPreprocessLoader });
 
-    const response = await client.submit(task({ surfaceId: `surface:evidence:${likelyText}` }));
+    const response = await client.submit(task({
+      surfaceId: `surface:pixel-only:${fixture.name}`,
+      imageData: fixture.imageData,
+      naturalSize: fixture.size,
+      renderSize: fixture.size,
+    }));
 
-    assert.equal(response.ok, true, String(likelyText));
-    assert.equal(evidenceCalls, 1, String(likelyText));
-    assert.equal(ocrCalls, likelyText ? 2 : 1, String(likelyText));
-    assert.equal(preprocessCalls, likelyText ? 1 : 0, String(likelyText));
+    assert.equal(response.ok, true, fixture.name);
+    assert.equal(response.status, "empty", fixture.name);
+    assert.equal(ocrCalls, 1, fixture.name);
+    assert.equal(preprocessCalls, 0, fixture.name);
+    assert.equal(translatorCalls, 0, fixture.name);
     const diagnostics = await client.recentDiagnostics();
-    const evidence = diagnostics.ok ? diagnostics.records.find((record) => record.type === "ocr-text-evidence") : undefined;
-    assert.equal(evidence?.likelyText, likelyText);
-    assert.equal(Number(evidence?.edgeDensity) >= 0, true);
-    assert.equal(Number(evidence?.contrast) >= 0, true);
-    assert.equal(likelyText ? Number(evidence?.candidateWindowCount) >= 2 : evidence?.candidateWindowCount === 0, true);
-    assert.equal(likelyText ? Number(evidence?.candidateClusterCount) >= 1 : evidence?.candidateClusterCount === 0, true);
-    assert.equal(likelyText ? Number(evidence?.glyphLikeComponentCount) >= 4 : evidence?.glyphLikeComponentCount === 0, true);
-    const diagnosticText = JSON.stringify(evidence);
-    assert.equal(diagnosticText.includes("data:image"), false);
-    assert.equal(diagnosticText.includes("https://"), false);
+    assert.equal(
+      diagnostics.ok && diagnostics.records.some((record) => record.type === "ocr-text-evidence"),
+      false,
+      fixture.name,
+    );
   }
 });
 
@@ -704,55 +687,6 @@ test("DirectClient fails submit and skips translator when rescue OCR returns a p
   assert.equal(response.ok, false);
   assert.match(response.ok ? "" : response.error, /^OCR rescue \(grayscale-contrast, unit x=0,y=0,w=100,h=100\) failed:/);
   assert.equal(translatorCalls, 0);
-});
-
-test("DirectClient safely treats evidence provider failures as false", async () => {
-  let ocrCalls = 0;
-  let preprocessCalls = 0;
-  const preprocessLoader: CoreOcrPreprocessLoader = {
-    withVariant: async () => {
-      preprocessCalls += 1;
-      throw new Error("must not preprocess");
-    },
-  };
-  const fetchImpl = (async (url) => {
-    if (String(url).includes("ocr")) {
-      ocrCalls += 1;
-      return new Response(JSON.stringify({ words_result: [] }), { status: 200, headers: { "content-type": "application/json" } });
-    }
-    return new Response(JSON.stringify({ choices: [{ message: { content: "" } }] }), { status: 200, headers: { "content-type": "application/json" } });
-  }) as typeof fetch;
-  const base = settings(fetchImpl);
-  const client = new DirectClient({
-    ...base,
-    __testOcrPreprocessLoader: preprocessLoader,
-  } as ExtensionSettings & { __testOcrPreprocessLoader: CoreOcrPreprocessLoader }, {
-    ocrTextEvidenceProvider: async () => { throw new Error("local decode failed"); },
-  });
-
-  const response = await client.submit(task());
-
-  assert.equal(response.ok, true);
-  assert.equal(response.status, "empty");
-  assert.equal(ocrCalls, 1);
-  assert.equal(preprocessCalls, 0);
-  const diagnostics = await client.recentDiagnostics();
-  const evidence = diagnostics.ok ? diagnostics.records.find((record) => record.type === "ocr-text-evidence") : undefined;
-  assert.deepEqual({
-    likelyText: evidence?.likelyText,
-    edgeDensity: evidence?.edgeDensity,
-    contrast: evidence?.contrast,
-    candidateWindowCount: evidence?.candidateWindowCount,
-    candidateClusterCount: evidence?.candidateClusterCount,
-    glyphLikeComponentCount: evidence?.glyphLikeComponentCount,
-  }, {
-    likelyText: false,
-    edgeDensity: 0,
-    contrast: 0,
-    candidateWindowCount: 0,
-    candidateClusterCount: 0,
-    glyphLikeComponentCount: 0,
-  });
 });
 
 test("DirectClient keeps short images on one OCR request without invoking the tile cropper", async () => {
@@ -971,40 +905,87 @@ test("DirectClient rejects browser-unsafe image dimensions before invoking the t
   assert.equal(fetchCalls, 0);
 });
 
-function blankEvidencePixels(): OcrTextEvidencePixelInput {
-  return createEvidencePixels((data) => {
-    data.fill(255);
-  });
+function automaticEmptyPixelFixtures(): Array<{
+  name: string;
+  imageData: string;
+  size: { width: number; height: number };
+}> {
+  const size = { width: 48, height: 48 };
+  return [
+    {
+      name: "halftone",
+      size,
+      imageData: bmpFixtureDataUrl(size.width, size.height, (set) => {
+        for (let y = 2; y < size.height; y += 4) {
+          for (let x = 2; x < size.width; x += 4) set(x, y, 32);
+        }
+      }),
+    },
+    {
+      name: "face",
+      size,
+      imageData: bmpFixtureDataUrl(size.width, size.height, (set) => {
+        drawFixtureEllipse(set, 24, 24, 17, 20, 36);
+        fillFixtureRect(set, 15, 18, 4, 5, 24);
+        fillFixtureRect(set, 29, 18, 4, 5, 24);
+        drawFixtureArc(set, 24, 27, 10, 7, 24);
+      }),
+    },
+    {
+      name: "rivets",
+      size,
+      imageData: bmpFixtureDataUrl(size.width, size.height, (set) => {
+        for (const y of [12, 24, 36]) {
+          for (const x of [12, 24, 36]) drawFixtureDisk(set, x, y, 3, 28);
+        }
+      }),
+    },
+    {
+      name: "vertical",
+      size,
+      imageData: bmpFixtureDataUrl(size.width, size.height, (set) => {
+        for (const y of [5, 16, 27, 38]) {
+          fillFixtureRect(set, 21, y, 3, 8, 20);
+          fillFixtureRect(set, 21, y, 8, 2, 20);
+        }
+      }),
+    },
+  ];
 }
 
-function glyphEvidencePixels(): OcrTextEvidencePixelInput {
-  return createEvidencePixels((data, width) => {
-    data.fill(255);
-    for (const [startX, startY] of [[22, 34], [68, 76]] as const) {
-      for (let glyph = 0; glyph < 4; glyph += 1) {
-        const x = startX + glyph * 9;
-        fillEvidenceRect(data, width, x, startY, 3, 22, 24);
-        fillEvidenceRect(data, width, x, startY, 7, 3, 24);
-        fillEvidenceRect(data, width, x, startY + 10, 6, 3, 24);
-      }
-    }
-  });
+type FixturePixelWriter = (x: number, y: number, value: number) => void;
+
+function bmpFixtureDataUrl(
+  width: number,
+  height: number,
+  draw: (set: FixturePixelWriter) => void,
+): string {
+  const pixelBytes = width * height * 4;
+  const buffer = Buffer.alloc(54 + pixelBytes, 0);
+  buffer.fill(255, 54);
+  buffer.write("BM", 0, "ascii");
+  buffer.writeUInt32LE(buffer.length, 2);
+  buffer.writeUInt32LE(54, 10);
+  buffer.writeUInt32LE(40, 14);
+  buffer.writeInt32LE(width, 18);
+  buffer.writeInt32LE(-height, 22);
+  buffer.writeUInt16LE(1, 26);
+  buffer.writeUInt16LE(32, 28);
+  buffer.writeUInt32LE(pixelBytes, 34);
+  const set: FixturePixelWriter = (x, y, value) => {
+    if (x < 0 || x >= width || y < 0 || y >= height) return;
+    const offset = 54 + (y * width + x) * 4;
+    buffer[offset] = value;
+    buffer[offset + 1] = value;
+    buffer[offset + 2] = value;
+    buffer[offset + 3] = 255;
+  };
+  draw(set);
+  return `data:image/bmp;base64,${buffer.toString("base64")}`;
 }
 
-function createEvidencePixels(
-  draw: (data: Uint8ClampedArray, width: number, height: number) => void,
-): OcrTextEvidencePixelInput {
-  const width = 128;
-  const height = 128;
-  const data = new Uint8ClampedArray(width * height * 4);
-  draw(data, width, height);
-  for (let pixel = 0; pixel < width * height; pixel += 1) data[pixel * 4 + 3] = 255;
-  return { width, height, data };
-}
-
-function fillEvidenceRect(
-  data: Uint8ClampedArray,
-  imageWidth: number,
+function fillFixtureRect(
+  set: FixturePixelWriter,
   x: number,
   y: number,
   width: number,
@@ -1012,11 +993,56 @@ function fillEvidenceRect(
   value: number,
 ): void {
   for (let row = y; row < y + height; row += 1) {
-    for (let column = x; column < x + width; column += 1) {
-      const offset = (row * imageWidth + column) * 4;
-      data[offset] = value;
-      data[offset + 1] = value;
-      data[offset + 2] = value;
+    for (let column = x; column < x + width; column += 1) set(column, row, value);
+  }
+}
+
+function drawFixtureEllipse(
+  set: FixturePixelWriter,
+  centerX: number,
+  centerY: number,
+  radiusX: number,
+  radiusY: number,
+  value: number,
+): void {
+  for (let degrees = 0; degrees < 360; degrees += 2) {
+    const radians = degrees * Math.PI / 180;
+    set(
+      Math.round(centerX + Math.cos(radians) * radiusX),
+      Math.round(centerY + Math.sin(radians) * radiusY),
+      value,
+    );
+  }
+}
+
+function drawFixtureArc(
+  set: FixturePixelWriter,
+  centerX: number,
+  centerY: number,
+  radiusX: number,
+  radiusY: number,
+  value: number,
+): void {
+  for (let degrees = 20; degrees <= 160; degrees += 3) {
+    const radians = degrees * Math.PI / 180;
+    set(
+      Math.round(centerX + Math.cos(radians) * radiusX),
+      Math.round(centerY + Math.sin(radians) * radiusY),
+      value,
+    );
+  }
+}
+
+function drawFixtureDisk(
+  set: FixturePixelWriter,
+  centerX: number,
+  centerY: number,
+  radius: number,
+  value: number,
+): void {
+  for (let y = centerY - radius; y <= centerY + radius; y += 1) {
+    for (let x = centerX - radius; x <= centerX + radius; x += 1) {
+      if ((x - centerX) ** 2 + (y - centerY) ** 2 <= radius ** 2) set(x, y, value);
     }
   }
 }

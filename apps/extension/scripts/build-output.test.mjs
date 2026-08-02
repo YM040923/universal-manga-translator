@@ -44,15 +44,15 @@ test("content main wires automatic and manual capture APIs through safe summary 
   assert.equal(main.includes('logger.info("recognition capture"'), false);
 });
 
-test("content main injects the production browser OCR text evidence provider into DirectClient", () => {
+test("content main does not enable heuristic paid rescue for automatic empty OCR", () => {
   const main = readFileSync(resolve("src/content/main.ts"), "utf8");
+  const directClient = readFileSync(resolve("src/content/client/direct-client.ts"), "utf8");
 
-  assert.match(
-    main,
-    /import\s+\{\s*createBrowserOcrTextEvidenceProvider\s*\}\s+from\s+["']\.\/capture\/ocr-text-evidence["'];/,
-  );
-  assert.match(main, /const\s+ocrTextEvidenceProvider\s*=\s*createBrowserOcrTextEvidenceProvider\(\)/);
-  assert.match(main, /new\s+DirectClient\(current,\s*\{\s*ocrTextEvidenceProvider\s*\}\s*\)/);
+  assert.doesNotMatch(main, /ocr-text-evidence|OcrTextEvidenceProvider|createBrowserOcrTextEvidenceProvider/);
+  assert.match(main, /new\s+DirectClient\(current\)/);
+  assert.doesNotMatch(main, /new\s+DirectClient\(current\s*,/);
+  assert.match(directClient, /Automatic empty rescue is deferred until Task 6/);
+  assert.match(directClient, /Do not infer likelyTextEvidence from raw pixels/);
 });
 
 test("manifest uses dynamic injection and does not expose an options page", () => {
