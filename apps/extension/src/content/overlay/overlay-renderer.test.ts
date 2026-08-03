@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
+import { reconstructBubbles, type BubbleOwnershipEvidence } from "@umt/core";
 import type { ManualOverridePayload } from "@umt/shared/protocol";
 import type { Rect, SurfaceResult } from "@umt/shared/types";
 import { clearManualEdits, loadManualEdit, OverlayRenderer, saveManualEdit } from "./overlay-renderer.js";
@@ -594,6 +595,36 @@ test("does not merge overlapping logical bubbles a second time in the renderer",
   assert.deepEqual([...wrappers].map((wrapper) => wrapper.dataset.umtRegionId), ["top", "bottom"]);
 });
 
+test("distinct visual ownership renders two nodes and keeps manual overrides isolated", () => {
+  const { img } = setupDomWithImage({ x: 0, y: 0, width: 400, height: 300 });
+  const bubbles = reconstructBubbles([
+    coreRegion("group-c-text", 100),
+    coreRegion("group-d-text", 250),
+  ], [
+    coreEvidence("group-c-text", "group-c", 50),
+    coreEvidence("group-d-text", "group-d", 230),
+  ]);
+  assert.equal(bubbles.length, 2);
+  assert.equal(new Set(bubbles.map((bubble) => bubble.id)).size, 2);
+  const result = fakeResult("distinct-ownership");
+  result.regions = bubbles.map((bubble, index) => ({
+    ...result.regions[0]!,
+    id: bubble.id,
+    box: bubble.box,
+    sourceText: bubble.sourceText,
+    translatedText: index === 0 ? "first bubble" : "second bubble",
+  }));
+  saveManualEdit(result.imageHash, "zh-CN", bubbles[0]!.id, "manual first bubble");
+
+  new OverlayRenderer().render(img, { width: 400, height: 300 }, result);
+
+  const wrappers = document.querySelectorAll<HTMLElement>("[data-umt-region-id]");
+  assert.equal(wrappers.length, 2);
+  assert.equal(document.querySelector(`[data-umt-region-id='${bubbles[0]!.id}']`)?.textContent, "manual first bubble");
+  assert.equal(document.querySelector(`[data-umt-region-id='${bubbles[1]!.id}']`)?.textContent, "second bubble");
+  assert.equal(loadManualEdit(result.imageHash, "zh-CN", bubbles[1]!.id), null);
+});
+
 test("adds glyph-safe inset for large CJK text so strokes are not clipped", () => {
   const { img } = setupDomWithImage({ x: 0, y: 0, width: 700, height: 540 });
   const renderer = new OverlayRenderer();
@@ -613,6 +644,32 @@ test("adds glyph-safe inset for large CJK text so strokes are not clipped", () =
   assert.equal(chip.style.overflow, "visible");
   assert.equal(chip.style.maxHeight, "none");
 });
+
+function coreRegion(id: string, x: number) {
+  return {
+    id,
+    sourceText: "SAME",
+    box: { x, y: 100, width: 100, height: 40 },
+    confidence: 0.92,
+    orientation: "horizontal" as const,
+    kind: "dialogue" as const,
+  };
+}
+
+function coreEvidence(
+  observationId: string,
+  visualGroupId: string,
+  x: number,
+): BubbleOwnershipEvidence {
+  return {
+    observationId,
+    visualGroupId,
+    componentBox: { x, y: 30, width: 180, height: 100 },
+    shape: "ellipse",
+    confidence: 0.94,
+    touchesBoundary: false,
+  };
+}
 
 test("expands mask slightly around OCR text box to cover original glyph edges", () => {
   const { img } = setupDomWithImage({ x: 0, y: 0, width: 500, height: 500 });

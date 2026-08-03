@@ -59,6 +59,36 @@ test("reconstructBubbles never merges overlapping components with different visu
   assert.equal(bubbles.length, 2);
 });
 
+test("reconstructBubbles does not dedupe identical overlapping text owned by different high-confidence visual groups", () => {
+  const observations = [
+    region("group-a-text", "SAME", 100, 100, 100, 40),
+    region("group-b-text", "SAME", 101, 100, 100, 40),
+  ];
+
+  const bubbles = reconstructBubbles(observations, [
+    visualEvidence("group-a-text", "group-a", { x: 70, y: 70, width: 160, height: 100 }, "ellipse"),
+    visualEvidence("group-b-text", "group-b", { x: 71, y: 70, width: 160, height: 100 }, "ellipse"),
+  ]);
+
+  assert.equal(bubbles.length, 2);
+  assert.deepEqual(bubbles.map((bubble) => bubble.evidence.groupId).sort(), ["group-a", "group-b"]);
+});
+
+test("reconstructBubbles gives distinct ids to quantized-identical boxes with different canonical visual groups", () => {
+  const observations = [
+    region("group-c-text", "SAME", 100, 100, 100, 40),
+    region("group-d-text", "SAME", 101, 100, 100, 40),
+  ];
+
+  const bubbles = reconstructBubbles(observations, [
+    visualEvidence("group-c-text", "group-c", { x: 50, y: 30, width: 180, height: 100 }, "ellipse"),
+    visualEvidence("group-d-text", "group-d", { x: 51, y: 30, width: 180, height: 100 }, "ellipse"),
+  ]);
+
+  assert.equal(bubbles.length, 2);
+  assert.equal(new Set(bubbles.map((bubble) => bubble.id)).size, 2);
+});
+
 test("reconstructBubbles preserves a rectangular narration component", () => {
   const observation = region("caption", "Meanwhile...", 40, 30, 180, 28, "horizontal", "narration");
 
@@ -148,12 +178,12 @@ test("reconstructBubbles derives the same deterministic id when OCR observation 
   const first = reconstructBubbles([
     region("provider-a-1", "Same words", 80, 60, 120, 28),
   ], [
-    visualEvidence("provider-a-1", "raw-a", { x: 50, y: 30, width: 180, height: 100 }, "ellipse"),
+    visualEvidence("provider-a-1", "canonical-same", { x: 50, y: 30, width: 180, height: 100 }, "ellipse"),
   ]);
   const second = reconstructBubbles([
     region("provider-b-99", " Same   words ", 80, 60, 120, 28),
   ], [
-    visualEvidence("provider-b-99", "raw-b", { x: 51, y: 31, width: 179, height: 101 }, "ellipse"),
+    visualEvidence("provider-b-99", "canonical-same", { x: 51, y: 31, width: 179, height: 101 }, "ellipse"),
   ]);
 
   assert.equal(first[0]?.id, second[0]?.id);

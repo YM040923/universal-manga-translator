@@ -46,6 +46,11 @@ interface ObservationGroup {
   groupId?: string;
 }
 
+interface IdentifiedBubbleCandidate {
+  candidate: BubbleCandidate;
+  identity: string;
+}
+
 const HIGH_CONFIDENCE_VISUAL_GROUP = 0.72;
 
 export function reconstructBubbles(
@@ -101,7 +106,13 @@ export function reconstructBubbles(
     groups.push(nextGroup);
   }
 
-  return groups.map(toBubbleCandidate).sort(compareBubbleReadingOrder);
+  const identified = groups
+    .map(toBubbleCandidate)
+    .sort((left, right) => (
+      compareBubbleReadingOrder(left.candidate, right.candidate)
+      || left.identity.localeCompare(right.identity)
+    ));
+  return ensureUniqueBubbleIds(identified);
 }
 
 function canFallbackJoin(group: ObservationGroup, next: ObservationEntry): boolean {
@@ -156,7 +167,7 @@ function isKindAndOrientationCompatible(group: ObservationGroup, next: Observati
     && first.kind !== "sfx";
 }
 
-function toBubbleCandidate(group: ObservationGroup): BubbleCandidate {
+function toBubbleCandidate(group: ObservationGroup): IdentifiedBubbleCandidate {
   const ordered = [...group.entries].sort(compareWithinBubble);
   const observations = ordered.map((entry) => entry.observation);
   const evidence = ordered.flatMap((entry) => entry.evidence ? [entry.evidence] : []);
@@ -184,24 +195,29 @@ function toBubbleCandidate(group: ObservationGroup): BubbleCandidate {
   };
   const ids = ordered.flatMap((entry) => entry.observationIds);
   const sourceText = observations.map((observation) => observation.sourceText.trim()).join("\n");
-  return {
-    id: createStableBubbleId(
-      selectedShape,
-      box,
-      sourceText,
-      observations[0]!.orientation,
-      observations[0]!.kind,
-    ),
+  const identity = createStableBubbleIdentity(
+    selectedShape,
     box,
-    shape: selectedShape,
-    observationIds: ids,
-    confidence: evidence.length > 0
-      ? clampConfidence(observationConfidence * 0.7 + evidenceConfidence * 0.3)
-      : observationConfidence,
-    evidence: evidenceSummary,
     sourceText,
-    orientation: observations[0]!.orientation,
-    kind: observations[0]!.kind,
+    observations[0]!.orientation,
+    observations[0]!.kind,
+    group.ownership === "visual" ? group.groupId : undefined,
+  );
+  return {
+    identity,
+    candidate: {
+      id: createStableBubbleId(identity),
+      box,
+      shape: selectedShape,
+      observationIds: ids,
+      confidence: evidence.length > 0
+        ? clampConfidence(observationConfidence * 0.7 + evidenceConfidence * 0.3)
+        : observationConfidence,
+      evidence: evidenceSummary,
+      sourceText,
+      orientation: observations[0]!.orientation,
+      kind: observations[0]!.kind,
+    },
   };
 }
 
@@ -278,7 +294,10 @@ function groupEvidenceByObservationId(
 function dedupeObservationEntries(entries: ObservationEntry[]): ObservationEntry[] {
   const clusters: ObservationEntry[][] = [];
   for (const entry of entries) {
-    const cluster = clusters.find((items) => isDuplicateObservation(items[0]!.observation, entry.observation));
+    const cluster = clusters.find((items) => (
+      items.some((existing) => isDuplicateObservation(existing.observation, entry.observation))
+      && items.every((existing) => isDuplicateOwnershipCompatible(existing.evidence, entry.evidence))
+    ));
     if (cluster) cluster.push(entry);
     else clusters.push([entry]);
   }
@@ -303,6 +322,14 @@ function dedupeObservationEntries(entries: ObservationEntry[]): ObservationEntry
 function isDuplicateObservation(left: BubbleObservation, right: BubbleObservation): boolean {
   return normalizeText(left.sourceText) === normalizeText(right.sourceText)
     && rectIoU(left.box, right.box) > 0.65;
+}
+
+function isDuplicateOwnershipCompatible(
+  left: BubbleOwnershipEvidence | undefined,
+  right: BubbleOwnershipEvidence | undefined,
+): boolean {
+  if (!isHighConfidenceVisualEvidence(left) || !isHighConfidenceVisualEvidence(right)) return true;
+  return left.visualGroupId === right.visualGroupId;
 }
 
 function selectPreferredEvidence(
@@ -381,31 +408,46 @@ function normalizeText(text: string): string {
   return text.replace(/\s+/g, "").toLocaleLowerCase();
 }
 
-function createStableBubbleId(
+function createStableBubbleIdentity(
   shape: BubbleShape,
   box: Rect,
   sourceText: string,
   orientation: BubbleCandidate["orientation"],
   kind: BubbleCandidate["kind"],
+  visualGroupId: string | undefined,
 ): string {
-  const identity = [
+  return [
     shape,
     kind,
     orientation,
-    quantizedRectKey(box),
+    visualGroupId ? `visual:${visualGroupId}` : "visual:none",
+    quantizedRectKey(box, visualGroupId ? 4 : 1),
     normalizeIdentityText(sourceText),
   ].join("|");
+}
+
+function createStableBubbleId(identity: string): string {
   return `bubble-${fnv1a32(identity).toString(16).padStart(8, "0")}`;
 }
 
-function quantizedRectKey(box: Rect): string {
-  const quantum = 4;
+function quantizedRectKey(box: Rect, quantum: number): string {
   return [
     box.x,
     box.y,
     box.x + box.width,
     box.y + box.height,
   ].map((value) => Math.round(value / quantum)).join(":");
+}
+
+function ensureUniqueBubbleIds(identified: IdentifiedBubbleCandidate[]): BubbleCandidate[] {
+  const occurrences = new Map<string, number>();
+  return identified.map(({ candidate }) => {
+    const occurrence = (occurrences.get(candidate.id) ?? 0) + 1;
+    occurrences.set(candidate.id, occurrence);
+    return occurrence === 1
+      ? candidate
+      : { ...candidate, id: `${candidate.id}-${occurrence}` };
+  });
 }
 
 function normalizeIdentityText(text: string): string {
