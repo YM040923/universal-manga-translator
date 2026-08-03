@@ -49,6 +49,53 @@ test("refreshAll updates existing overlay nodes instead of recreating them durin
   assert.equal(after.style.top, "83px");
 });
 
+test("refreshAll keeps the immutable layout snapshot when a caller mutates the prior result during scroll", () => {
+  let rect = { x: 10, y: 220, width: 500, height: 1000 };
+  const { img } = setupDomWithImage(() => rect);
+  Object.defineProperty(window, "scrollY", { value: 200, configurable: true });
+  const renderer = new OverlayRenderer();
+  const result = fakeResult("immutable-scroll");
+  renderer.render(img, { width: 1000, height: 2000 }, result);
+  const wrapper = document.querySelector<HTMLElement>("[data-umt-region-id='r1']")!;
+  const chip = wrapper.querySelector<HTMLElement>("[data-umt-text-chip='true']")!;
+  const firstTextNode = chip.firstChild;
+  const firstLeft = wrapper.style.left;
+  const firstTop = wrapper.style.top;
+
+  result.regions[0]!.translatedText = "mutated after render";
+  result.regions[0]!.box.x = 600;
+  rect = { ...rect, y: 120 };
+  Object.defineProperty(window, "scrollY", { value: 300, configurable: true });
+  renderer.refreshAll();
+
+  assert.equal(chip.textContent, "hello translated");
+  assert.equal(chip.firstChild, firstTextNode);
+  assert.equal(wrapper.style.left, firstLeft);
+  assert.equal(wrapper.style.top, firstTop);
+});
+
+test("render preserves unchanged bubble nodes when a new result changes only one bubble", () => {
+  const { img } = setupDomWithImage({ x: 0, y: 0, width: 500, height: 500 });
+  const renderer = new OverlayRenderer();
+  const result = fakeResult("bubble-diff");
+  result.regions = [
+    result.regions[0]!,
+    { ...result.regions[0]!, id: "r2", box: { x: 500, y: 100, width: 200, height: 100 }, translatedText: "second bubble" },
+  ];
+  renderer.render(img, { width: 1000, height: 1000 }, result);
+  const unchanged = document.querySelector<HTMLElement>("[data-umt-region-id='r1']")!;
+  const changed = document.querySelector<HTMLElement>("[data-umt-region-id='r2']")!;
+  const unchangedTextNode = unchanged.querySelector("[data-umt-text-chip='true']")!.firstChild;
+
+  const next = { ...result, regions: [result.regions[0]!, { ...result.regions[1]!, translatedText: "changed second bubble" }] };
+  renderer.render(img, { width: 1000, height: 1000 }, next);
+
+  assert.equal(document.querySelector("[data-umt-region-id='r1']"), unchanged);
+  assert.equal(unchanged.querySelector("[data-umt-text-chip='true']")!.firstChild, unchangedTextNode);
+  assert.equal(document.querySelector("[data-umt-region-id='r2']"), changed);
+  assert.equal(changed.textContent, "changed second bubble");
+});
+
 
 test("legacy fixed viewport coordinate behavior is superseded by document scrolling", () => {
   const { img } = setupDomWithImage({ x: 10, y: 20, width: 500, height: 1000 });

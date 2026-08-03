@@ -5,6 +5,7 @@ import { DEFAULT_SETTINGS, normalizeOverlayAppearance, type OverlayAppearance } 
 import { rectFromStyle, rectsOverlapSignificantly, type RenderedRect } from "./overlay-geometry.js";
 import { overlayHostForElement } from "./overlay-host.js";
 import { maskPaddingForBox, maskStyleForRegion } from "./overlay-mask.js";
+import { buildImmutableOverlayLayoutSnapshot, overlayLayoutSnapshotHash, type ImmutableOverlayLayoutSnapshot } from "./overlay-layout-snapshot.js";
 import { createStableTextLayout, normalizeOverlayText } from "./text-layout.js";
 
 const manualEdits = new Map<string, string>();
@@ -12,7 +13,7 @@ const manualEdits = new Map<string, string>();
 interface RenderState {
   element: HTMLElement;
   naturalSize: Size;
-  result: SurfaceResult;
+  snapshot: ImmutableOverlayLayoutSnapshot;
 }
 
 export interface OverlayRendererOptions {
@@ -81,20 +82,29 @@ export class OverlayRenderer {
 
   render(element: HTMLElement, naturalSize: Size, result: SurfaceResult): void {
     this.setVisible(true);
-    this.rendered.set(result.surfaceId, { element, naturalSize, result });
-    this.renderSurface(element, naturalSize, result);
+    const prior = this.rendered.get(result.surfaceId);
+    const hash = overlayLayoutSnapshotHash(result, this.appearance);
+    const snapshot = prior?.snapshot.hash === hash
+      ? prior.snapshot
+      : buildImmutableOverlayLayoutSnapshot(result, this.appearance);
+    this.rendered.set(result.surfaceId, { element, naturalSize, snapshot });
+    this.renderSurface(element, naturalSize, snapshot);
   }
 
   refreshAll(): void {
-    for (const { element, naturalSize, result } of this.rendered.values()) this.renderSurface(element, naturalSize, result);
+    for (const { element, naturalSize, snapshot } of this.rendered.values()) this.renderSurface(element, naturalSize, snapshot);
   }
 
   setAppearance(appearance: Partial<OverlayAppearance>): void {
     this.appearance = normalizeOverlayAppearance(appearance);
+    for (const state of this.rendered.values()) {
+      state.snapshot = buildImmutableOverlayLayoutSnapshot(state.snapshot.result as SurfaceResult, this.appearance);
+    }
     this.refreshAll();
   }
 
-  private renderSurface(element: HTMLElement, naturalSize: Size, result: SurfaceResult): void {
+  private renderSurface(element: HTMLElement, naturalSize: Size, snapshot: ImmutableOverlayLayoutSnapshot): void {
+    const result = snapshot.result;
     const host = overlayHostForElement(element);
     const root = this.rootForHost(host);
     const rect = element.getBoundingClientRect();
