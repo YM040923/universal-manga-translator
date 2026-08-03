@@ -60,17 +60,26 @@ export class BubbleResultCache {
 
   async read(fingerprint: ContentFingerprint): Promise<BubbleResultCacheEntry[]> {
     const safeFingerprint = storageSafeContentFingerprint(fingerprint);
-    const entries: BubbleResultCacheEntry[] = [];
-    for (const [key, expectedFingerprints] of [
-      [legacyBubbleResultCacheKey(fingerprint), [safeFingerprint, fingerprint]],
-      [bubbleResultCacheKey(safeFingerprint), [safeFingerprint]],
-    ] as const) {
-      const raw = await this.storage.get(key);
-      const document = raw?.[key];
-      if (!expectedFingerprints.some((expected) => isDocument(document, expected))) continue;
-      entries.push(...(document as BubbleResultCacheDocument).entries);
-    }
-    return mergeEntries([], entries);
+    const v2Key = bubbleResultCacheKey(safeFingerprint);
+    const v2Raw = await this.storage.get(v2Key);
+    const v2Document = v2Raw?.[v2Key];
+    const v2Entries = isDocument(v2Document, safeFingerprint) ? v2Document.entries : [];
+
+    const v1Key = legacyBubbleResultCacheKey(fingerprint);
+    const v1Raw = await this.storage.get(v1Key);
+    const v1Document = v1Raw?.[v1Key];
+    if (!isDocument(v1Document, safeFingerprint) && !isDocument(v1Document, fingerprint)) return mergeEntries([], v2Entries);
+
+    const entries = mergeEntries(v1Document.entries, v2Entries);
+    const migrated: BubbleResultCacheDocument = {
+      version: 2,
+      fingerprint: safeFingerprint,
+      entries,
+      savedAt: Math.max(v1Document.savedAt, isDocument(v2Document, safeFingerprint) ? v2Document.savedAt : 0),
+    };
+    await this.storage.set({ [v2Key]: migrated });
+    await this.storage.remove(v1Key);
+    return mergeEntries([], migrated.entries);
   }
 
   async clear(fingerprint: ContentFingerprint): Promise<void> {

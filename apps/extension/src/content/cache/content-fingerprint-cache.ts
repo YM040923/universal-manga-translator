@@ -56,7 +56,17 @@ export class ContentFingerprintCache {
     const v1Key = legacyContentFingerprintCacheKey(fingerprint);
     const v1Raw = await this.storage.get(v1Key);
     const v1Document = v1Raw?.[v1Key];
-    if (isContentFingerprintCacheDocument(v1Document, safeFingerprint) || isContentFingerprintCacheDocument(v1Document, fingerprint)) return cloneResult(v1Document.result);
+    if (isContentFingerprintCacheDocument(v1Document, safeFingerprint) || isContentFingerprintCacheDocument(v1Document, fingerprint)) {
+      const migrated: ContentFingerprintCacheDocument = {
+        version: 2,
+        fingerprint: safeFingerprint,
+        result: cloneResult(v1Document.result),
+        savedAt: v1Document.savedAt,
+      };
+      await this.storage.set({ [v2Key]: migrated });
+      await this.storage.remove(v1Key);
+      return cloneResult(migrated.result);
+    }
     return null;
   }
 

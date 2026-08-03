@@ -59,8 +59,8 @@ test("ContentFingerprintCache stores profile and endpoint identifiers only as op
   assert.doesNotMatch(persisted, /ocr\.private\.example|translate\.private\.example|tenant=reader/);
 });
 
-test("ContentFingerprintCache still reads a legacy v1 document keyed with raw profile identifiers", async () => {
-  const { ContentFingerprintCache, legacyContentFingerprintCacheKey } = await import("./" + "content-fingerprint-cache.js");
+test("ContentFingerprintCache migrates a raw-profile v1 document to v2 and purges the legacy entry", async () => {
+  const { ContentFingerprintCache, contentFingerprintCacheKey, legacyContentFingerprintCacheKey } = await import("./" + "content-fingerprint-cache.js");
   const storage = fakeStorage();
   const cache = new ContentFingerprintCache(storage);
   const fingerprint = {
@@ -72,6 +72,9 @@ test("ContentFingerprintCache still reads a legacy v1 document keyed with raw pr
   await storage.set({ [key]: { version: 1, fingerprint, result: result(), savedAt: 1 } });
 
   assert.deepEqual(await cache.get(fingerprint), result());
+  assert.equal(storage.snapshot()[key], undefined);
+  assert.equal((storage.snapshot()[contentFingerprintCacheKey(fingerprint)] as { version?: unknown }).version, 2);
+  assert.doesNotMatch(JSON.stringify(storage.snapshot()), /ocr\.private\.example|translate\.private\.example/);
 });
 
 function context() {

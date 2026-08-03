@@ -91,6 +91,29 @@ test("BubbleResultCache misses ambiguous candidates whose best scores are too cl
   assert.equal(await cache.match(context, probe()), null);
 });
 
+test("BubbleResultCache migrates a raw-profile v1 document to v2 and purges the legacy entry", async () => {
+  const { BubbleResultCache, bubbleResultCacheKey, legacyBubbleResultCacheKey } = await import("./" + "bubble-result-cache.js");
+  const storage = fakeStorage();
+  const cache = new BubbleResultCache(storage);
+  const context = {
+    ...cacheContext(),
+    ocrProfile: "https://ocr.private.example/v1",
+    translationProfile: "https://translate.private.example/v1:model",
+  };
+  const key = legacyBubbleResultCacheKey(context);
+  await storage.set({ [key]: {
+    version: 1,
+    fingerprint: context,
+    entries: [{ id: "legacy", ...probe(), translatedText: "migrated", priority: "auto" }],
+    savedAt: 1,
+  } });
+
+  assert.equal((await cache.read(context))[0]?.translatedText, "migrated");
+  assert.equal(storage.snapshot()[key], undefined);
+  assert.equal((storage.snapshot()[bubbleResultCacheKey(context)] as { version?: unknown }).version, 2);
+  assert.doesNotMatch(JSON.stringify(storage.snapshot()), /ocr\.private\.example|translate\.private\.example/);
+});
+
 function cacheContext() {
   return {
     imageHash: "image-hash",
@@ -122,5 +145,6 @@ function fakeStorage() {
     },
     async set(value: Record<string, unknown>) { Object.assign(data, value); },
     async remove(keys: string | string[]) { for (const key of Array.isArray(keys) ? keys : [keys]) delete data[key]; },
+    snapshot() { return { ...data }; },
   };
 }
