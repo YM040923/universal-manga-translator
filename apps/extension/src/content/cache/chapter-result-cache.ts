@@ -54,9 +54,16 @@ export class ChapterResultCache {
   constructor(private readonly storage: ChapterResultCacheStorage = getDefaultStorage()) {}
 
   async read(context: ChapterResultCacheContext): Promise<ChapterResultCacheDocument> {
-    const v1 = await this.readLegacy(context);
     const v2 = await this.readV2(context);
-    return { version: 2, key: chapterResultCacheKey(context), entries: { ...v1, ...v2.entries } };
+    const legacy = await this.readLegacyDocument(context);
+    if (!legacy) return v2;
+    const migrated: ChapterResultCacheDocument = {
+      ...v2,
+      entries: { ...legacyEntries(legacy), ...v2.entries },
+    };
+    await this.storage.set({ [migrated.key]: migrated });
+    await this.storage.remove(legacy.key);
+    return migrated;
   }
 
   async get(context: ChapterResultCacheContext, imageUrl: string): Promise<ChapterResultCacheEntry | null> {
@@ -68,11 +75,9 @@ export class ChapterResultCache {
     if (!imageUrl || !isReusableResult(result)) return;
     const imageUrlId = imageUrlHash(imageUrl);
     const entry: ChapterResultCacheEntry = { surfaceId: result.surfaceId, imageUrlHash: imageUrlId, result: cloneResult(result), savedAt: Date.now() };
-    const v2 = await this.readV2(context);
+    const v2 = await this.read(context);
     v2.entries[imageUrlId] = entry;
-    const v1 = await this.readLegacyDocument(context);
-    v1.entries[imageUrl] = { surfaceId: result.surfaceId, imageUrl, result: cloneResult(result), savedAt: entry.savedAt };
-    await this.storage.set({ [v2.key]: v2, [v1.key]: v1 });
+    await this.storage.set({ [v2.key]: v2 });
   }
 
   async clear(context: ChapterResultCacheContext): Promise<void> {
@@ -87,20 +92,20 @@ export class ChapterResultCache {
     return { ...doc, entries: Object.fromEntries(Object.entries(doc.entries).filter(([, entry]) => isReusableEntry(entry))) };
   }
 
-  private async readLegacy(context: ChapterResultCacheContext): Promise<Record<string, ChapterResultCacheEntry>> {
-    const doc = await this.readLegacyDocument(context);
-    return Object.fromEntries(Object.values(doc.entries)
-      .filter(isLegacyReusableEntry)
-      .map((entry) => [imageUrlHash(entry.imageUrl), { surfaceId: entry.surfaceId, imageUrlHash: imageUrlHash(entry.imageUrl), result: entry.result, savedAt: entry.savedAt }]));
-  }
-
-  private async readLegacyDocument(context: ChapterResultCacheContext): Promise<LegacyChapterResultCacheDocument> {
+  private async readLegacyDocument(context: ChapterResultCacheContext): Promise<LegacyChapterResultCacheDocument | null> {
     const key = legacyChapterResultCacheKey(context);
     const raw = await this.storage.get(key);
     const doc = raw?.[key] as LegacyChapterResultCacheDocument | undefined;
-    if (!isV1Document(doc, key)) return { version: 1, key, entries: {} };
+    if (!isV1Document(doc, key)) return null;
     return { ...doc, entries: Object.fromEntries(Object.entries(doc.entries).filter(([, entry]) => isLegacyReusableEntry(entry))) };
   }
+}
+
+function legacyEntries(doc: LegacyChapterResultCacheDocument): Record<string, ChapterResultCacheEntry> {
+  return Object.fromEntries(Object.values(doc.entries).map((entry) => [
+    imageUrlHash(entry.imageUrl),
+    { surfaceId: entry.surfaceId, imageUrlHash: imageUrlHash(entry.imageUrl), result: cloneResult(entry.result), savedAt: entry.savedAt },
+  ]));
 }
 
 function isV2Document(value: unknown, key: string): value is ChapterResultCacheDocument {

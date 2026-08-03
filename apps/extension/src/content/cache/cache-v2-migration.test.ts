@@ -1,17 +1,19 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { ChapterResultCache, chapterResultCacheKey, type ChapterResultCacheStorage } from "./chapter-result-cache.js";
+import { ChapterResultCache, chapterResultCacheKey, legacyChapterResultCacheKey, type ChapterResultCacheStorage } from "./chapter-result-cache.js";
 import { ManualSelectionCache, type ManualSelectionCacheStorage } from "./manual-selection-cache.js";
 import { DirectOcrCache, type DirectOcrCacheStorage } from "./direct-ocr-cache.js";
 
-test("v2 chapter cache double-writes and never restores failed or empty entries", async () => {
+test("v2 chapter cache never writes legacy signed image URLs and never restores failed or empty entries", async () => {
   const storage = fakeStorage();
   const context = { pageUrl: "https://reader.example/ch/1?token=secret", targetLanguage: "zh-CN", providerProfile: "direct:test" };
   const cache = new ChapterResultCache(storage);
-  await cache.save(context, "https://cdn.example/a.webp", result());
+  await cache.save(context, "https://cdn.example/a.webp?token=secret", result());
 
   assert.match(chapterResultCacheKey(context), /^umt\.chapter-cache:v2:/);
-  assert.equal(Object.keys(storage.snapshot()).filter((key) => key.startsWith("umt.chapter-cache:v")).length, 2);
+  assert.equal(Object.keys(storage.snapshot()).filter((key) => key.startsWith("umt.chapter-cache:v2:")).length, 1);
+  assert.equal(Object.keys(storage.snapshot()).filter((key) => key.startsWith("umt.chapter-cache:v1:")).length, 0);
+  assert.doesNotMatch(JSON.stringify(storage.snapshot()), /token=secret/);
 
   await storage.set({
     [chapterResultCacheKey(context)]: {
@@ -25,6 +27,23 @@ test("v2 chapter cache double-writes and never restores failed or empty entries"
   });
   await storage.remove(Object.keys(storage.snapshot()).filter((key) => key.startsWith("umt.chapter-cache:v1:")));
   assert.deepEqual((await cache.read(context)).entries, {});
+});
+
+test("chapter cache reads one legacy v1 document, migrates it to v2, and removes the URL-bearing v1 entry", async () => {
+  const storage = fakeStorage();
+  const cache = new ChapterResultCache(storage);
+  const context = { pageUrl: "https://reader.example/ch/legacy", targetLanguage: "zh-CN", providerProfile: "direct:test" };
+  const imageUrl = "https://cdn.private.example/signed/legacy.webp?token=secret";
+  const legacyKey = legacyChapterResultCacheKey(context);
+  await storage.set({ [legacyKey]: {
+    version: 1,
+    key: legacyKey,
+    entries: { [imageUrl]: { surfaceId: "s1", imageUrl, result: result(), savedAt: 1 } },
+  } });
+
+  assert.equal((await cache.get(context, imageUrl))?.result.surfaceId, "s1");
+  assert.equal(storage.snapshot()[legacyKey], undefined);
+  assert.doesNotMatch(JSON.stringify(storage.snapshot()), /token=secret|cdn\.private\.example/);
 });
 
 test("v2 chapter cache stores only an image URL hash", async () => {
