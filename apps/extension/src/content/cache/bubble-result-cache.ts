@@ -1,5 +1,5 @@
 import type { Rect } from "@umt/shared/types";
-import type { ContentFingerprint, ContentFingerprintCacheStorage } from "./content-fingerprint-cache.js";
+import { storageSafeContentFingerprint, type ContentFingerprint, type ContentFingerprintCacheStorage } from "./content-fingerprint-cache.js";
 
 export type BubbleResultPriority = "auto" | "cache" | "forced-retranslate" | "manual-selection" | "manual-edit" | "manual-tombstone";
 
@@ -27,7 +27,7 @@ const V1_PREFIX = "umt.bubble-result-cache:v1:";
 const V2_PREFIX = "umt.bubble-result-cache:v2:";
 
 export function bubbleResultCacheKey(fingerprint: ContentFingerprint): string {
-  return `${V2_PREFIX}${opaqueFingerprint(fingerprint)}`;
+  return `${V2_PREFIX}${opaqueFingerprint(storageSafeContentFingerprint(fingerprint))}`;
 }
 
 export function legacyBubbleResultCacheKey(fingerprint: ContentFingerprint): string {
@@ -45,12 +45,13 @@ export class BubbleResultCache {
       savedAt: Date.now(),
     }));
     if (!validEntries.length) return;
+    const safeFingerprint = storageSafeContentFingerprint(fingerprint);
     const existing = await this.read(fingerprint);
     const merged = mergeEntries(existing, validEntries);
     const savedAt = Date.now();
-    const v2: BubbleResultCacheDocument = { version: 2, fingerprint: { ...fingerprint }, entries: merged, savedAt };
+    const v2: BubbleResultCacheDocument = { version: 2, fingerprint: safeFingerprint, entries: merged, savedAt };
     const v1: BubbleResultCacheDocument = { ...v2, version: 1 };
-    await this.storage.set({ [bubbleResultCacheKey(fingerprint)]: v2, [legacyBubbleResultCacheKey(fingerprint)]: v1 });
+    await this.storage.set({ [bubbleResultCacheKey(safeFingerprint)]: v2, [legacyBubbleResultCacheKey(fingerprint)]: v1 });
   }
 
   async match(fingerprint: ContentFingerprint, probe: BubbleResultProbe): Promise<BubbleResultCacheEntry | null> {
@@ -58,12 +59,16 @@ export class BubbleResultCache {
   }
 
   async read(fingerprint: ContentFingerprint): Promise<BubbleResultCacheEntry[]> {
+    const safeFingerprint = storageSafeContentFingerprint(fingerprint);
     const entries: BubbleResultCacheEntry[] = [];
-    for (const key of [legacyBubbleResultCacheKey(fingerprint), bubbleResultCacheKey(fingerprint)]) {
+    for (const [key, expectedFingerprints] of [
+      [legacyBubbleResultCacheKey(fingerprint), [safeFingerprint, fingerprint]],
+      [bubbleResultCacheKey(safeFingerprint), [safeFingerprint]],
+    ] as const) {
       const raw = await this.storage.get(key);
       const document = raw?.[key];
-      if (!isDocument(document, fingerprint)) continue;
-      entries.push(...document.entries);
+      if (!expectedFingerprints.some((expected) => isDocument(document, expected))) continue;
+      entries.push(...(document as BubbleResultCacheDocument).entries);
     }
     return mergeEntries([], entries);
   }
@@ -78,13 +83,19 @@ export function resolveBubbleResult(entries: readonly BubbleResultCacheEntry[], 
   if (!normalizedSource) return null;
   const candidates = entries
     .filter((entry) => normalizeSourceText(entry.sourceText) === normalizedSource)
-    .map((entry) => ({ entry, score: bubbleScore(entry, probe) }))
-    .filter((candidate) => candidate.score >= 0.45)
-    .sort((left, right) => priorityRank(right.entry.priority) - priorityRank(left.entry.priority)
-      || right.score - left.score
+    .map((entry) => ({ entry, score: bubbleScore(entry, probe), geometry: geometryMatches(entry.box, probe.box), neighborhood: neighborhoodMatches(entry.neighborhood, probe.neighborhood) }))
+    .filter((candidate) => candidate.geometry && candidate.neighborhood);
+  if (!candidates.length) return null;
+  const highestPriority = Math.max(...candidates.map((candidate) => priorityRank(candidate.entry.priority)));
+  const highestPriorityCandidates = candidates
+    .filter((candidate) => priorityRank(candidate.entry.priority) === highestPriority)
+    .sort((left, right) => right.score - left.score
       || (right.entry.savedAt ?? 0) - (left.entry.savedAt ?? 0)
       || left.entry.id.localeCompare(right.entry.id));
-  return candidates[0] ? cloneEntry(candidates[0].entry) : null;
+  const best = highestPriorityCandidates[0];
+  const next = highestPriorityCandidates[1];
+  if (!best || (next && best.score - next.score < 0.12)) return null;
+  return cloneEntry(best.entry);
 }
 
 export function normalizeSourceText(value: string): string {
@@ -93,9 +104,9 @@ export function normalizeSourceText(value: string): string {
 
 export function priorityRank(priority: BubbleResultPriority): number {
   switch (priority) {
-    case "manual-tombstone": return 5;
-    case "manual-edit": return 5;
-    case "manual-selection": return 4;
+    case "manual-tombstone": return 4;
+    case "manual-edit": return 4;
+    case "manual-selection": return 6;
     case "forced-retranslate": return 3;
     case "auto": return 2;
     case "cache": return 1;
@@ -106,7 +117,11 @@ function mergeEntries(existing: readonly BubbleResultCacheEntry[], incoming: rea
   const byId = new Map(existing.map((entry) => [entry.id, cloneEntry(entry)]));
   for (const entry of incoming) {
     const previous = byId.get(entry.id);
-    if (!previous || priorityRank(entry.priority) >= priorityRank(previous.priority) || (entry.savedAt ?? 0) >= (previous.savedAt ?? 0)) byId.set(entry.id, cloneEntry(entry));
+    if (!previous
+      || priorityRank(entry.priority) > priorityRank(previous.priority)
+      || (priorityRank(entry.priority) === priorityRank(previous.priority) && (entry.savedAt ?? 0) >= (previous.savedAt ?? 0))) {
+      byId.set(entry.id, cloneEntry(entry));
+    }
   }
   return [...byId.values()];
 }
@@ -118,6 +133,13 @@ function bubbleScore(entry: BubbleResultProbe, probe: BubbleResultProbe): number
   const centerScore = Math.max(0, 1 - distance / (scale * 0.5));
   const neighborhoodScore = neighborhoodSimilarity(entry.neighborhood, probe.neighborhood);
   return 0.55 * Math.max(overlap, centerScore) + 0.25 * overlap + 0.2 * neighborhoodScore;
+}
+
+function geometryMatches(entry: Rect, probe: Rect): boolean {
+  const overlap = iou(entry, probe);
+  const distance = centerDistance(entry, probe);
+  const scale = Math.max(1, Math.max(entry.width, entry.height, probe.width, probe.height));
+  return overlap >= 0.45 && distance / scale <= 0.18;
 }
 
 function iou(left: Rect, right: Rect): number {
@@ -134,8 +156,14 @@ function centerDistance(left: Rect, right: Rect): number {
   return Math.hypot(left.x + left.width / 2 - right.x - right.width / 2, left.y + left.height / 2 - right.y - right.height / 2);
 }
 
+function neighborhoodMatches(left?: readonly string[], right?: readonly string[]): boolean {
+  if (!left?.length && !right?.length) return true;
+  if (!left?.length || !right?.length) return false;
+  return neighborhoodSimilarity(left, right) >= 0.5;
+}
+
 function neighborhoodSimilarity(left?: readonly string[], right?: readonly string[]): number {
-  if (!left?.length && !right?.length) return 0.5;
+  if (!left?.length && !right?.length) return 1;
   const normalizedLeft = new Set((left ?? []).map(normalizeSourceText).filter(Boolean));
   const normalizedRight = new Set((right ?? []).map(normalizeSourceText).filter(Boolean));
   if (!normalizedLeft.size || !normalizedRight.size) return 0;

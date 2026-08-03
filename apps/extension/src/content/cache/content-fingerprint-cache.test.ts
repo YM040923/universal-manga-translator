@@ -21,7 +21,7 @@ test("ContentFingerprintCache hits for identical content after its image URL cha
 
   const cached = await cache.get({ ...context(), imageUrl: "https://cdn.example/signed/new-url.webp" });
 
-  assert.equal(cached?.regions[0]?.translatedText, "ÄãºÃ");
+  assert.equal(cached?.regions[0]?.translatedText, "ä½ å¥½");
 });
 
 test("ContentFingerprintCache misses when any OCR or translation configuration changes", async () => {
@@ -41,6 +41,37 @@ test("ContentFingerprintCache never saves or returns empty and failed results", 
   await cache.save(context(), { ...result(), status: "failed" });
 
   assert.equal(await cache.get(context()), null);
+});
+
+test("ContentFingerprintCache stores profile and endpoint identifiers only as opaque hashes", async () => {
+  const { ContentFingerprintCache } = await import("./" + "content-fingerprint-cache.js");
+  const storage = fakeStorage();
+  const cache = new ContentFingerprintCache(storage);
+  const fingerprint = {
+    ...context(),
+    ocrProfile: "https://ocr.private.example/v1?tenant=reader",
+    translationProfile: "https://translate.private.example/v1:gpt-test",
+  };
+
+  await cache.save(fingerprint, result());
+
+  const persisted = JSON.stringify(storage.snapshot());
+  assert.doesNotMatch(persisted, /ocr\.private\.example|translate\.private\.example|tenant=reader/);
+});
+
+test("ContentFingerprintCache still reads a legacy v1 document keyed with raw profile identifiers", async () => {
+  const { ContentFingerprintCache, legacyContentFingerprintCacheKey } = await import("./" + "content-fingerprint-cache.js");
+  const storage = fakeStorage();
+  const cache = new ContentFingerprintCache(storage);
+  const fingerprint = {
+    ...context(),
+    ocrProfile: "https://ocr.private.example/v1",
+    translationProfile: "https://translate.private.example/v1:model",
+  };
+  const key = legacyContentFingerprintCacheKey(fingerprint);
+  await storage.set({ [key]: { version: 1, fingerprint, result: result(), savedAt: 1 } });
+
+  assert.deepEqual(await cache.get(fingerprint), result());
 });
 
 function context() {
@@ -69,7 +100,7 @@ function result() {
       id: "bubble-1",
       box: { x: 10, y: 20, width: 120, height: 50 },
       sourceText: "HELLO",
-      translatedText: "ÄãºÃ",
+      translatedText: "ä½ å¥½",
       confidence: 0.99,
       orientation: "horizontal",
       kind: "dialogue",
@@ -87,5 +118,6 @@ function fakeStorage() {
     },
     async set(value: Record<string, unknown>) { Object.assign(data, value); },
     async remove(keys: string | string[]) { for (const key of Array.isArray(keys) ? keys : [keys]) delete data[key]; },
+    snapshot() { return { ...data }; },
   };
 }

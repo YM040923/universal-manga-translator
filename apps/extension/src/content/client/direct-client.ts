@@ -26,7 +26,7 @@ import type { SurfaceResult, SurfaceTask } from "@umt/shared/types";
 import type { ExtensionSettings } from "../../settings/settings.js";
 import { directHttpUrlPolicyError } from "../messages.js";
 import { DirectOcrCache } from "../cache/direct-ocr-cache.js";
-import { BubbleResultCache, type BubbleResultPriority } from "../cache/bubble-result-cache.js";
+import { BubbleResultCache, priorityRank, type BubbleResultPriority } from "../cache/bubble-result-cache.js";
 import { ContentFingerprintCache, type ContentFingerprint } from "../cache/content-fingerprint-cache.js";
 import { ExtensionManualOverrideStore, type ManualOverrideStorage } from "../cache/manual-overrides.js";
 import type { DiagnosticsResponse, SelfTestResponse } from "./backend-client.js";
@@ -207,12 +207,13 @@ export class DirectClient implements TranslatorClient {
       if (!retranslate && !task.surfaceId.startsWith("manual:")) {
         const cached = await this.contentCache.get(cacheFingerprint);
         if (cached) {
-          const cachedResult = await this.manualOverrides.applyToResult({
+          const manuallyReconciled = await this.manualOverrides.applyToResult({
             ...cached,
             surfaceId: task.surfaceId,
             status: "cached",
             elapsedMs: Date.now() - startedAt,
           }, task.targetLanguage);
+          const cachedResult = await this.applyBubbleResultCache(cacheFingerprint, manuallyReconciled, "cache");
           this.chapterMemory.remember(imageHash, cachedResult);
           return { ok: true, surfaceId: task.surfaceId, status: "cached", result: cachedResult };
         }
@@ -264,7 +265,8 @@ export class DirectClient implements TranslatorClient {
         layoutVersion: 1,
         elapsedMs: Date.now() - startedAt,
       };
-      const surfaceResult = await this.manualOverrides.applyToResult(rawSurfaceResult, task.targetLanguage);
+      const manuallyReconciled = await this.manualOverrides.applyToResult(rawSurfaceResult, task.targetLanguage);
+      const surfaceResult = await this.applyBubbleResultCache(cacheFingerprint, manuallyReconciled, this.bubbleResultPriority(task, retranslate));
       if (!task.surfaceId.startsWith("manual:")) await this.contentCache.save(cacheFingerprint, surfaceResult);
       await this.bubbleResultCache.save(cacheFingerprint, surfaceResult.regions.map((region, index, regions) => ({
         id: region.id,
@@ -440,6 +442,23 @@ export class DirectClient implements TranslatorClient {
   private bubbleResultPriority(task: SurfaceTask, retranslate: boolean): BubbleResultPriority {
     if (task.surfaceId.startsWith("manual:")) return "manual-selection";
     return retranslate ? "forced-retranslate" : "auto";
+  }
+
+  private async applyBubbleResultCache(
+    fingerprint: ContentFingerprint,
+    result: SurfaceResult,
+    incomingPriority: BubbleResultPriority,
+  ): Promise<SurfaceResult> {
+    const regions = await Promise.all(result.regions.map(async (region, index, all) => {
+      const match = await this.bubbleResultCache.match(fingerprint, {
+        sourceText: region.sourceText,
+        box: region.box,
+        neighborhood: [all[index - 1]?.sourceText, all[index + 1]?.sourceText].filter((value): value is string => Boolean(value)),
+      });
+      if (!match || priorityRank(match.priority) <= priorityRank(incomingPriority)) return region;
+      return { ...region, translatedText: match.translatedText };
+    }));
+    return { ...result, regions: regions.filter((region) => region.translatedText.trim() !== "") };
   }
 }
 

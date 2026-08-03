@@ -17,10 +17,10 @@ test("ChapterResultCache saves and reads renderable results by image URL", async
   const context = { pageUrl: "https://reader.example/ch/1", targetLanguage: "zh-CN", providerProfile: "generic-ocr" };
 
   await cache.save(context, "https://cdn.example/1.webp", fakeResult("s1"));
-  const doc = await cache.read(context);
+  const entry = await cache.get(context, "https://cdn.example/1.webp");
 
-  assert.equal(doc.entries["https://cdn.example/1.webp"]?.result.surfaceId, "s1");
-  assert.equal(doc.entries["https://cdn.example/1.webp"]?.result.regions.length, 1);
+  assert.equal(entry?.result.surfaceId, "s1");
+  assert.equal(entry?.result.regions.length, 1);
 });
 
 test("ChapterResultCache ignores empty results and can clear a chapter", async () => {

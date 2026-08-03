@@ -2,15 +2,28 @@ import type { SurfaceResult } from "@umt/shared/types";
 
 export interface ChapterResultCacheEntry {
   surfaceId: string;
-  imageUrl: string;
+  imageUrlHash: string;
   result: SurfaceResult;
   savedAt: number;
 }
 
 export interface ChapterResultCacheDocument {
-  version: 1 | 2;
+  version: 2;
   key: string;
   entries: Record<string, ChapterResultCacheEntry>;
+}
+
+interface LegacyChapterResultCacheEntry {
+  surfaceId: string;
+  imageUrl: string;
+  result: SurfaceResult;
+  savedAt: number;
+}
+
+interface LegacyChapterResultCacheDocument {
+  version: 1;
+  key: string;
+  entries: Record<string, LegacyChapterResultCacheEntry>;
 }
 
 export interface ChapterResultCacheContext {
@@ -41,18 +54,24 @@ export class ChapterResultCache {
   constructor(private readonly storage: ChapterResultCacheStorage = getDefaultStorage()) {}
 
   async read(context: ChapterResultCacheContext): Promise<ChapterResultCacheDocument> {
-    const v1 = await this.readVersion(1, context);
-    const v2 = await this.readVersion(2, context);
-    return { version: 2, key: chapterResultCacheKey(context), entries: { ...v1.entries, ...v2.entries } };
+    const v1 = await this.readLegacy(context);
+    const v2 = await this.readV2(context);
+    return { version: 2, key: chapterResultCacheKey(context), entries: { ...v1, ...v2.entries } };
+  }
+
+  async get(context: ChapterResultCacheContext, imageUrl: string): Promise<ChapterResultCacheEntry | null> {
+    if (!imageUrl) return null;
+    return (await this.read(context)).entries[imageUrlHash(imageUrl)] ?? null;
   }
 
   async save(context: ChapterResultCacheContext, imageUrl: string, result: SurfaceResult | { status: string; regions?: unknown }): Promise<void> {
     if (!imageUrl || !isReusableResult(result)) return;
-    const doc = await this.read(context);
-    const entry: ChapterResultCacheEntry = { surfaceId: result.surfaceId, imageUrl, result: cloneResult(result), savedAt: Date.now() };
-    doc.entries[imageUrl] = entry;
-    const v2: ChapterResultCacheDocument = { ...doc, version: 2, key: chapterResultCacheKey(context) };
-    const v1: ChapterResultCacheDocument = { ...doc, version: 1, key: legacyChapterResultCacheKey(context) };
+    const imageUrlId = imageUrlHash(imageUrl);
+    const entry: ChapterResultCacheEntry = { surfaceId: result.surfaceId, imageUrlHash: imageUrlId, result: cloneResult(result), savedAt: Date.now() };
+    const v2 = await this.readV2(context);
+    v2.entries[imageUrlId] = entry;
+    const v1 = await this.readLegacyDocument(context);
+    v1.entries[imageUrl] = { surfaceId: result.surfaceId, imageUrl, result: cloneResult(result), savedAt: entry.savedAt };
     await this.storage.set({ [v2.key]: v2, [v1.key]: v1 });
   }
 
@@ -60,24 +79,51 @@ export class ChapterResultCache {
     await this.storage.remove([chapterResultCacheKey(context), legacyChapterResultCacheKey(context)]);
   }
 
-  private async readVersion(version: 1 | 2, context: ChapterResultCacheContext): Promise<ChapterResultCacheDocument> {
-    const key = version === 2 ? chapterResultCacheKey(context) : legacyChapterResultCacheKey(context);
+  private async readV2(context: ChapterResultCacheContext): Promise<ChapterResultCacheDocument> {
+    const key = chapterResultCacheKey(context);
     const raw = await this.storage.get(key);
     const doc = raw?.[key] as ChapterResultCacheDocument | undefined;
-    if (!isChapterResultCacheDocument(doc, version, key)) return { version, key, entries: {} };
+    if (!isV2Document(doc, key)) return { version: 2, key, entries: {} };
     return { ...doc, entries: Object.fromEntries(Object.entries(doc.entries).filter(([, entry]) => isReusableEntry(entry))) };
+  }
+
+  private async readLegacy(context: ChapterResultCacheContext): Promise<Record<string, ChapterResultCacheEntry>> {
+    const doc = await this.readLegacyDocument(context);
+    return Object.fromEntries(Object.values(doc.entries)
+      .filter(isLegacyReusableEntry)
+      .map((entry) => [imageUrlHash(entry.imageUrl), { surfaceId: entry.surfaceId, imageUrlHash: imageUrlHash(entry.imageUrl), result: entry.result, savedAt: entry.savedAt }]));
+  }
+
+  private async readLegacyDocument(context: ChapterResultCacheContext): Promise<LegacyChapterResultCacheDocument> {
+    const key = legacyChapterResultCacheKey(context);
+    const raw = await this.storage.get(key);
+    const doc = raw?.[key] as LegacyChapterResultCacheDocument | undefined;
+    if (!isV1Document(doc, key)) return { version: 1, key, entries: {} };
+    return { ...doc, entries: Object.fromEntries(Object.entries(doc.entries).filter(([, entry]) => isLegacyReusableEntry(entry))) };
   }
 }
 
-function isChapterResultCacheDocument(value: unknown, version: 1 | 2, key: string): value is ChapterResultCacheDocument {
+function isV2Document(value: unknown, key: string): value is ChapterResultCacheDocument {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const doc = value as Partial<ChapterResultCacheDocument>;
-  return doc.version === version && doc.key === key && Boolean(doc.entries) && typeof doc.entries === "object" && !Array.isArray(doc.entries);
+  return doc.version === 2 && doc.key === key && Boolean(doc.entries) && typeof doc.entries === "object" && !Array.isArray(doc.entries);
+}
+
+function isV1Document(value: unknown, key: string): value is LegacyChapterResultCacheDocument {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const doc = value as Partial<LegacyChapterResultCacheDocument>;
+  return doc.version === 1 && doc.key === key && Boolean(doc.entries) && typeof doc.entries === "object" && !Array.isArray(doc.entries);
 }
 
 function isReusableEntry(value: unknown): value is ChapterResultCacheEntry {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const entry = value as Partial<ChapterResultCacheEntry>;
+  return typeof entry.surfaceId === "string" && typeof entry.imageUrlHash === "string" && isReusableResult(entry.result);
+}
+
+function isLegacyReusableEntry(value: unknown): value is LegacyChapterResultCacheEntry {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const entry = value as Partial<LegacyChapterResultCacheEntry>;
   return typeof entry.surfaceId === "string" && typeof entry.imageUrl === "string" && isReusableResult(entry.result);
 }
 
@@ -93,6 +139,10 @@ function normalizedPageUrl(pageUrl: string): string {
   url.search = "";
   url.hash = "";
   return `${url.origin}${url.pathname}`;
+}
+
+function imageUrlHash(imageUrl: string): string {
+  return `u${opaqueId(imageUrl)}`;
 }
 
 function opaqueContext(context: ChapterResultCacheContext): string {

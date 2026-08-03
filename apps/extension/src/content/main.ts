@@ -139,9 +139,8 @@ async function bootstrap(): Promise<boolean> {
   }
 
   async function restoreCachedChapterResults(surfaces: RegisteredSurface[]): Promise<void> {
-    const doc = await chapterCache.read(cacheContext());
     for (const surface of surfaces) {
-      const entry = doc.entries[surface.imageUrl];
+      const entry = await chapterCache.get(cacheContext(), surface.imageUrl);
       if (!entry) continue;
       const result = await manualOverrides.applyToResult({ ...entry.result, surfaceId: surface.surfaceId, status: "cached" as const }, settings.targetLanguage);
       renderer.render(surface.element, surface.naturalSize, result);

@@ -29,32 +29,45 @@ const V1_PREFIX = "umt.content-fingerprint-cache:v1:";
 const V2_PREFIX = "umt.content-fingerprint-cache:v2:";
 
 export function contentFingerprintCacheKey(fingerprint: ContentFingerprint): string {
-  return `${V2_PREFIX}${opaqueFingerprint(fingerprint)}`;
+  return `${V2_PREFIX}${opaqueFingerprint(storageSafeContentFingerprint(fingerprint))}`;
 }
 
 export function legacyContentFingerprintCacheKey(fingerprint: ContentFingerprint): string {
   return `${V1_PREFIX}${opaqueFingerprint(fingerprint)}`;
 }
 
+export function storageSafeContentFingerprint(fingerprint: ContentFingerprint): ContentFingerprint {
+  return {
+    ...fingerprint,
+    ocrProfile: contentProfileIdentifier(fingerprint.ocrProfile),
+    translationProfile: contentProfileIdentifier(fingerprint.translationProfile),
+  };
+}
+
 export class ContentFingerprintCache {
   constructor(private readonly storage: ContentFingerprintCacheStorage = getDefaultStorage()) {}
 
   async get(fingerprint: ContentFingerprint): Promise<SurfaceResult | null> {
-    for (const key of [contentFingerprintCacheKey(fingerprint), legacyContentFingerprintCacheKey(fingerprint)]) {
-      const raw = await this.storage.get(key);
-      const document = raw?.[key];
-      if (isContentFingerprintCacheDocument(document, fingerprint)) return cloneResult(document.result);
-    }
+    const safeFingerprint = storageSafeContentFingerprint(fingerprint);
+    const v2Key = contentFingerprintCacheKey(safeFingerprint);
+    const v2Raw = await this.storage.get(v2Key);
+    const v2Document = v2Raw?.[v2Key];
+    if (isContentFingerprintCacheDocument(v2Document, safeFingerprint)) return cloneResult(v2Document.result);
+    const v1Key = legacyContentFingerprintCacheKey(fingerprint);
+    const v1Raw = await this.storage.get(v1Key);
+    const v1Document = v1Raw?.[v1Key];
+    if (isContentFingerprintCacheDocument(v1Document, safeFingerprint) || isContentFingerprintCacheDocument(v1Document, fingerprint)) return cloneResult(v1Document.result);
     return null;
   }
 
   async save(fingerprint: ContentFingerprint, result: SurfaceResult | { status: string; regions?: unknown }): Promise<void> {
     if (!isReusableResult(result)) return;
+    const safeFingerprint = storageSafeContentFingerprint(fingerprint);
     const savedAt = Date.now();
-    const v2: ContentFingerprintCacheDocument = { version: 2, fingerprint: { ...fingerprint }, result: cloneResult(result), savedAt };
+    const v2: ContentFingerprintCacheDocument = { version: 2, fingerprint: safeFingerprint, result: cloneResult(result), savedAt };
     const v1: ContentFingerprintCacheDocument = { ...v2, version: 1 };
     await this.storage.set({
-      [contentFingerprintCacheKey(fingerprint)]: v2,
+      [contentFingerprintCacheKey(safeFingerprint)]: v2,
       [legacyContentFingerprintCacheKey(fingerprint)]: v1,
     });
   }
@@ -118,6 +131,16 @@ function opaqueFingerprint(fingerprint: ContentFingerprint): string {
     hash = Math.imul(hash, 0x01000193) >>> 0;
   }
   return `f${hash.toString(16).padStart(8, "0")}`;
+}
+
+export function contentProfileIdentifier(value: string): string {
+  if (/^profile:[0-9a-f]{8}$/i.test(value)) return value;
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return `profile:${hash.toString(16).padStart(8, "0")}`;
 }
 
 function getDefaultStorage(): ContentFingerprintCacheStorage {

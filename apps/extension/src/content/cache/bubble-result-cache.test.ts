@@ -10,7 +10,7 @@ test("BubbleResultCache fuzzy-matches normalized source text across modest coord
     sourceText: "  HELLO,   WORLD! ",
     box: { x: 100, y: 200, width: 220, height: 80 },
     neighborhood: ["BEFORE", "AFTER"],
-    translatedText: "你好，世界！",
+    translatedText: "浣犲ソ锛屼笘鐣岋紒",
     priority: "auto",
   }]);
 
@@ -20,10 +20,10 @@ test("BubbleResultCache fuzzy-matches normalized source text across modest coord
     neighborhood: ["before", "after"],
   });
 
-  assert.equal(match?.translatedText, "你好，世界！");
+  assert.equal(match?.translatedText, "浣犲ソ锛屼笘鐣岋紒");
 });
 
-test("BubbleResultCache gives deletion tombstones precedence over every other source", async () => {
+test("BubbleResultCache gives manual selection precedence over edits and deletion tombstones", async () => {
   const { BubbleResultCache } = await import("./" + "bubble-result-cache.js");
   const cache = new BubbleResultCache(fakeStorage());
   const context = cacheContext();
@@ -36,8 +36,23 @@ test("BubbleResultCache gives deletion tombstones precedence over every other so
 
   const match = await cache.match(context, probe());
 
-  assert.equal(match?.priority, "manual-tombstone");
-  assert.equal(match?.translatedText, "");
+  assert.equal(match?.priority, "manual-selection");
+  assert.equal(match?.translatedText, "selected");
+});
+
+test("BubbleResultCache keeps a manual selection for the same bubble when a later edit or tombstone conflicts", async () => {
+  const { BubbleResultCache } = await import("./" + "bubble-result-cache.js");
+  const cache = new BubbleResultCache(fakeStorage());
+  const context = cacheContext();
+  await cache.save(context, [
+    { id: "same-bubble", ...probe(), translatedText: "selection", priority: "manual-selection" },
+    { id: "same-bubble", ...probe(), translatedText: "", priority: "manual-tombstone" },
+  ]);
+
+  const match = await cache.match(context, probe());
+
+  assert.equal(match?.priority, "manual-selection");
+  assert.equal(match?.translatedText, "selection");
 });
 
 test("BubbleResultCache gives manual selection priority over forced retranslate and auto/cache", async () => {
@@ -51,6 +66,29 @@ test("BubbleResultCache gives manual selection priority over forced retranslate 
   ]);
 
   assert.equal((await cache.match(context, probe()))?.translatedText, "selected");
+});
+
+test("BubbleResultCache requires matching text, trustworthy geometry, and reading neighbors", async () => {
+  const { BubbleResultCache } = await import("./" + "bubble-result-cache.js");
+  const cache = new BubbleResultCache(fakeStorage());
+  const context = cacheContext();
+  await cache.save(context, [entry("auto", "machine")]);
+
+  assert.equal(await cache.match(context, { ...probe(), sourceText: "HELLO THERE" }), null);
+  assert.equal(await cache.match(context, { ...probe(), neighborhood: [] }), null);
+  assert.equal(await cache.match(context, { ...probe(), box: { x: 800, y: 900, width: 200, height: 80 } }), null);
+});
+
+test("BubbleResultCache misses ambiguous candidates whose best scores are too close", async () => {
+  const { BubbleResultCache } = await import("./" + "bubble-result-cache.js");
+  const cache = new BubbleResultCache(fakeStorage());
+  const context = cacheContext();
+  await cache.save(context, [
+    { id: "candidate-a", ...probe(), translatedText: "A", priority: "auto" },
+    { id: "candidate-b", ...probe(), translatedText: "B", priority: "auto" },
+  ]);
+
+  assert.equal(await cache.match(context, probe()), null);
 });
 
 function cacheContext() {

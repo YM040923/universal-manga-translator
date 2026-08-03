@@ -27,6 +27,17 @@ test("v2 chapter cache double-writes and never restores failed or empty entries"
   assert.deepEqual((await cache.read(context)).entries, {});
 });
 
+test("v2 chapter cache stores only an image URL hash", async () => {
+  const storage = fakeStorage();
+  const cache = new ChapterResultCache(storage);
+  const context = { pageUrl: "https://reader.example/ch/1", targetLanguage: "zh-CN", providerProfile: "direct:test" };
+  await cache.save(context, "https://cdn.private.example/signed/page.webp?token=secret", result());
+
+  const v2 = Object.entries(storage.snapshot()).find(([key]) => key.startsWith("umt.chapter-cache:v2:"));
+  assert.ok(v2);
+  assert.doesNotMatch(JSON.stringify(v2?.[1]), /cdn\.private\.example|token=secret/);
+});
+
 test("v2 manual selections double-write and retain their highest-priority marker", async () => {
   const storage = fakeStorage();
   const cache = new ManualSelectionCache(storage);
@@ -61,7 +72,7 @@ test("DirectOcrCache double-reads v1 and double-writes v2 without caching empty 
 function result() {
   return {
     surfaceId: "s1", imageHash: "hash", status: "completed" as const, providerProfile: "direct:test", layoutVersion: 1, elapsedMs: 1,
-    regions: [{ id: "r1", box: { x: 1, y: 2, width: 30, height: 10 }, sourceText: "HELLO", translatedText: "你好", confidence: 1, orientation: "horizontal" as const, kind: "dialogue" as const, style: { fontSize: 16, writingMode: "horizontal-tb" as const, align: "center" as const, background: "#fff", color: "#111" } }],
+    regions: [{ id: "r1", box: { x: 1, y: 2, width: 30, height: 10 }, sourceText: "HELLO", translatedText: "浣犲ソ", confidence: 1, orientation: "horizontal" as const, kind: "dialogue" as const, style: { fontSize: 16, writingMode: "horizontal-tb" as const, align: "center" as const, background: "#fff", color: "#111" } }],
   };
 }
 function ocrRegion() { return { id: "o1", box: { x: 1, y: 2, width: 3, height: 4 }, sourceText: "HELLO", confidence: 1, orientation: "horizontal" as const, kind: "dialogue" as const }; }

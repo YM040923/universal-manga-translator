@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { DirectClient } from "./direct-client.js";
 import { DirectOcrCache } from "../cache/direct-ocr-cache.js";
 import { ContentFingerprintCache } from "../cache/content-fingerprint-cache.js";
+import { BubbleResultCache } from "../cache/bubble-result-cache.js";
 import { DEFAULT_SETTINGS, type ExtensionSettings } from "../../settings/settings.js";
 
 test("DirectClient reuses a completed content fingerprint when a signed image URL changes", async () => {
@@ -18,7 +19,7 @@ test("DirectClient reuses a completed content fingerprint when a signed image UR
     const body = JSON.parse(String(init?.body));
     const prompt = String(body.messages[0].content);
     const item = JSON.parse(prompt.slice(prompt.lastIndexOf("\n") + 1)).items[0];
-    return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ items: [{ id: item.id, translatedText: "ÄãºÃ" }] }) } }] }), { status: 200, headers: { "content-type": "application/json" } });
+    return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ items: [{ id: item.id, translatedText: "ä½ å¥½" }] }) } }] }), { status: 200, headers: { "content-type": "application/json" } });
   }) as typeof fetch;
   const shared = {
     __testFetch: fetchImpl,
@@ -35,6 +36,33 @@ test("DirectClient reuses a completed content fingerprint when a signed image UR
   assert.equal(secondResult.ok && secondResult.result?.status, "cached");
   assert.equal(ocrCalls, 1);
   assert.equal(translationCalls, 1);
+});
+
+test("DirectClient reads a matching manual-selection bubble before lower-priority cached edits", async () => {
+  let translationCalls = 0;
+  const storage = fakeStorage();
+  const fetchImpl = (async (url, init) => {
+    if (String(url).includes("ocr")) return new Response(JSON.stringify({ words_result: [{ words: "HELLO", location: { left: 10, top: 20, width: 60, height: 20 } }] }), { status: 200, headers: { "content-type": "application/json" } });
+    translationCalls += 1;
+    const body = JSON.parse(String(init?.body));
+    const prompt = String(body.messages[0].content);
+    const item = JSON.parse(prompt.slice(prompt.lastIndexOf("\n") + 1)).items[0];
+    const translatedText = translationCalls === 1 ? "selected" : "machine";
+    return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ items: [{ id: item.id, translatedText }] }) } }] }), { status: 200, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+  const shared = {
+    __testFetch: fetchImpl,
+    __testOcrCache: new DirectOcrCache(storage),
+    __testContentCache: new ContentFingerprintCache(storage),
+    __testBubbleResultCache: new BubbleResultCache(storage),
+  };
+  const client = new DirectClient(settings(shared));
+
+  await client.submit(task("https://cdn.example/a.webp", "manual:1"));
+  const automatic = await client.submit(task("https://cdn.example/a.webp", "automatic:1"));
+
+  assert.equal(automatic.ok && automatic.result?.regions[0]?.translatedText, "selected");
+  assert.equal(translationCalls, 2);
 });
 
 function settings(injections: Record<string, unknown>): ExtensionSettings {

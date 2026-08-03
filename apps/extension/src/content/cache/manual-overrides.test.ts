@@ -7,12 +7,11 @@ test("manual edits and deletion tombstones survive bubble coordinate drift", () 
     imageHash: "hash",
     targetLanguage: "zh-CN",
     regionId: "old-region",
-    translatedText: "ÈË¹¤ÐÞÕý",
+    translatedText: "äººå·¥ä¿®æ­£",
     sourceText: "HELLO WORLD",
     box: { x: 100, y: 200, width: 200, height: 80 },
-    neighborhood: ["before", "after"],
   }] as any);
-  assert.equal(edited.regions[0]?.translatedText, "ÈË¹¤ÐÞÕý");
+  assert.equal(edited.regions[0]?.translatedText, "äººå·¥ä¿®æ­£");
 
   const deleted = applyManualOverridesToResult(result(), [{
     imageHash: "hash",
@@ -21,7 +20,6 @@ test("manual edits and deletion tombstones survive bubble coordinate drift", () 
     translatedText: "",
     sourceText: "HELLO WORLD",
     box: { x: 100, y: 200, width: 200, height: 80 },
-    neighborhood: ["before", "after"],
   }] as any);
   assert.deepEqual(deleted.regions, []);
 });
