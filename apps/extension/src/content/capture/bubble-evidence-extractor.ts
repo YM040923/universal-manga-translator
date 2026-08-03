@@ -82,6 +82,7 @@ function evidenceForObservation(
   return {
     observationId: observation.id,
     visualGroupId: componentGroupId(component),
+    visualFingerprint: componentFingerprint(component),
     componentBox: component.box,
     shape: component.shape,
     confidence: component.confidence,
@@ -294,6 +295,15 @@ function classifyShape(fillRatio: number, box: Rect): BubbleShape {
 function componentGroupId(component: Component): string {
   const { x, y, width, height } = component.box;
   return `component:${component.polarity}:${x}:${y}:${width}:${height}`;
+}
+
+function componentFingerprint(component: Component): string {
+  return [
+    component.polarity,
+    component.shape,
+    Math.round(component.area / 16),
+    Math.round(component.fillRatio * 100),
+  ].join(":");
 }
 
 function dedupeComponents(components: Component[]): Component[] {

@@ -457,9 +457,16 @@ function remapBubbleEvidenceToParent(
     remapped.componentBox = parentComponentBox;
   }
   if (evidence.visualGroupId) {
-    remapped.visualGroupId = parentComponentBox
-      ? canonicalVisualGroupKey(evidence.shape ?? "free-text", parentComponentBox)
-      : evidence.visualGroupId;
+    if (evidence.visualFingerprint && parentComponentBox) {
+      remapped.visualGroupId = canonicalVisualGroupKey(
+        evidence.shape ?? "free-text",
+        parentComponentBox,
+        evidence.visualFingerprint,
+      );
+    } else {
+      // Arbitrary provider group IDs are not safe to merge across tiles.
+      remapped.visualGroupId = `tile:${unit.id}:${evidence.visualGroupId}`;
+    }
   }
   return remapped;
 }
@@ -467,6 +474,7 @@ function remapBubbleEvidenceToParent(
 function canonicalVisualGroupKey(
   shape: NonNullable<BubbleOwnershipEvidence["shape"]>,
   box: Rect,
+  fingerprint: string,
 ): string {
   const quantum = 4;
   const edges = [
@@ -475,7 +483,7 @@ function canonicalVisualGroupKey(
     box.x + box.width,
     box.y + box.height,
   ].map((value) => Math.round(value / quantum));
-  return `visual:${shape}:${edges.join(":")}`;
+  return `visual:${shape}:${fingerprint}:${edges.join(":")}`;
 }
 
 function remapRectToParent(

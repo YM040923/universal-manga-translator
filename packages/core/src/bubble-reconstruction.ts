@@ -7,6 +7,8 @@ export interface BubbleOwnershipEvidence {
   observationId: string;
   manualGroupId?: string;
   visualGroupId?: string;
+  /** Content-derived component signature. It is stable across overlapping tiles. */
+  visualFingerprint?: string;
   componentBox?: Rect;
   shape?: BubbleShape;
   confidence: number;

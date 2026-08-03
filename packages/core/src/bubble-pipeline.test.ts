@@ -151,6 +151,7 @@ async function runCrossTileBubble(
     bubbleEvidenceExtractor: async ({ observations, recognitionUnit }) => observations.map((observation) => ({
       observationId: observation.id,
       visualGroupId: recognitionUnit.id === "overlap-top" ? "local-top-component" : "local-bottom-component",
+      visualFingerprint: "bright:ellipse:100:60",
       componentBox: recognitionUnit.id === "overlap-top"
         ? { x: 40, y: 700, width: 230, height: 180 }
         : { x: 41, y: 101, width: 229, height: 179 },
