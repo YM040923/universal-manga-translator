@@ -43,11 +43,19 @@ export class ManualSelectionCache {
   constructor(private readonly storage: ManualSelectionCacheStorage = getDefaultStorage()) {}
 
   async read(context: ManualSelectionCacheContext): Promise<ManualSelectionCacheDocument> {
-    const v1 = await this.readVersion(1, context);
     const v2 = await this.readVersion(2, context);
-    const byId = new Map(v1.entries.map((entry) => [entry.id, entry]));
+    const legacy = await this.readLegacy(context);
+    if (!legacy) return v2;
+    const byId = new Map(legacy.entries.map((entry) => [entry.id, entry]));
     for (const entry of v2.entries) byId.set(entry.id, entry);
-    return { version: 2, key: manualSelectionCacheKey(context), entries: [...byId.values()].map((entry) => ({ ...entry, priority: "manual-selection" as const })) };
+    const migrated: ManualSelectionCacheDocument = {
+      version: 2,
+      key: manualSelectionCacheKey(context),
+      entries: [...byId.values()].map((entry) => ({ ...entry, priority: "manual-selection" as const })),
+    };
+    await this.storage.set({ [migrated.key]: migrated });
+    await this.storage.remove(legacy.key);
+    return migrated;
   }
 
   async save(context: ManualSelectionCacheContext, entry: ManualSelectionCacheEntry): Promise<void> {
@@ -58,8 +66,7 @@ export class ManualSelectionCache {
     if (index >= 0) doc.entries[index] = nextEntry;
     else doc.entries.push(nextEntry);
     const v2: ManualSelectionCacheDocument = { ...doc, version: 2, key: manualSelectionCacheKey(context) };
-    const v1: ManualSelectionCacheDocument = { ...doc, version: 1, key: legacyManualSelectionCacheKey(context) };
-    await this.storage.set({ [v2.key]: v2, [v1.key]: v1 });
+    await this.storage.set({ [v2.key]: v2 });
   }
 
   async clear(context: ManualSelectionCacheContext): Promise<void> {
@@ -71,6 +78,14 @@ export class ManualSelectionCache {
     const raw = await this.storage.get(key);
     const doc = raw?.[key] as ManualSelectionCacheDocument | undefined;
     if (!isDocument(doc, version, key)) return { version, key, entries: [] };
+    return { ...doc, entries: doc.entries.filter(isManualSelectionCacheEntry) };
+  }
+
+  private async readLegacy(context: ManualSelectionCacheContext): Promise<ManualSelectionCacheDocument | null> {
+    const key = legacyManualSelectionCacheKey(context);
+    const raw = await this.storage.get(key);
+    const doc = raw?.[key] as ManualSelectionCacheDocument | undefined;
+    if (!isDocument(doc, 1, key)) return null;
     return { ...doc, entries: doc.entries.filter(isManualSelectionCacheEntry) };
   }
 }

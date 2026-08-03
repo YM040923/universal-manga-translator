@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { ChapterResultCache, chapterResultCacheKey, legacyChapterResultCacheKey, type ChapterResultCacheStorage } from "./chapter-result-cache.js";
-import { ManualSelectionCache, type ManualSelectionCacheStorage } from "./manual-selection-cache.js";
+import { ManualSelectionCache, legacyManualSelectionCacheKey, type ManualSelectionCacheStorage } from "./manual-selection-cache.js";
 import { DirectOcrCache, type DirectOcrCacheStorage } from "./direct-ocr-cache.js";
 
 test("v2 chapter cache never writes legacy signed image URLs and never restores failed or empty entries", async () => {
@@ -57,10 +57,10 @@ test("v2 chapter cache stores only an image URL hash", async () => {
   assert.doesNotMatch(JSON.stringify(v2?.[1]), /cdn\.private\.example|token=secret/);
 });
 
-test("v2 manual selections double-write and retain their highest-priority marker", async () => {
+test("v2 manual selections never write a legacy signed page URL and retain their highest-priority marker", async () => {
   const storage = fakeStorage();
   const cache = new ManualSelectionCache(storage);
-  const context = { pageUrl: "https://reader.example/ch/1", targetLanguage: "zh-CN", providerProfile: "direct:test" };
+  const context = { pageUrl: "https://reader.example/ch/token=secret", targetLanguage: "zh-CN", providerProfile: "direct:test" };
   await cache.save(context, {
     id: "manual:1",
     documentRect: { x: 1, y: 2, width: 30, height: 40 },
@@ -71,7 +71,31 @@ test("v2 manual selections double-write and retain their highest-priority marker
 
   assert.equal(doc.version, 2);
   assert.equal((doc.entries[0] as any)?.priority, "manual-selection");
-  assert.equal(Object.keys(storage.snapshot()).filter((key) => key.startsWith("umt.manual-selection-cache:v")).length, 2);
+  assert.equal(Object.keys(storage.snapshot()).filter((key) => key.startsWith("umt.manual-selection-cache:v2:")).length, 1);
+  assert.equal(Object.keys(storage.snapshot()).filter((key) => key.startsWith("umt.manual-selection-cache:v1:")).length, 0);
+  assert.doesNotMatch(JSON.stringify(storage.snapshot()), /token=secret/);
+});
+
+test("manual selection cache reads a legacy v1 document, migrates it to v2, and removes the URL-bearing key", async () => {
+  const storage = fakeStorage();
+  const cache = new ManualSelectionCache(storage);
+  const context = { pageUrl: "https://reader.example/ch/token=secret", targetLanguage: "zh-CN", providerProfile: "direct:test" };
+  const legacyKey = legacyManualSelectionCacheKey(context);
+  await storage.set({ [legacyKey]: {
+    version: 1,
+    key: legacyKey,
+    entries: [{
+      id: "manual:legacy",
+      documentRect: { x: 1, y: 2, width: 30, height: 40 },
+      naturalSize: { width: 30, height: 40 },
+      result: result(),
+      savedAt: 1,
+    }],
+  } });
+
+  assert.equal((await cache.read(context)).entries[0]?.id, "manual:legacy");
+  assert.equal(storage.snapshot()[legacyKey], undefined);
+  assert.doesNotMatch(JSON.stringify(storage.snapshot()), /token=secret/);
 });
 
 test("DirectOcrCache double-reads v1 and double-writes v2 without caching empty OCR", async () => {
