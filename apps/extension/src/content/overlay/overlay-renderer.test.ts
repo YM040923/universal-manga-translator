@@ -179,7 +179,7 @@ test("empty manual edit removes the translation bubble and stores a deleted mark
 
   assert.equal(document.querySelector("[data-umt-region-id='r1']"), null);
   assert.equal(loadManualEdit("hash", "zh-CN", "r1"), "");
-  assert.deepEqual(saved, { imageHash: "hash", targetLanguage: "zh-CN", regionId: "r1", translatedText: "" });
+  assert.deepEqual(saved, { imageHash: "hash", targetLanguage: "zh-CN", regionId: "r1", translatedText: "", sourceText: "Hello", box: { x: 100, y: 100, width: 200, height: 100 }, neighborhood: [] });
 
   renderer.render(img, { width: 1000, height: 2000 }, fakeResult("delete-edit"));
   assert.equal(document.querySelector("[data-umt-region-id='r1']"), null);
@@ -194,7 +194,7 @@ test("manual edit callback receives override payload", () => {
 
   document.querySelector<HTMLElement>("[data-umt-text-chip='true']")!.click();
 
-  assert.deepEqual(saved, { imageHash: "hash", targetLanguage: "zh-CN", regionId: "r1", translatedText: "manual edit" });
+  assert.deepEqual(saved, { imageHash: "hash", targetLanguage: "zh-CN", regionId: "r1", translatedText: "manual edit", sourceText: "Hello", box: { x: 100, y: 100, width: 200, height: 100 }, neighborhood: [] });
 });
 
 test("creating a replacement renderer removes the previous overlay root so old manual bubbles follow popup visibility", () => {

@@ -26,6 +26,8 @@ import type { SurfaceResult, SurfaceTask } from "@umt/shared/types";
 import type { ExtensionSettings } from "../../settings/settings.js";
 import { directHttpUrlPolicyError } from "../messages.js";
 import { DirectOcrCache } from "../cache/direct-ocr-cache.js";
+import { BubbleResultCache, type BubbleResultPriority } from "../cache/bubble-result-cache.js";
+import { ContentFingerprintCache, type ContentFingerprint } from "../cache/content-fingerprint-cache.js";
 import { ExtensionManualOverrideStore, type ManualOverrideStorage } from "../cache/manual-overrides.js";
 import type { DiagnosticsResponse, SelfTestResponse } from "./backend-client.js";
 import { ChapterTranslationMemory } from "./chapter-memory.js";
@@ -51,6 +53,8 @@ const DIRECT_OCR_TILE_PREPROCESSING_VERSION = "lossless-png-tile-v1";
 interface DirectClientSettings extends ExtensionSettings {
   __testFetch?: FetchLike;
   __testOcrCache?: DirectOcrCache;
+  __testContentCache?: ContentFingerprintCache;
+  __testBubbleResultCache?: BubbleResultCache;
   __testManualOverrideStorage?: ManualOverrideStorage;
   __testRecognitionTileCropper?: RecognitionTileCropper;
   __testOcrPreprocessLoader?: CoreOcrPreprocessLoader;
@@ -66,6 +70,8 @@ interface DirectRecognitionDecision {
 export class DirectClient implements TranslatorClient {
   private readonly fetchImpl: FetchLike;
   private readonly ocrCache: DirectOcrCache;
+  private readonly contentCache: ContentFingerprintCache;
+  private readonly bubbleResultCache: BubbleResultCache;
   private readonly manualOverrides: ExtensionManualOverrideStore;
   private readonly ocrClient: GenericNetworkOcrClient;
   private readonly chapterMemory: ChapterTranslationMemory;
@@ -77,6 +83,8 @@ export class DirectClient implements TranslatorClient {
   constructor(private readonly settings: DirectClientSettings) {
     this.fetchImpl = settings.__testFetch ?? createExtensionProxyFetch();
     this.ocrCache = settings.__testOcrCache ?? new DirectOcrCache();
+    this.contentCache = settings.__testContentCache ?? new ContentFingerprintCache();
+    this.bubbleResultCache = settings.__testBubbleResultCache ?? new BubbleResultCache();
     this.manualOverrides = new ExtensionManualOverrideStore(settings.__testManualOverrideStorage);
     this.ocrClient = this.createOcrClient();
     this.chapterMemory = new ChapterTranslationMemory();
@@ -195,6 +203,20 @@ export class DirectClient implements TranslatorClient {
       const chapterContext = this.chapterMemory.chapterContextFor(imageHash);
       const termCandidates = this.chapterMemory.termCandidatesFor(imageHash);
       const recognitionDecision = this.createRecognitionPlan(task);
+      const cacheFingerprint = this.contentFingerprint(imageHash, task);
+      if (!retranslate && !task.surfaceId.startsWith("manual:")) {
+        const cached = await this.contentCache.get(cacheFingerprint);
+        if (cached) {
+          const cachedResult = await this.manualOverrides.applyToResult({
+            ...cached,
+            surfaceId: task.surfaceId,
+            status: "cached",
+            elapsedMs: Date.now() - startedAt,
+          }, task.targetLanguage);
+          this.chapterMemory.remember(imageHash, cachedResult);
+          return { ok: true, surfaceId: task.surfaceId, status: "cached", result: cachedResult };
+        }
+      }
       const recognitionPlan = recognitionDecision.plan;
       const preCroppedOcrInputLoader = recognitionPlan.units.length > 1
         ? this.createPreCroppedOcrInputLoader(task.imageData, recognitionPlan)
@@ -243,6 +265,15 @@ export class DirectClient implements TranslatorClient {
         elapsedMs: Date.now() - startedAt,
       };
       const surfaceResult = await this.manualOverrides.applyToResult(rawSurfaceResult, task.targetLanguage);
+      if (!task.surfaceId.startsWith("manual:")) await this.contentCache.save(cacheFingerprint, surfaceResult);
+      await this.bubbleResultCache.save(cacheFingerprint, surfaceResult.regions.map((region, index, regions) => ({
+        id: region.id,
+        sourceText: region.sourceText,
+        box: region.box,
+        neighborhood: [regions[index - 1]?.sourceText, regions[index + 1]?.sourceText].filter((value): value is string => Boolean(value)),
+        translatedText: region.translatedText,
+        priority: this.bubbleResultPriority(task, retranslate),
+      })));
       this.chapterMemory.remember(imageHash, surfaceResult);
       return { ok: true, surfaceId: task.surfaceId, status: surfaceResult.status, result: surfaceResult };
     } catch (error) {
@@ -388,6 +419,27 @@ export class DirectClient implements TranslatorClient {
 
   providerProfile(): string {
     return `direct:${this.settings.directOcr.inputMode}:${directOcrConfigHash(this.settings)}+openai-compatible:${this.settings.directTranslator.model}+style:${TRANSLATION_STYLE_VERSION}+${effectiveGlossaryHash(this.settings)}`;
+  }
+
+  private contentFingerprint(imageHash: string, task: SurfaceTask): ContentFingerprint {
+    return {
+      imageHash,
+      naturalWidth: task.naturalSize.width,
+      naturalHeight: task.naturalSize.height,
+      ocrProfile: `direct:${this.settings.directOcr.inputMode}:${directOcrConfigHash(this.settings)}`,
+      preprocessingVersion: task.naturalSize.height > DIRECT_OCR_TILE_HEIGHT_THRESHOLD
+        ? `${DIRECT_OCR_TILE_PREPROCESSING_VERSION}+ocr-preprocess-policy:v1`
+        : "ocr-preprocess-policy:v1",
+      targetLanguage: task.targetLanguage,
+      translationProfile: `openai-compatible:${this.settings.directTranslator.baseUrl}:${this.settings.directTranslator.model}:${effectiveGlossaryHash(this.settings)}`,
+      promptVersion: TRANSLATION_STYLE_VERSION,
+      layoutVersion: "layout:v1",
+    };
+  }
+
+  private bubbleResultPriority(task: SurfaceTask, retranslate: boolean): BubbleResultPriority {
+    if (task.surfaceId.startsWith("manual:")) return "manual-selection";
+    return retranslate ? "forced-retranslate" : "auto";
   }
 }
 

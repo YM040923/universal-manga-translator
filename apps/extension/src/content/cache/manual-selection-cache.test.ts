@@ -3,11 +3,12 @@ import assert from "node:assert/strict";
 import { ManualSelectionCache, manualSelectionCacheKey, type ManualSelectionCacheStorage } from "./manual-selection-cache.js";
 import type { SurfaceResult } from "@umt/shared/types";
 
-test("manualSelectionCacheKey normalizes URL and includes target/provider", () => {
-  assert.equal(
-    manualSelectionCacheKey({ pageUrl: "https://reader.example/ch/1?x=1#p3", targetLanguage: "zh-CN", providerProfile: "generic-ocr+gpt" }),
-    "umt.manual-selection-cache:v1:https://reader.example/ch/1:zh-CN:generic-ocr+gpt",
-  );
+test("manualSelectionCacheKey normalizes URL and keeps its v2 storage identifier opaque", () => {
+  const left = manualSelectionCacheKey({ pageUrl: "https://reader.example/ch/1?x=1#p3", targetLanguage: "zh-CN", providerProfile: "generic-ocr+gpt" });
+  const right = manualSelectionCacheKey({ pageUrl: "https://reader.example/ch/1?x=2#p4", targetLanguage: "zh-CN", providerProfile: "generic-ocr+gpt" });
+  assert.match(left, /^umt\.manual-selection-cache:v2:/);
+  assert.equal(left, right);
+  assert.doesNotMatch(left, /reader\.example|generic-ocr/);
 });
 
 test("ManualSelectionCache saves and restores selected rectangle results", async () => {

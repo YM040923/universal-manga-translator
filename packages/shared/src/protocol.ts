@@ -18,6 +18,9 @@ export interface ManualOverridePayload {
   targetLanguage: string;
   regionId: string;
   translatedText: string;
+  sourceText?: string;
+  box?: { x: number; y: number; width: number; height: number; };
+  neighborhood?: string[];
 }
 export interface SaveManualOverrideRequest extends ManualOverridePayload {}
 export interface SaveManualOverrideResponse { ok: true; override: ManualOverridePayload; }

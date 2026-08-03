@@ -151,6 +151,12 @@ async function bootstrap(): Promise<boolean> {
     }
   }
 
+  async function restoreCachedResults(surfaces: RegisteredSurface[]): Promise<void> {
+    // Manual selections establish protected overlay regions before ordinary cache restores.
+    await restoreCachedManualSelections();
+    await restoreCachedChapterResults(surfaces);
+  }
+
   function cacheContext(): ChapterResultCacheContext {
     return { pageUrl: window.location.href, targetLanguage: settings.targetLanguage, providerProfile: currentProviderProfile() };
   }
@@ -213,8 +219,7 @@ async function bootstrap(): Promise<boolean> {
     renderer.refreshAll();
     updateProgress();
     logger.info("surface registry scan", `${reason} | found=${surfaces.length}`);
-    void restoreCachedChapterResults(surfaces).catch((error) => logger.error("restore chapter cache failed", error));
-    void restoreCachedManualSelections().catch((error) => logger.error("restore manual selection cache failed", error));
+    void restoreCachedResults(surfaces).catch((error) => logger.error("restore cached results failed", error));
     return surfaces;
   }
 

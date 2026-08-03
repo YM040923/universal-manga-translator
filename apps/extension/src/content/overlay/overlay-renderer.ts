@@ -106,7 +106,7 @@ export class OverlayRenderer {
     const isManualSelection = isManualSelectionSurface(result.surfaceId);
     const currentManualBoxes: RenderedRect[] = [];
     const renderRegions = result.regions;
-    for (const region of renderRegions) {
+    for (const [regionIndex, region] of renderRegions.entries()) {
       const clampedNaturalBox = clampRectToBounds(region.box, naturalSize);
       if (!clampedNaturalBox) continue;
       const manualEdit = loadManualEdit(result.imageHash, this.targetLanguage, region.id);
@@ -209,7 +209,15 @@ export class OverlayRenderer {
         if (next !== null) {
           const normalizedNext = next.trim();
           saveManualEdit(result.imageHash, this.targetLanguage, region.id, normalizedNext);
-          this.onManualEdit?.({ imageHash: result.imageHash, targetLanguage: this.targetLanguage, regionId: region.id, translatedText: normalizedNext });
+          this.onManualEdit?.({
+            imageHash: result.imageHash,
+            targetLanguage: this.targetLanguage,
+            regionId: region.id,
+            translatedText: normalizedNext,
+            sourceText: region.sourceText,
+            box: { ...region.box },
+            neighborhood: [renderRegions[regionIndex - 1]?.sourceText, renderRegions[regionIndex + 1]?.sourceText].filter((value): value is string => Boolean(value)),
+          });
           if (normalizedNext === "") node.remove();
           else {
             delete chip.dataset.umtLayoutKey;
