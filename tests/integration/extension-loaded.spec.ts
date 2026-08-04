@@ -52,7 +52,8 @@ test("loaded extension stays inactive until the manga site is explicitly enabled
 
     await expect(page.locator("[data-umt-panel]")).toBeVisible({ timeout: 10000 });
     await expect(page.locator("[data-umt-chapter-progress='true']")).toBeVisible();
-    await expect(page.locator("[data-umt-surface-button]")).toHaveCount(1);
+    // The generic reader detector now exposes the regular image plus the exportable canvas page.
+    await expect(page.locator("[data-umt-surface-button]")).toHaveCount(2);
   } finally {
     await context.close();
     staticServer.kill();
