@@ -12,12 +12,23 @@ type ImmutableSurfaceResult = Readonly<Omit<SurfaceResult, "regions">> & {
 };
 
 export function overlayLayoutSnapshotHash(result: SurfaceResult, appearance: OverlayAppearance): string {
-  return `layout-v1-${fnv1a(stableSerialize({
+  return `layout-v2-${fnv1a(stableSerialize({
     result: {
       surfaceId: result.surfaceId,
       imageHash: result.imageHash,
-      layoutVersion: result.layoutVersion,
-      regions: result.regions,
+      regions: result.regions.map((region) => ({
+        id: region.id,
+        box: region.box,
+        sourceText: region.sourceText,
+        translatedText: region.translatedText,
+        kind: region.kind,
+        style: {
+          fontSize: region.style.fontSize,
+          writingMode: region.style.writingMode,
+          align: region.style.align,
+          color: region.style.color,
+        },
+      })),
     },
     appearance,
   }))}`;

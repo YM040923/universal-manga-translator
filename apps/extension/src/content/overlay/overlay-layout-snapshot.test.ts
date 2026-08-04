@@ -44,6 +44,22 @@ test("immutable overlay layout snapshots use a stable result and settings hash",
   assert.equal(overlayLayoutSnapshotHash({ ...result, providerProfile: "another-provider", elapsedMs: 999 }, appearance), stableHash);
   assert.notEqual(overlayLayoutSnapshotHash(result, { ...appearance, fontScale: 1.1 }), stableHash);
 
+  const nonLayoutMetadata = {
+    ...result,
+    layoutVersion: 99,
+    regions: result.regions.map((region) => ({
+      ...region,
+      confidence: 0.01,
+      orientation: "vertical" as const,
+      style: { ...region.style, background: "transparent" },
+    })),
+  };
+  assert.equal(overlayLayoutSnapshotHash(nonLayoutMetadata, appearance), stableHash);
+  assert.notEqual(overlayLayoutSnapshotHash({
+    ...result,
+    regions: result.regions.map((region) => ({ ...region, style: { ...region.style, color: "red" } })),
+  }, appearance), stableHash);
+
   const snapshot = buildImmutableOverlayLayoutSnapshot(result, appearance);
   assert.equal(snapshot.hash, stableHash);
   assert.equal(Object.isFrozen(snapshot), true);

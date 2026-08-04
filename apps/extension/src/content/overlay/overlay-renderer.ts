@@ -12,6 +12,7 @@ const manualEdits = new Map<string, string>();
 
 interface RenderState {
   element: HTMLElement;
+  host: HTMLElement;
   naturalSize: Size;
   snapshot: ImmutableOverlayLayoutSnapshot;
 }
@@ -69,6 +70,7 @@ export class OverlayRenderer {
     }
     this.rendered.delete(surfaceId);
     this.manualSelectionProtection.delete(surfaceId);
+    this.removeEmptyRoots();
   }
 
   clearAll(): void {
@@ -87,12 +89,11 @@ export class OverlayRenderer {
     const snapshot = prior?.snapshot.hash === hash
       ? prior.snapshot
       : buildImmutableOverlayLayoutSnapshot(result, this.appearance);
-    this.rendered.set(result.surfaceId, { element, naturalSize, snapshot });
     this.renderSurface(element, naturalSize, snapshot);
   }
 
   refreshAll(): void {
-    for (const { element, naturalSize, snapshot } of this.rendered.values()) this.renderSurface(element, naturalSize, snapshot);
+    for (const { element, naturalSize, snapshot } of [...this.rendered.values()]) this.renderSurface(element, naturalSize, snapshot);
   }
 
   setAppearance(appearance: Partial<OverlayAppearance>): void {
@@ -106,13 +107,17 @@ export class OverlayRenderer {
   private renderSurface(element: HTMLElement, naturalSize: Size, snapshot: ImmutableOverlayLayoutSnapshot): void {
     const result = snapshot.result;
     const host = overlayHostForElement(element);
+    const prior = this.rendered.get(result.surfaceId);
+    if (prior && (prior.element !== element || prior.host !== host)) this.clearSurface(result.surfaceId);
+    this.rendered.set(result.surfaceId, { element, host, naturalSize, snapshot });
     const root = this.rootForHost(host);
     const rect = element.getBoundingClientRect();
     const hostRect = host === document.documentElement ? null : host.getBoundingClientRect();
     const renderedRect = hostRect
       ? { x: rect.x - hostRect.x + host.scrollLeft, y: rect.y - hostRect.y + host.scrollTop, width: rect.width, height: rect.height }
       : { x: rect.x + window.scrollX, y: rect.y + window.scrollY, width: rect.width, height: rect.height };
-    const seenRegionIds = new Set<string>();
+    const regionKeys = stableRegionKeys(result.regions);
+    const seenRegionKeys = new Set<string>();
     const isManualSelection = isManualSelectionSurface(result.surfaceId);
     const currentManualBoxes: RenderedRect[] = [];
     const renderRegions = result.regions;
@@ -130,10 +135,12 @@ export class OverlayRenderer {
       } else if (this.overlapsManualSelection(box)) {
         continue;
       }
-      seenRegionIds.add(region.id);
-      const node = this.findOrCreateRegionNode(root, result.surfaceId, region.id);
+      const regionKey = regionKeys[regionIndex]!;
+      seenRegionKeys.add(regionKey);
+      const node = this.findOrCreateRegionNode(root, result.surfaceId, regionKey);
       node.dataset.umtSurfaceId = result.surfaceId;
       node.dataset.umtRegionId = region.id;
+      node.dataset.umtRegionKey = regionKey;
       node.dataset.umtManualSelection = isManualSelection ? "true" : "false";
       const chip = this.findOrCreateTextChip(node);
       chip.dataset.umtTextChip = "true";
@@ -240,12 +247,13 @@ export class OverlayRenderer {
       this.manualSelectionProtection.set(result.surfaceId, currentManualBoxes);
       this.removeNormalNodesCoveredByManualSelections(currentManualBoxes);
     }
-    this.removeStaleRegionNodes(result.surfaceId, seenRegionIds);
+    this.removeStaleRegionNodes(result.surfaceId, seenRegionKeys);
   }
 
   private rootForHost(host: HTMLElement): HTMLDivElement {
     const existing = this.roots.get(host);
-    if (existing) return existing;
+    if (existing?.isConnected && existing.parentElement === host) return existing;
+    if (existing) this.roots.delete(host);
     const root = document.createElement("div");
     root.dataset.umtOverlayRoot = "true";
     root.style.cssText = `position:absolute;left:0;top:0;width:0;height:0;z-index:2147483646;pointer-events:none;display:${this.visible ? "block" : "none"};`;
@@ -254,8 +262,8 @@ export class OverlayRenderer {
     return root;
   }
 
-  private findOrCreateRegionNode(root: HTMLElement, surfaceId: string, regionId: string): HTMLDivElement {
-    const selector = `[data-umt-surface-id='${escapeSelectorValue(surfaceId)}'][data-umt-region-id='${escapeSelectorValue(regionId)}']`;
+  private findOrCreateRegionNode(root: HTMLElement, surfaceId: string, regionKey: string): HTMLDivElement {
+    const selector = `[data-umt-surface-id='${escapeSelectorValue(surfaceId)}'][data-umt-region-key='${escapeSelectorValue(regionKey)}']`;
     const existing = root.querySelector<HTMLDivElement>(selector);
     if (existing) return existing;
     const node = document.createElement("div");
@@ -275,13 +283,22 @@ export class OverlayRenderer {
     return chip;
   }
 
-  private removeStaleRegionNodes(surfaceId: string, seenRegionIds: Set<string>): void {
+  private removeStaleRegionNodes(surfaceId: string, seenRegionKeys: Set<string>): void {
     const selector = `[data-umt-surface-id='${escapeSelectorValue(surfaceId)}']`;
     for (const root of this.roots.values()) {
       for (const node of [...root.querySelectorAll<HTMLElement>(selector)]) {
-        const regionId = node.dataset.umtRegionId;
-        if (!regionId || !seenRegionIds.has(regionId)) node.remove();
+        const regionKey = node.dataset.umtRegionKey;
+        if (!regionKey || !seenRegionKeys.has(regionKey)) node.remove();
       }
+    }
+    this.removeEmptyRoots();
+  }
+
+  private removeEmptyRoots(): void {
+    for (const [host, root] of this.roots) {
+      if (root.childElementCount > 0 && root.isConnected) continue;
+      root.remove();
+      this.roots.delete(host);
     }
   }
 
@@ -318,6 +335,50 @@ function glyphSafeInsetForText(text: string, width: number, height: number, fitt
 
 function escapeSelectorValue(value: string): string {
   return typeof CSS !== "undefined" && CSS.escape ? CSS.escape(value) : value.replace(/['\\]/g, "\\$&");
+}
+
+function stableRegionKeys(regions: readonly OverlayRegion[]): string[] {
+  const keys = new Array<string>(regions.length);
+  const duplicates = new Map<string, Array<{ index: number; fingerprint: string }>>();
+  for (const [index, region] of regions.entries()) {
+    const group = duplicates.get(region.id) ?? [];
+    group.push({ index, fingerprint: regionIdentityFingerprint(region) });
+    duplicates.set(region.id, group);
+  }
+  for (const [regionId, group] of duplicates) {
+    if (group.length === 1) {
+      keys[group[0]!.index] = regionId;
+      continue;
+    }
+    const sameFingerprintCounts = new Map<string, number>();
+    for (const entry of [...group].sort((left, right) => left.fingerprint.localeCompare(right.fingerprint) || left.index - right.index)) {
+      const occurrence = sameFingerprintCounts.get(entry.fingerprint) ?? 0;
+      sameFingerprintCounts.set(entry.fingerprint, occurrence + 1);
+      keys[entry.index] = `${regionId}:${entry.fingerprint}:${occurrence}`;
+    }
+  }
+  return keys;
+}
+
+function regionIdentityFingerprint(region: OverlayRegion): string {
+  const value = [
+    region.sourceText,
+    region.kind,
+    region.box.x,
+    region.box.y,
+    region.box.width,
+    region.box.height,
+    region.style.fontSize,
+    region.style.writingMode,
+    region.style.align,
+    region.style.color,
+  ].join("|");
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < value.length; index++) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
 }
 
 function roundCssPx(value: number): number {

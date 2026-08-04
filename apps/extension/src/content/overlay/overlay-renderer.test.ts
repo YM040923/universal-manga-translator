@@ -96,6 +96,42 @@ test("render preserves unchanged bubble nodes when a new result changes only one
   assert.equal(changed.textContent, "changed second bubble");
 });
 
+test("keeps distinct overlay nodes when a provider reuses a region id inside one surface", () => {
+  const { img } = setupDomWithImage({ x: 0, y: 0, width: 500, height: 500 });
+  const renderer = new OverlayRenderer();
+  const result = fakeResult("duplicate-region-ids");
+  result.regions = [
+    { ...result.regions[0]!, id: "duplicate", box: { x: 40, y: 80, width: 160, height: 80 }, sourceText: "First", translatedText: "第一句" },
+    { ...result.regions[0]!, id: "duplicate", box: { x: 280, y: 300, width: 160, height: 80 }, sourceText: "Second", translatedText: "第二句" },
+  ];
+
+  renderer.render(img, { width: 500, height: 500 }, result);
+
+  const nodes = [...document.querySelectorAll<HTMLElement>("[data-umt-surface-id='duplicate-region-ids'][data-umt-region-id='duplicate']")];
+  assert.equal(nodes.length, 2);
+  assert.deepEqual(nodes.map((node) => node.textContent).sort(), ["第一句", "第二句"]);
+  assert.notEqual(nodes[0]?.dataset.umtRegionKey, nodes[1]?.dataset.umtRegionKey);
+});
+
+test("removes stale overlay nodes when a surface is replaced with a new image host", () => {
+  const dom = new JSDOM(`<body><div id="first" style="transform:translateZ(0)"><img id="page-one" /></div><div id="second" style="transform:translateZ(0)"><img id="page-two" /></div></body>`, { url: "https://example.test" });
+  globalThis.document = dom.window.document;
+  globalThis.window = dom.window as unknown as Window & typeof globalThis;
+  globalThis.CSS = dom.window.CSS;
+  const first = document.querySelector<HTMLImageElement>("#page-one")!;
+  const second = document.querySelector<HTMLImageElement>("#page-two")!;
+  const rect = { x: 0, y: 0, width: 500, height: 500, top: 0, left: 0, right: 500, bottom: 500, toJSON: () => ({}) } as DOMRect;
+  first.getBoundingClientRect = () => rect;
+  second.getBoundingClientRect = () => rect;
+  const renderer = new OverlayRenderer();
+
+  renderer.render(first, { width: 500, height: 500 }, fakeResult("replaced-surface"));
+  renderer.render(second, { width: 500, height: 500 }, fakeResult("replaced-surface"));
+
+  assert.equal(document.querySelectorAll("[data-umt-surface-id='replaced-surface']").length, 1);
+  assert.equal(document.querySelector("[data-umt-overlay-root='true']")?.parentElement?.id, "second");
+});
+
 
 test("legacy fixed viewport coordinate behavior is superseded by document scrolling", () => {
   const { img } = setupDomWithImage({ x: 10, y: 20, width: 500, height: 1000 });
