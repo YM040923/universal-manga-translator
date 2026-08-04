@@ -88,3 +88,19 @@ test("detects a manga image inside an open Shadow DOM reader", () => {
   assert.equal(surfaces[0]?.element, page);
   assert.equal(surfaces[0]?.imageUrl, "https://example.test/chapter/shadow-page.webp");
 });
+
+test("finds nested open Shadow DOM roots for dynamic reader observation", async () => {
+  const detector = await import("./surface-detector.js") as unknown as {
+    findOpenShadowRoots?: (root: ParentNode) => ShadowRoot[];
+  };
+  const dom = new JSDOM(`<body><manga-shell id="outer"></manga-shell></body>`, { url: "https://example.test/read/42" });
+  const outer = dom.window.document.querySelector<HTMLElement>("#outer")!;
+  const first = outer.attachShadow({ mode: "open" });
+  first.innerHTML = `<reader-page id="inner"></reader-page>`;
+  const inner = first.querySelector<HTMLElement>("#inner")!;
+  const second = inner.attachShadow({ mode: "open" });
+  second.innerHTML = `<img src="/chapter/001.webp">`;
+
+  assert.equal(typeof detector.findOpenShadowRoots, "function");
+  assert.deepEqual(detector.findOpenShadowRoots!(dom.window.document), [first, second]);
+});

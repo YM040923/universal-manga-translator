@@ -83,6 +83,28 @@ function extractBackgroundUrl(backgroundImage: string, base: string): string | n
   return absoluteUrl(match[1], base);
 }
 
+/** Returns every reachable open shadow root in document order. */
+export function findOpenShadowRoots(root: ParentNode): ShadowRoot[] {
+  const roots: ShadowRoot[] = [];
+  const seen = new Set<ShadowRoot>();
+  const visit = (parent: ParentNode): void => {
+    const host = parent as ParentNode & { shadowRoot?: ShadowRoot | null };
+    if (host.shadowRoot && !seen.has(host.shadowRoot)) {
+      seen.add(host.shadowRoot);
+      roots.push(host.shadowRoot);
+      visit(host.shadowRoot);
+    }
+    for (const element of parent.querySelectorAll<HTMLElement>("*")) {
+      const shadowRoot = element.shadowRoot;
+      if (!shadowRoot || seen.has(shadowRoot)) continue;
+      seen.add(shadowRoot);
+      roots.push(shadowRoot);
+      visit(shadowRoot);
+    }
+  };
+  visit(root);
+  return roots;
+}
 /** Queries the light DOM plus every reachable open shadow root. */
 function deepElements<T extends HTMLElement>(root: Document, selector: string): T[] {
   const collected: T[] = [];

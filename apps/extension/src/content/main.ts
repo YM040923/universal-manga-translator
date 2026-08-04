@@ -25,6 +25,7 @@ import { SurfaceControl } from "./surface/surface-control";
 import { toDetectedSurface } from "./surface/detected-surface";
 import { selectVisibleSurfaces } from "./surface/visible-surfaces";
 import { isLikelyReaderPage, SurfaceRegistry, type RegisteredSurface } from "./surface/surface-registry";
+import { findOpenShadowRoots } from "./detector/surface-detector";
 import { isRenderableSurfaceResult } from "./translation-result";
 import { createJobSessionId, debounce, formatShortError, isUmtOwnedMutation, requestBackendHttp } from "./utils";
 import { getEffectiveSiteSettings, isSiteEnabled, loadSettings, saveSettings, setSiteSettings, setTranslationOverlayVisible, type ExtensionSettings } from "../settings/settings";
@@ -527,11 +528,26 @@ async function bootstrap(): Promise<boolean> {
     if (shouldAutoTranslate()) void translatePage(false);
   }, 600);
 
+  const observerOptions: MutationObserverInit = { childList: true, subtree: true, attributes: true, attributeFilter: ["src", "srcset", "data-src", "data-original", "style"] };
+  const observedShadowRoots = new WeakSet<ShadowRoot>();
   const observer = new MutationObserver((mutations) => {
     if (mutations.every(isUmtOwnedMutation)) return;
+    for (const mutation of mutations) {
+      for (const node of mutation.addedNodes) {
+        if ("querySelectorAll" in node) observeOpenShadowRoots(node as ParentNode);
+      }
+    }
     rescan("mutation");
   });
-  observer.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ["src", "srcset", "data-src", "data-original", "style"] });
+  const observeOpenShadowRoots = (root: ParentNode): void => {
+    for (const shadowRoot of findOpenShadowRoots(root)) {
+      if (observedShadowRoots.has(shadowRoot)) continue;
+      observedShadowRoots.add(shadowRoot);
+      observer.observe(shadowRoot, observerOptions);
+    }
+  };
+  observer.observe(document.documentElement, observerOptions);
+  observeOpenShadowRoots(document);
 
   window.addEventListener("scroll", () => refreshControls(), { passive: true });
   window.addEventListener("resize", () => refreshLayout());
