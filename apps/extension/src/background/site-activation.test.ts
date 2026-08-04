@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { handleActivateSiteMessage, injectContentScriptsIntoEnabledTabs, maybeInjectContentScriptForTab } from "./site-activation.js";
+import { handleActivateSiteMessage, injectContentScriptsIntoEnabledTabs, maybeInjectContentScriptForEmbeddedFrame, maybeInjectContentScriptForTab } from "./site-activation.js";
 import { DEFAULT_SETTINGS, type SettingsStorageArea } from "../settings/settings.js";
 
 test("handleActivateSiteMessage enables the primary domain and injects content script", async () => {
@@ -26,6 +26,24 @@ test("maybeInjectContentScriptForTab injects only enabled http tabs", async () =
   await maybeInjectContentScriptForTab(7, "chrome://extensions", { storage, executeScript: async (details) => { injected.push(details); } });
 
   assert.deepEqual(injected, [{ tabId: 5, files: ["content.js"], allFrames: true }]);
+});
+
+test("injects an embedded reader frame that is added after its enabled tab has loaded", async () => {
+  const storage = fakeStorage({ enabledSites: { "manga.example": true } });
+  const injected: Array<{ tabId: number; files: string[]; allFrames?: boolean }> = [];
+
+  await maybeInjectContentScriptForEmbeddedFrame(14, 6, {
+    storage,
+    getTab: async () => ({ url: "https://manga.example/title/chapter/60" }),
+    executeScript: async (details: { tabId: number; files: string[]; allFrames?: boolean }) => { injected.push(details); },
+  });
+  await maybeInjectContentScriptForEmbeddedFrame(14, 0, {
+    storage,
+    getTab: async () => ({ url: "https://manga.example/title/chapter/60" }),
+    executeScript: async (details: { tabId: number; files: string[]; allFrames?: boolean }) => { injected.push(details); },
+  });
+
+  assert.deepEqual(injected, [{ tabId: 14, files: ["content.js"], allFrames: true }]);
 });
 
 test("injectContentScriptsIntoEnabledTabs restores enabled manga tabs after extension reload", async () => {

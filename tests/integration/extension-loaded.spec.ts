@@ -120,3 +120,23 @@ test("enabled top-level sites activate a cross-origin embedded reader frame", as
     staticServer.kill();
   }
 });
+
+test("enabled sites activate an embedded reader that is added after initial page load", async () => {
+  const staticServer = spawnFixtureServer();
+  const context = await launchContext();
+  try {
+    const page = await context.newPage();
+    await page.goto(`${fixtureOrigin}/dynamic-iframe-reader.html`);
+    await activateCurrentPage(context, page);
+    await expect(page.locator("iframe")).toHaveCount(0);
+
+    await page.getByRole("button", { name: "Open reader" }).click();
+    await expect.poll(() => page.frames().some((frame) => frame.url().startsWith(embeddedReaderOrigin))).toBe(true);
+    const readerFrame = page.frames().find((frame) => frame.url().startsWith(embeddedReaderOrigin));
+    expect(readerFrame).toBeDefined();
+    await expect(readerFrame!.locator("[data-umt-surface-button]")).toHaveCount(1, { timeout: 10000 });
+  } finally {
+    await context.close();
+    staticServer.kill();
+  }
+});

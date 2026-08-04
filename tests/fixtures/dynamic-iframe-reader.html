@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+  <head><meta charset="utf-8"><title>Dynamic embedded reader</title></head>
+  <body>
+    <button type="button" id="open-reader">Open reader</button>
+    <main id="reader-host"></main>
+    <script>
+      document.querySelector('#open-reader').addEventListener('click', () => {
+        const iframe = document.createElement('iframe');
+        iframe.title = 'Comic reader';
+        iframe.src = 'http://reader-frame.test:47832/iframe-reader-frame.html';
+        iframe.style.cssText = 'width:820px;height:1100px;border:0';
+        document.querySelector('#reader-host').append(iframe);
+      });
+    </script>
+  </body>
+</html>

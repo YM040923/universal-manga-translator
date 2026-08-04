@@ -36,6 +36,10 @@ export interface FrameCommandDeps {
   sendMessage: (tabId: number, message: UmtContentCommand, options: { frameId: number }) => Promise<unknown> | unknown;
 }
 
+export interface EmbeddedFrameInjectionDeps extends ContentScriptInjectionDeps {
+  getTab: (tabId: number) => Promise<InjectableTab> | InjectableTab;
+}
+
 export async function handleActivateSiteMessage(message: UmtActivateSiteRequest, deps: ContentScriptInjectionDeps): Promise<UmtActivateSiteResponse> {
   try {
     const storage = deps.storage;
@@ -88,6 +92,13 @@ export async function maybeInjectContentScriptForTab(tabId: number, url: string 
   await injectContentScript(tabId, deps);
 }
 
+/** Re-injects after a reader iframe is created or navigated after the top-level page. */
+export async function maybeInjectContentScriptForEmbeddedFrame(tabId: number, frameId: number, deps: EmbeddedFrameInjectionDeps): Promise<void> {
+  if (frameId === 0) return;
+  const tab = await deps.getTab(tabId);
+  await maybeInjectContentScriptForTab(tabId, tab.url, deps);
+}
+
 export async function injectContentScriptsIntoEnabledTabs(deps: TabQueryDeps): Promise<void> {
   const tabs = await deps.queryTabs();
   await Promise.all(tabs.map(async (tab) => {
@@ -130,6 +141,18 @@ export function registerSiteActivationHandlers(
   tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
     if (changeInfo.status !== "complete") return;
     void maybeInjectContentScriptForTab(tabId, tab.url, deps);
+  });
+  webNavigation.onCommitted.addListener((details) => {
+    void maybeInjectContentScriptForEmbeddedFrame(details.tabId, details.frameId, {
+      ...deps,
+      getTab: async (tabId) => {
+        const tab = await tabs.get(tabId);
+        return typeof tab.url === "string" ? { url: tab.url } : {};
+      },
+    }).catch(() => {
+      // A frame can disappear between navigation and injection. The next top-level
+      // update or popup action will inject again if the reader is still present.
+    });
   });
   const queryDeps: TabQueryDeps = {
     ...deps,
