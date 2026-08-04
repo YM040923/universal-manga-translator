@@ -9,9 +9,9 @@ const root = resolve(__dirname, "../..");
 const extensionPath = resolve(root, "apps/extension/dist");
 const fixtureOrigin = "http://manga.test:47832";
 
-function spawnProcess(command: string, args: string[]): ChildProcess {
-  if (process.platform === "win32") return spawn("cmd.exe", ["/d", "/s", "/c", command, ...args], { cwd: root, stdio: "ignore" });
-  return spawn(command, args, { cwd: root, stdio: "ignore" });
+function spawnFixtureServer(): ChildProcess {
+  const httpServer = resolve(root, "node_modules/http-server/bin/http-server");
+  return spawn(process.execPath, [httpServer, "tests/fixtures", "-p", "47832", "-a", "127.0.0.1", "--silent"], { cwd: root, stdio: "ignore" });
 }
 
 async function launchContext(): Promise<BrowserContext> {
@@ -39,7 +39,7 @@ async function activateCurrentPage(context: BrowserContext, page: Page): Promise
 }
 
 test("loaded extension stays inactive until the manga site is explicitly enabled", async () => {
-  const staticServer = spawnProcess("pnpm", ["exec", "http-server", "tests/fixtures", "-p", "47832", "-a", "127.0.0.1", "--silent"]);
+  const staticServer = spawnFixtureServer();
   const context = await launchContext();
   try {
     const page = await context.newPage();
@@ -60,7 +60,7 @@ test("loaded extension stays inactive until the manga site is explicitly enabled
 });
 
 test("enabled extension mounts controls for dynamically appended manga images", async () => {
-  const staticServer = spawnProcess("pnpm", ["exec", "http-server", "tests/fixtures", "-p", "47832", "-a", "127.0.0.1", "--silent"]);
+  const staticServer = spawnFixtureServer();
   const context = await launchContext();
   try {
     const page = await context.newPage();
