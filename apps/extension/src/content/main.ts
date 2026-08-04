@@ -1,4 +1,4 @@
-﻿import { BackendClient, SurfaceSubmitTracker } from "./client/backend-client";
+import { BackendClient, SurfaceSubmitTracker } from "./client/backend-client";
 import { DirectClient } from "./client/direct-client";
 import { supportsEventStream, type TranslatorClient } from "./client/translator-client";
 import { hasRelevantContentSettingChange } from "./settings-change";
@@ -13,7 +13,7 @@ import { DebugOverlayRenderer } from "./debug-overlay-renderer";
 import { createContentLogger } from "./content-logger";
 import type { ServerEvent } from "@umt/shared/protocol";
 import { EventResultRouter } from "./events/event-result-router";
-import { isUmtContentCommand, type UmtContentCommandResponse, type UmtPageSampleSelfTestResponse } from "./messages";
+import { isUmtContentCommand, type UmtContentCommandResponse, type UmtFrameAuthorizationResponse, type UmtPageSampleSelfTestResponse } from "./messages";
 import { OverlayRenderer } from "./overlay/overlay-renderer";
 import { createDocumentRectOverlayAnchor, documentRectFromViewportRect } from "./overlay/rect-anchor";
 import { ChapterProgress } from "./progress/chapter-progress";
@@ -41,7 +41,12 @@ if (bootstrapWindow.__umtContentBootstrapState !== "starting" && bootstrapWindow
 
 async function bootstrap(): Promise<boolean> {
   let settings = await loadSettings();
-  if (!isSiteEnabled(settings, window.location.href)) return false;
+  let enabledSiteUrl = window.location.href;
+  if (!isSiteEnabled(settings, enabledSiteUrl)) {
+    const authorization = await chrome.runtime.sendMessage({ source: "umt-content", command: "authorizeEmbeddedFrame" }) as UmtFrameAuthorizationResponse | undefined;
+    if (!authorization?.ok || !authorization.siteUrl) return false;
+    enabledSiteUrl = authorization.siteUrl;
+  }
   let client = createClient(settings);
   let renderer = createRenderer(settings, client);
   const debugRenderer = new DebugOverlayRenderer();
@@ -110,7 +115,7 @@ async function bootstrap(): Promise<boolean> {
   }
 
   function site() {
-    return getEffectiveSiteSettings(settings, window.location.href);
+    return getEffectiveSiteSettings(settings, enabledSiteUrl);
   }
 
   function shouldAutoTranslate(): boolean {
@@ -470,7 +475,7 @@ async function bootstrap(): Promise<boolean> {
     const previousDirectTranslator = JSON.stringify(settings.directTranslator);
     const previousTargetLanguage = settings.targetLanguage;
     settings = await loadSettings();
-    if (!isSiteEnabled(settings, window.location.href)) return;
+    if (!isSiteEnabled(settings, enabledSiteUrl)) return;
     debugRenderer.setEnabled(settings.debugOverlayEnabled);
     renderer.setVisible(settings.translationOverlayVisible);
     floatingPanel?.setOverlayVisible(settings.translationOverlayVisible);
@@ -583,7 +588,7 @@ async function bootstrap(): Promise<boolean> {
       if (message.command === "setOverlayVisibility") await setOverlayVisibility(message.visible !== false);
       if (message.command === "toggleOverlayVisibility") await toggleOverlayVisibility();
       if (message.command === "applySiteSettings") {
-        settings = setSiteSettings(settings, window.location.href, { autoTranslate: message.autoTranslate === true });
+        settings = setSiteSettings(settings, enabledSiteUrl, { autoTranslate: message.autoTranslate === true });
         if (message.autoTranslate === true) void translatePage(false);
         else await cancelCurrentQueue("auto-off");
       }

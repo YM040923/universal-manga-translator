@@ -1,4 +1,4 @@
-﻿import {
+import {
   DEFAULT_SETTINGS,
   enableSiteForUrl,
   isSiteEnabled,
@@ -495,7 +495,9 @@ async function defaultCheckBackend(backendUrl: string): Promise<boolean> {
   }
 }
 
-async function defaultSendMessageToTab(tabId: number, message: UmtContentCommand): Promise<unknown> { return await chrome.tabs.sendMessage(tabId, message); }
+async function defaultSendMessageToTab(tabId: number, message: UmtContentCommand): Promise<unknown> {
+  return await chrome.runtime.sendMessage({ source: "umt-popup", command: "dispatchContentCommand", tabId, message });
+}
 async function defaultActivateSite(tabId: number, url: string): Promise<UmtActivateSiteResponse> { return await chrome.runtime.sendMessage({ source: "umt-popup", command: "activateSite", tabId, url }); }
 function escapeHtml(value: string): string { return value.replace(/[&<>"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;" })[char] ?? char); }
 function escapeAttr(value: string): string { return escapeHtml(value); }

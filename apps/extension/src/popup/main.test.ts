@@ -1,4 +1,4 @@
-﻿import test from "node:test";
+import test from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
 import { mountPopupPage, type PopupDeps } from "./main.js";
@@ -970,7 +970,7 @@ test("popup direct self-test prefers a real current-page sample when the synthet
   assert.doesNotMatch(selfTest, /测试图未返回文字区域/);
 });
 
-test("popup direct self-test uses the default chrome tabs message response for current-page samples", async () => {
+test("popup direct self-test uses the default background frame dispatch response for current-page samples", async () => {
   const dom = setupDom();
   const configured = enableSiteForUrl({
     ...DEFAULT_SETTINGS,
@@ -981,14 +981,15 @@ test("popup direct self-test uses the default chrome tabs message response for c
   const storage = fakeStorage(configured);
   const root = dom.window.document.querySelector<HTMLElement>("#app")!;
   const previousChrome = globalThis.chrome;
+  const requests: unknown[] = [];
   globalThis.chrome = {
-    tabs: {
-      sendMessage: async (_tabId: number, message: { command: string }) => {
-        if (message.command === "sampleOcrSelfTest") return { ok: true, status: "ok", surfaceIndex: 2, regionCount: 9, elapsedMs: 1200 };
+    runtime: {
+      sendMessage: async (request: { command?: string; tabId?: number; message?: { command?: string } }) => {
+        requests.push(request);
+        if (request.command === "dispatchContentCommand" && request.message?.command === "sampleOcrSelfTest") return { ok: true, status: "ok", surfaceIndex: 2, regionCount: 9, elapsedMs: 1200 };
         return undefined;
       },
     },
-    runtime: { sendMessage: async () => undefined },
   } as never;
 
   try {
@@ -1011,6 +1012,7 @@ test("popup direct self-test uses the default chrome tabs message response for c
     assert.match(selfTest, /页面样本 OCR 正常/);
     assert.match(selfTest, /第 2 张/);
     assert.match(selfTest, /9 个区域/);
+    assert.deepEqual(requests, [{ source: "umt-popup", command: "dispatchContentCommand", tabId: 123, message: { source: "umt-popup", command: "sampleOcrSelfTest" } }]);
   } finally {
     globalThis.chrome = previousChrome;
   }
