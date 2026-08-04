@@ -1,12 +1,20 @@
 ﻿import type { Rect } from "@umt/shared/types";
 
-export function createRectOverlayAnchor(rect: Rect): HTMLElement {
-  return createDocumentRectOverlayAnchor({
+/**
+ * Converts a viewport selection to document coordinates at the instant the
+ * selection completes. Async OCR may finish after the reader has scrolled.
+ */
+export function documentRectFromViewportRect(rect: Rect): Rect {
+  return {
     x: rect.x + window.scrollX,
     y: rect.y + window.scrollY,
     width: rect.width,
     height: rect.height,
-  });
+  };
+}
+
+export function createRectOverlayAnchor(rect: Rect): HTMLElement {
+  return createDocumentRectOverlayAnchor(documentRectFromViewportRect(rect));
 }
 
 export function createDocumentRectOverlayAnchor(documentRect: Rect): HTMLElement {

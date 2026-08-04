@@ -15,7 +15,7 @@ import type { ServerEvent } from "@umt/shared/protocol";
 import { EventResultRouter } from "./events/event-result-router";
 import { isUmtContentCommand, type UmtContentCommandResponse, type UmtPageSampleSelfTestResponse } from "./messages";
 import { OverlayRenderer } from "./overlay/overlay-renderer";
-import { createDocumentRectOverlayAnchor } from "./overlay/rect-anchor";
+import { createDocumentRectOverlayAnchor, documentRectFromViewportRect } from "./overlay/rect-anchor";
 import { ChapterProgress } from "./progress/chapter-progress";
 import { FloatingPanel } from "./panel/floating-panel";
 import { ManualSelectionController } from "./selection/manual-selection";
@@ -382,6 +382,9 @@ async function bootstrap(): Promise<boolean> {
 
   async function translateManualRect(rect: { x: number; y: number; width: number; height: number }): Promise<void> {
     ensureEventStream();
+    // Preserve where the selection was made before OCR yields to the event loop.
+    // The reader may be scrolled by the time the translated result returns.
+    const documentRect = documentRectFromViewportRect(rect);
     try {
       const screenshotDataUrl = await requestVisibleTabScreenshot();
       const screenshotSize = await readImageSize(screenshotDataUrl);
@@ -400,7 +403,6 @@ async function bootstrap(): Promise<boolean> {
       const response = await client.submit(createSurfaceTask(surface, "p0", settings.targetLanguage), jobSessionId);
       if (response.ok && isRenderableSurfaceResult(response.result)) {
         const result = await manualOverrides.applyToResult(response.result, settings.targetLanguage);
-        const documentRect = { x: rect.x + window.scrollX, y: rect.y + window.scrollY, width: rect.width, height: rect.height };
         renderer.render(createDocumentRectOverlayAnchor(documentRect), surface.naturalSize, result);
         renderer.setVisible(settings.translationOverlayVisible);
         void manualSelectionCache.save(manualSelectionCacheContext(), { id: surface.surfaceId, documentRect, naturalSize: surface.naturalSize, result }).catch((error) => logger.error("save manual selection cache failed", error));
@@ -585,8 +587,3 @@ async function bootstrap(): Promise<boolean> {
   });
   return true;
 }
-
-
-
-
-

@@ -1,7 +1,7 @@
 ﻿import test from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
-import { createDocumentRectOverlayAnchor, createRectOverlayAnchor } from "./rect-anchor.js";
+import { createDocumentRectOverlayAnchor, createRectOverlayAnchor, documentRectFromViewportRect } from "./rect-anchor.js";
 
 test("createRectOverlayAnchor exposes a stable viewport rect for screenshot overlays", () => {
   const dom = new JSDOM("<body></body>");
@@ -51,4 +51,22 @@ test("createDocumentRectOverlayAnchor restores cached manual selection document 
 
   assert.equal(rect.top, 180);
   assert.equal(rect.bottom, 260);
+});
+
+test("documentRectFromViewportRect keeps the selection attached to where it was made after OCR finishes", () => {
+  const dom = new JSDOM("<body></body>");
+  globalThis.document = dom.window.document;
+  globalThis.window = dom.window as unknown as Window & typeof globalThis;
+  Object.defineProperty(window, "scrollX", { value: 16, configurable: true });
+  Object.defineProperty(window, "scrollY", { value: 400, configurable: true });
+
+  const documentRect = documentRectFromViewportRect({ x: 24, y: 80, width: 120, height: 60 });
+
+  Object.defineProperty(window, "scrollX", { value: 42, configurable: true });
+  Object.defineProperty(window, "scrollY", { value: 900, configurable: true });
+  const anchor = createDocumentRectOverlayAnchor(documentRect);
+
+  assert.deepEqual(documentRect, { x: 40, y: 480, width: 120, height: 60 });
+  assert.equal(anchor.getBoundingClientRect().top, -420);
+  assert.equal(anchor.getBoundingClientRect().left, -2);
 });
