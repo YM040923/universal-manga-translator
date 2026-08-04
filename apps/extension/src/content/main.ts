@@ -140,7 +140,9 @@ async function bootstrap(): Promise<boolean> {
 
   async function restoreCachedChapterResults(surfaces: RegisteredSurface[]): Promise<void> {
     for (const surface of surfaces) {
-      const entry = await chapterCache.get(cacheContext(), surface.imageUrl);
+      const imageUrl = surface.imageUrl;
+      if (!imageUrl) continue;
+      const entry = await chapterCache.get(cacheContext(), imageUrl);
       if (!entry) continue;
       const result = await manualOverrides.applyToResult({ ...entry.result, surfaceId: surface.surfaceId, status: "cached" as const }, settings.targetLanguage);
       renderer.render(surface.element, surface.naturalSize, result);
@@ -290,7 +292,7 @@ async function bootstrap(): Promise<boolean> {
         renderer.render(surface.element, surface.naturalSize, result);
         renderer.setVisible(settings.translationOverlayVisible);
         debugRenderer.markResult(surface.element, surface.naturalSize, result);
-        void chapterCache.save(cacheContext(), surface.imageUrl, result).catch((error) => logger.error("save chapter cache failed", error));
+        if (surface.imageUrl) void chapterCache.save(cacheContext(), surface.imageUrl, result).catch((error) => logger.error("save chapter cache failed", error));
         return result.status === "cached" ? "cached" : "completed";
       }
       if (response.ok && response.result?.status === "empty") return "empty";

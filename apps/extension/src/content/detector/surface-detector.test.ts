@@ -1,4 +1,4 @@
-import test from "node:test";
+﻿import test from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
 import { detectImageSurfaces } from "./surface-detector.js";
@@ -71,4 +71,20 @@ test("deduplicates surfaces that point to the same manga image url", () => {
 
   assert.equal(surfaces.length, 1);
   assert.equal(surfaces[0]?.imageUrl, "https://example.test/chapter/page-003.jpg");
+});
+
+test("detects a manga image inside an open Shadow DOM reader", () => {
+  const dom = new JSDOM(`<body><manga-reader id="reader"></manga-reader></body>`, { url: "https://example.test/read/42" });
+  const doc = dom.window.document;
+  const host = doc.querySelector<HTMLElement>("#reader")!;
+  const shadow = host.attachShadow({ mode: "open" });
+  shadow.innerHTML = `<img id="page" src="/chapter/shadow-page.webp" width="800" height="1200">`;
+  const page = shadow.querySelector<HTMLImageElement>("#page")!;
+  Object.defineProperty(page, "getBoundingClientRect", { value: () => ({ x: 20, y: 100, width: 800, height: 1200 }) });
+
+  const surfaces = detectImageSurfaces(doc);
+
+  assert.equal(surfaces.length, 1);
+  assert.equal(surfaces[0]?.element, page);
+  assert.equal(surfaces[0]?.imageUrl, "https://example.test/chapter/shadow-page.webp");
 });

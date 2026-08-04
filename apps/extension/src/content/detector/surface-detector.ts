@@ -83,8 +83,24 @@ function extractBackgroundUrl(backgroundImage: string, base: string): string | n
   return absoluteUrl(match[1], base);
 }
 
+/** Queries the light DOM plus every reachable open shadow root. */
+function deepElements<T extends HTMLElement>(root: Document, selector: string): T[] {
+  const collected: T[] = [];
+  const seen = new Set<Element>();
+  const visit = (parent: ParentNode): void => {
+    for (const element of parent.querySelectorAll<HTMLElement>("*")) {
+      if (seen.has(element)) continue;
+      seen.add(element);
+      if (element.matches(selector)) collected.push(element as T);
+      if (element.shadowRoot?.mode === "open") visit(element.shadowRoot);
+    }
+  };
+  visit(root);
+  return collected;
+}
+
 function detectImgSurfaces(root: Document): DetectedSurface[] {
-  return [...root.querySelectorAll<HTMLImageElement>("img")]
+  return deepElements<HTMLImageElement>(root, "img")
     .map((img, index) => {
       const rect = rectFromElement(img);
       const imageUrl = extractImageUrl(img);
@@ -97,7 +113,7 @@ function detectImgSurfaces(root: Document): DetectedSurface[] {
 function detectBackgroundSurfaces(root: Document): DetectedSurface[] {
   const view = root.defaultView;
   if (!view) return [];
-  return [...root.querySelectorAll<HTMLElement>("body *")]
+  return deepElements<HTMLElement>(root, "*")
     .map((element, index) => {
       const rect = rectFromElement(element);
       const styleBackground = element.style.backgroundImage;
@@ -110,7 +126,7 @@ function detectBackgroundSurfaces(root: Document): DetectedSurface[] {
 }
 
 function detectCanvasSurfaces(root: Document): DetectedSurface[] {
-  return [...root.querySelectorAll<HTMLCanvasElement>("canvas")]
+  return deepElements<HTMLCanvasElement>(root, "canvas")
     .map((canvas, index) => {
       const rect = rectFromElement(canvas);
       let imageData: string | undefined;

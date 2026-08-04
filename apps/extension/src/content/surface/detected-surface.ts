@@ -1,13 +1,14 @@
-import type { DetectedSurface } from "../detector/surface-detector";
-import type { RegisteredSurface } from "./surface-registry";
+﻿import type { DetectedSurface } from "../detector/surface-detector.js";
+import type { RegisteredSurface } from "./surface-registry.js";
 
 export function toDetectedSurface(surface: RegisteredSurface): DetectedSurface {
   const rect = surface.element.getBoundingClientRect();
   return {
     surfaceId: surface.surfaceId,
-    kind: "image",
+    kind: surface.kind ?? "image",
     element: surface.element,
-    imageUrl: surface.imageUrl,
+    ...(surface.imageUrl ? { imageUrl: surface.imageUrl } : {}),
+    ...(surface.imageData ? { imageData: surface.imageData } : {}),
     rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
     naturalSize: surface.naturalSize,
     score: 10,

@@ -1,10 +1,13 @@
 ﻿import type { Rect, Size } from "@umt/shared/types";
+import { detectImageSurfaces, type SurfaceKind } from "../detector/surface-detector.js";
 
 export interface RegisteredSurface {
   index: number;
   surfaceId: string;
+  kind?: SurfaceKind;
   element: HTMLElement;
-  imageUrl: string;
+  imageUrl?: string;
+  imageData?: string;
   rect: Rect;
   naturalSize: Size;
 }
@@ -17,11 +20,23 @@ export class SurfaceRegistry {
   }
 
   static scan(root: Document = document): SurfaceRegistry {
-    const candidates = [...root.images]
-      .map((image, domIndex) => toRegisteredCandidate(image, domIndex, root.location.href))
-      .filter((surface): surface is Omit<RegisteredSurface, "index"> & { domIndex: number } => surface !== null)
-      .sort((a, b) => a.rect.y - b.rect.y || a.domIndex - b.domIndex);
-    return new SurfaceRegistry(candidates.map(({ domIndex: _domIndex, ...surface }, index) => ({ ...surface, index: index + 1 })));
+    const view = root.defaultView;
+    const scrollX = view?.scrollX ?? 0;
+    const scrollY = view?.scrollY ?? 0;
+    const candidates = detectImageSurfaces(root)
+      .map((surface, domIndex) => ({
+        ...surface,
+        domIndex,
+        surfaceId: stableSurfaceId(surface.kind, surface.imageUrl, surface.imageData, surface.naturalSize),
+        rect: {
+          x: surface.rect.x + scrollX,
+          y: surface.rect.y + scrollY,
+          width: surface.rect.width,
+          height: surface.rect.height,
+        },
+      }))
+      .sort((a, b) => a.rect.y - b.rect.y || a.rect.x - b.rect.x || a.domIndex - b.domIndex);
+    return new SurfaceRegistry(candidates.map(({ domIndex: _domIndex, score: _score, ...surface }, index) => ({ ...surface, index: index + 1 })));
   }
 }
 
@@ -35,34 +50,24 @@ export function isLikelyReaderPage(root: Document = document, surfaces: Register
     const viewportWidth = root.defaultView?.innerWidth ?? rect.width;
     const isTallPage = rect.height >= Math.max(1200, rect.width * 1.8);
     const fillsReaderColumn = rect.width >= Math.min(700, viewportWidth * 0.55);
-    return isTallPage && fillsReaderColumn && looksLikeChapterImageUrl(surface.imageUrl);
+    return isTallPage && fillsReaderColumn && (surface.kind !== "image" || looksLikeChapterImageUrl(surface.imageUrl));
   }
   return false;
 }
 
-function toRegisteredCandidate(image: HTMLImageElement, domIndex: number, pageUrl: string): (Omit<RegisteredSurface, "index"> & { domIndex: number }) | null {
-  const rect = image.getBoundingClientRect();
-  const naturalSize = { width: image.naturalWidth || Math.round(rect.width), height: image.naturalHeight || Math.round(rect.height) };
-  if (!isMainMangaImage(rect, naturalSize)) return null;
-  const imageUrl = absoluteImageUrl(image.currentSrc || image.src || image.getAttribute("src") || "", pageUrl);
-  if (!imageUrl || isPlaceholder(imageUrl)) return null;
-  const scrollX = image.ownerDocument.defaultView?.scrollX ?? 0;
-  const scrollY = image.ownerDocument.defaultView?.scrollY ?? 0;
-  return {
-    domIndex,
-    surfaceId: `surface:${stableUrlPart(imageUrl)}`,
-    element: image,
-    imageUrl,
-    rect: { x: rect.x + scrollX, y: rect.y + scrollY, width: rect.width, height: rect.height },
-    naturalSize,
-  };
+function stableSurfaceId(kind: SurfaceKind, imageUrl: string | undefined, imageData: string | undefined, naturalSize: Size): string {
+  if (imageUrl) return `surface:${kind}:${imageUrl}`;
+  const content = imageData ? hashText(imageData) : `${naturalSize.width}x${naturalSize.height}`;
+  return `surface:${kind}:${naturalSize.width}x${naturalSize.height}:${content}`;
 }
 
-function isMainMangaImage(rect: DOMRect | { width: number; height: number }, naturalSize: Size): boolean {
-  const hasRenderedSize = rect.width >= 1 && rect.height >= 1;
-  const width = hasRenderedSize ? rect.width : naturalSize.width;
-  const height = hasRenderedSize ? rect.height : naturalSize.height;
-  return width >= 500 && height >= 600 && height / Math.max(1, width) >= 0.7;
+function hashText(value: string): string {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash.toString(16).padStart(8, "0");
 }
 
 function looksLikeComicDirectoryUrl(url: string): boolean {
@@ -83,8 +88,8 @@ function looksLikeChapterUrl(url: string): boolean {
   }
 }
 
-function looksLikeChapterImageUrl(url: string): boolean {
-  return /(?:chapter|chap|episode|ep|page|pages|reader|webtoon|manga|comics?)|\/\d+\/[^/]+\.(?:webp|jpe?g|png)(?:$|\?)/i.test(url);
+function looksLikeChapterImageUrl(url: string | undefined): boolean {
+  return /(?:chapter|chap|episode|ep|page|pages|reader|webtoon|manga|comics?)|\/\d+\/[^/]+\.(?:webp|jpe?g|png)(?:$|\?)/i.test(url ?? "");
 }
 
 function looksLikeStackedReaderSurfaces(surfaces: RegisteredSurface[]): boolean {
@@ -107,20 +112,4 @@ function looksLikeTallReaderPanel(surface: RegisteredSurface): boolean {
   const aspect = surface.rect.height / Math.max(1, surface.rect.width);
   const naturalAspect = surface.naturalSize.height / Math.max(1, surface.naturalSize.width);
   return aspect >= 1.15 || naturalAspect >= 1.15;
-}
-
-function absoluteImageUrl(value: string, pageUrl: string): string {
-  try {
-    return new URL(value, pageUrl).toString();
-  } catch {
-    return "";
-  }
-}
-
-function stableUrlPart(url: string): string {
-  return url;
-}
-
-function isPlaceholder(url: string): boolean {
-  return /placeholder|blank|spacer|loading|transparent|1x1/i.test(url) || url.startsWith("data:image/gif");
 }
