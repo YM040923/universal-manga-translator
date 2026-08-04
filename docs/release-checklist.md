@@ -38,6 +38,8 @@ Before publishing a release:
 
 6. Load `apps/extension/dist` in Chrome developer mode and verify the popup opens, self-test reports API failures clearly, and a manga chapter page can be translated.
 
+   The automated suite includes generated font/bubble SVG fixtures and a Windows visual screenshot baseline. Do not replace those fixtures with copyrighted manga pages.
+
    Manual smoke test:
 
    - Install from `apps/extension/dist`, open the popup, and confirm it renders immediately.
@@ -75,6 +77,8 @@ qa-output/extension-qa.png
 ```
 
 Use `--run-mode=backend` only for advanced backend validation.
+
+For live reader acceptance without consuming OCR/translation quota, run the QA command with `--translate=0` on `asurascans.com`, `comix.to`, and one additional lazy-loading reader. When valid credentials are available, manually translate no more than one image per site to verify OCR mapping and returned overlay placement.
 
 7. Upload `release/extension-release.zip` as the primary GitHub Release asset, and upload `release/extension-release.zip.sha256` plus `release/build-info.json` beside it.
 8. Copy `docs/release-notes-template.md` into the GitHub Release body and fill in the version-specific changes.
