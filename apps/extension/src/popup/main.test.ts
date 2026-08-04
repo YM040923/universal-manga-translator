@@ -126,6 +126,26 @@ test("popup locks page actions while a command is being sent and confirms accept
   assert.match(root.querySelector<HTMLElement>("[data-action-feedback]")?.textContent ?? "", /\u7ffb\u8bd1\u672c\u9875.*\u5df2\u63a5\u6536/);
 });
 
+test("popup shows the actual page queue snapshot returned by a translation command", async () => {
+  const dom = setupDom();
+  const storage = fakeStorage(enableSiteForUrl(DEFAULT_SETTINGS, "https://asurascans.com/a"));
+  const root = dom.window.document.querySelector<HTMLElement>("#app")!;
+
+  await mountPopupPage(root, deps({
+    storage,
+    tabUrl: "https://asurascans.com/a",
+    sendMessageToTab: async (_tabId, message) => message.command === "translate"
+      ? { ok: true, state: { readerActive: true, overlayVisible: true, autoTranslate: false, queue: { total: 12, queued: 9, processing: 1, completed: 2, cached: 0, empty: 0, failed: 0, cancelled: 0, paused: false } } }
+      : undefined,
+  }));
+
+  root.querySelector<HTMLButtonElement>("[data-action='translate']")!.click();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.match(root.querySelector<HTMLElement>("[data-action-feedback]")?.textContent ?? "", /处理中 1.*排队 9/);
+  assert.match(root.querySelector<HTMLElement>("[data-page-runtime-state]")?.textContent ?? "", /总计 12.*完成 2.*处理中 1/);
+});
+
 test("popup moves focus to cancel while a focused page action is pending and restores it afterward", async () => {
   const dom = setupDom();
   const storage = fakeStorage(enableSiteForUrl(DEFAULT_SETTINGS, "https://asurascans.com/a"));

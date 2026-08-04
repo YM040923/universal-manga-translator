@@ -13,7 +13,7 @@ import { DebugOverlayRenderer } from "./debug-overlay-renderer";
 import { createContentLogger } from "./content-logger";
 import type { ServerEvent } from "@umt/shared/protocol";
 import { EventResultRouter } from "./events/event-result-router";
-import { isUmtContentCommand, type UmtPageSampleSelfTestResponse } from "./messages";
+import { isUmtContentCommand, type UmtContentCommandResponse, type UmtPageSampleSelfTestResponse } from "./messages";
 import { OverlayRenderer } from "./overlay/overlay-renderer";
 import { createDocumentRectOverlayAnchor } from "./overlay/rect-anchor";
 import { ChapterProgress } from "./progress/chapter-progress";
@@ -148,6 +148,18 @@ async function bootstrap(): Promise<boolean> {
       eventResultRouter.track(surface.surfaceId, surface.element, surface.naturalSize);
       markSurface(surface.surfaceId, "cached");
     }
+  }
+
+  function pageRuntimeSnapshot(): UmtContentCommandResponse {
+    return {
+      ok: true,
+      state: {
+        readerActive: readerUiMounted,
+        overlayVisible: settings.translationOverlayVisible,
+        autoTranslate: shouldAutoTranslate(),
+        queue: queue.snapshot(),
+      },
+    };
   }
 
   async function restoreCachedResults(surfaces: RegisteredSurface[]): Promise<void> {
@@ -531,34 +543,45 @@ async function bootstrap(): Promise<boolean> {
       void sampleOcrSelfTest().then(sendResponse);
       return true;
     }
-    if (message.command === "translate") void translatePage(false);
-    if (message.command === "refresh") void resetPageState("popup-refresh", false);
-    if (message.command === "togglePause") {
-      if (queue.snapshot().paused) { queue.resume(); void translatePage(false); }
-      else queue.pause();
-      updateProgress();
+    if (message.command === "getPageState") {
+      sendResponse(pageRuntimeSnapshot());
+      return false;
     }
-    if (message.command === "clearPage") void resetPageState("popup-clear", true);
-    if (message.command === "selectRegion") startManualSelection();
-    if (message.command === "retranslate") void translatePage(true);
-    if (message.command === "retranslateVisible") void retranslateVisibleSurfaces();
-    if (message.command === "cancelQueue") void cancelCurrentQueue("popup-cancel");
-    if (message.command === "setOverlayVisibility") void setOverlayVisibility(message.visible !== false);
-    if (message.command === "toggleOverlayVisibility") void toggleOverlayVisibility();
-    if (message.command === "applySiteSettings") {
-      settings = setSiteSettings(settings, window.location.href, { autoTranslate: message.autoTranslate === true });
-      if (message.autoTranslate === true) void translatePage(false);
-      else void cancelCurrentQueue("auto-off");
-    }
-    if (message.command === "applyOverlayAppearance") {
-      settings = { ...settings, overlayAppearance: message.appearance ? { ...settings.overlayAppearance, ...message.appearance } : settings.overlayAppearance };
-      renderer.setAppearance(settings.overlayAppearance);
-    }
-    if (message.command === "applyWidgetSettings") {
-      if (typeof message.floatingButtonEnabled === "boolean") setFloatingButtonEnabled(message.floatingButtonEnabled);
-      if (typeof message.progressWidgetEnabled === "boolean") void setProgressWidgetEnabled(message.progressWidgetEnabled);
-    }
-    return false;
+    void (async () => {
+      if (message.command === "translate") void translatePage(false);
+      if (message.command === "refresh") await resetPageState("popup-refresh", false);
+      if (message.command === "togglePause") {
+        if (queue.snapshot().paused) { queue.resume(); void translatePage(false); }
+        else queue.pause();
+        updateProgress();
+      }
+      if (message.command === "clearPage") await resetPageState("popup-clear", true);
+      if (message.command === "selectRegion") startManualSelection();
+      if (message.command === "retranslate") void translatePage(true);
+      if (message.command === "retranslateVisible") void retranslateVisibleSurfaces();
+      if (message.command === "cancelQueue") await cancelCurrentQueue("popup-cancel");
+      if (message.command === "setOverlayVisibility") await setOverlayVisibility(message.visible !== false);
+      if (message.command === "toggleOverlayVisibility") await toggleOverlayVisibility();
+      if (message.command === "applySiteSettings") {
+        settings = setSiteSettings(settings, window.location.href, { autoTranslate: message.autoTranslate === true });
+        if (message.autoTranslate === true) void translatePage(false);
+        else await cancelCurrentQueue("auto-off");
+      }
+      if (message.command === "applyOverlayAppearance") {
+        settings = { ...settings, overlayAppearance: message.appearance ? { ...settings.overlayAppearance, ...message.appearance } : settings.overlayAppearance };
+        renderer.setAppearance(settings.overlayAppearance);
+      }
+      if (message.command === "applyWidgetSettings") {
+        if (typeof message.floatingButtonEnabled === "boolean") setFloatingButtonEnabled(message.floatingButtonEnabled);
+        if (typeof message.progressWidgetEnabled === "boolean") await setProgressWidgetEnabled(message.progressWidgetEnabled);
+      }
+      await Promise.resolve();
+      sendResponse(pageRuntimeSnapshot());
+    })().catch((error) => {
+      logger.error("content command failed", error);
+      sendResponse({ ok: false, error: "页面操作未完成，请重试或查看运行日志。", state: pageRuntimeSnapshot().state });
+    });
+    return true;
   });
   return true;
 }

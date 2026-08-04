@@ -11,7 +11,7 @@
   normalizeSettings,
   type ExtensionSettings,
 } from "../settings/settings.js";
-import type { UmtActivateSiteResponse, UmtContentCommand, UmtContentCommandName } from "../content/messages.js";
+import type { UmtActivateSiteResponse, UmtContentCommand, UmtContentCommandName, UmtContentCommandResponse, UmtPageRuntimeSnapshot } from "../content/messages.js";
 import { readDirectConfigFromDom } from "./config-form.js";
 import { runSelfTest } from "./self-test.js";
 import { popupStyles } from "./styles.js";
@@ -80,6 +80,7 @@ export async function mountPopupPage(root: HTMLElement, deps: PopupDeps = {}): P
   let pageActionFeedback: PageActionFeedback | null = null;
   let cancelActionFeedback: PageActionFeedback | null = null;
   let pageActionFeedbackRevision = 0;
+  let pageRuntimeState: UmtPageRuntimeSnapshot | null = null;
   let view: "main" | "api" = "main";
 
   const render = (options: { preserveScroll?: boolean; focusTarget?: PopupFocusTarget } = {}): void => {
@@ -97,6 +98,7 @@ export async function mountPopupPage(root: HTMLElement, deps: PopupDeps = {}): P
       enabled,
       autoTranslate: effectiveSite.autoTranslate,
       selfTestSummary,
+      pageRuntimeState,
       pageActionFeedback: selectPageActionFeedback(pageActionFeedback, cancelActionFeedback, cancelBusy),
       view,
     });
@@ -130,16 +132,16 @@ export async function mountPopupPage(root: HTMLElement, deps: PopupDeps = {}): P
     settings = await saveSettings(settings, storage);
   };
 
-  const sendCommand = async (command: UmtContentCommandName, extra: Partial<UmtContentCommand> = {}): Promise<void> => {
+  const sendCommand = async (command: UmtContentCommandName, extra: Partial<UmtContentCommand> = {}): Promise<unknown> => {
     if (!tab?.id) return;
     const message: UmtContentCommand = { source: "umt-popup", command, ...extra };
     try {
-      await (deps.sendMessageToTab ?? defaultSendMessageToTab)(tab.id, message);
+      return await (deps.sendMessageToTab ?? defaultSendMessageToTab)(tab.id, message);
     } catch (error) {
       if (!tab.url) throw error;
       const response = await (deps.activateSite ?? defaultActivateSite)(tab.id, tab.url);
       if (!response.ok) throw error;
-      await (deps.sendMessageToTab ?? defaultSendMessageToTab)(tab.id, message);
+      return await (deps.sendMessageToTab ?? defaultSendMessageToTab)(tab.id, message);
     }
   };
 
@@ -164,8 +166,11 @@ export async function mountPopupPage(root: HTMLElement, deps: PopupDeps = {}): P
     }
     render(restoreFocusedAction ? { focusTarget: { attribute: "data-action", value: "cancel" } } : {});
     try {
-      await sendCommand(command);
-      const result = feedback("success", `${label}已接收，页面会显示实际进度。`);
+      const response = await sendCommand(command);
+      const commandError = readPageRuntimeError(response);
+      if (commandError) throw new Error(commandError);
+      pageRuntimeState = readPageRuntimeState(response) ?? pageRuntimeState;
+      const result = feedback("success", pageRuntimeState ? `${label}：${pageRuntimeActionSummary(pageRuntimeState)}` : `${label}已接收，页面会显示实际进度。`);
       if (kind === "cancel") cancelActionFeedback = result;
       else pageActionFeedback = result;
     } catch (error) {
@@ -271,8 +276,8 @@ export async function mountPopupPage(root: HTMLElement, deps: PopupDeps = {}): P
   void refreshBackendStatus();
 }
 
-function markup(input: { settings: ExtensionSettings; backendOnline: boolean | null; domain: string | null; unsupported: boolean; enabled: boolean; autoTranslate: boolean; selfTestSummary: string; pageActionFeedback: PageActionFeedback | null; view: "main" | "api" }): string {
-  const { settings, backendOnline, domain, unsupported, enabled, autoTranslate, selfTestSummary, pageActionFeedback, view } = input;
+function markup(input: { settings: ExtensionSettings; backendOnline: boolean | null; domain: string | null; unsupported: boolean; enabled: boolean; autoTranslate: boolean; selfTestSummary: string; pageActionFeedback: PageActionFeedback | null; pageRuntimeState: UmtPageRuntimeSnapshot | null; view: "main" | "api" }): string {
+  const { settings, backendOnline, domain, unsupported, enabled, autoTranslate, selfTestSummary, pageActionFeedback, pageRuntimeState, view } = input;
   const status = unsupported ? TEXT.unsupported : enabled ? TEXT.enabled : TEXT.disabled;
   const directReady = Boolean(settings.directOcr.apiUrl && settings.directOcr.apiKeys.length && settings.directTranslator.baseUrl && settings.directTranslator.apiKey && settings.directTranslator.model);
   const healthClass = settings.runMode === "direct" ? directReady ? "ok" : "bad" : backendOnline === true ? "ok" : backendOnline === null ? "checking" : "bad";
@@ -294,6 +299,7 @@ function markup(input: { settings: ExtensionSettings; backendOnline: boolean | n
       <button class="muted" data-action="clear" data-page-action data-requires-enabled>${TEXT.clear}</button>
       <button class="danger" data-action="cancel" data-page-action data-requires-enabled>${TEXT.cancel}</button>
       ${pageActionFeedback ? `<div class="action-feedback ${pageActionFeedback.kind}" data-action-feedback role="status" aria-live="polite">${escapeHtml(pageActionFeedback.text)}</div>` : ""}
+      ${pageRuntimeState ? `<small class="page-runtime" data-page-runtime-state>${escapeHtml(pageRuntimeSummary(pageRuntimeState))}</small>` : ""}
     </section>
     <section class="card toggles"><b>${TEXT.switches}</b>
       ${toggle(TEXT.overlay, "overlay-visible", settings.translationOverlayVisible, true)}
@@ -312,6 +318,34 @@ function markup(input: { settings: ExtensionSettings; backendOnline: boolean | n
       <button class="muted wide" data-action="reset-appearance" data-requires-enabled>${TEXT.resetAppearance}</button>
     </section>
   </section>`;
+}
+
+function readPageRuntimeState(value: unknown): UmtPageRuntimeSnapshot | null {
+  if (!value || typeof value !== "object") return null;
+  const response = value as Partial<UmtContentCommandResponse>;
+  const state = response.state;
+  if (response.ok !== true || !state || typeof state !== "object") return null;
+  const queue = state.queue as unknown;
+  if (!queue || typeof queue !== "object" || !["total", "queued", "processing", "completed", "cached", "empty", "failed", "cancelled"].every((key) => typeof (queue as Record<string, unknown>)[key] === "number")) return null;
+  return state;
+}
+
+function readPageRuntimeError(value: unknown): string | null {
+  if (!value || typeof value !== "object") return null;
+  const response = value as Partial<UmtContentCommandResponse>;
+  return response.ok === false && typeof response.error === "string" && response.error.trim() ? response.error : null;
+}
+
+function pageRuntimeActionSummary(state: UmtPageRuntimeSnapshot): string {
+  if (!state.readerActive) return "当前页面尚未识别为漫画阅读页";
+  if (state.queue.paused) return `已暂停；${pageRuntimeSummary(state)}`;
+  if (state.queue.processing > 0 || state.queue.queued > 0) return `处理中 ${state.queue.processing}，排队 ${state.queue.queued}`;
+  return pageRuntimeSummary(state);
+}
+
+function pageRuntimeSummary(state: UmtPageRuntimeSnapshot): string {
+  const queue = state.queue;
+  return `总计 ${queue.total} · 完成 ${queue.completed + queue.cached} · 处理中 ${queue.processing} · 排队 ${queue.queued} · 空 ${queue.empty} · 失败 ${queue.failed} · 取消 ${queue.cancelled}`;
 }
 
 function selectPageActionFeedback(pageFeedback: PageActionFeedback | null, cancelFeedback: PageActionFeedback | null, cancelBusy: boolean): PageActionFeedback | null {
