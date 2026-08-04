@@ -1,5 +1,6 @@
 export * from "./api-key-pool.js";
 export * from "./bubble-reconstruction.js";
+export * from "./fixtures/generated-bubbles.js";
 export * from "./generic-ocr.js";
 export * from "./ocr-preprocess.js";
 export * from "./ocr-quality.js";

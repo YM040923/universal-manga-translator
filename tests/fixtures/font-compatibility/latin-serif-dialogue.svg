@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="360" height="270" viewBox="0 0 360 270">
+  <rect width="360" height="270" fill="#e8edf4"/>
+  <ellipse cx="180" cy="135" rx="126" ry="96" fill="#fff" stroke="#111827" stroke-width="4"/>
+  <text x="180" y="108" text-anchor="middle" font-family="Georgia,serif" font-size="27" font-weight="700">I knew</text>
+  <text x="180" y="142" text-anchor="middle" font-family="Georgia,serif" font-size="27" font-weight="700">you would</text>
+  <text x="180" y="176" text-anchor="middle" font-family="Georgia,serif" font-size="27" font-weight="700">come back</text>
+</svg>

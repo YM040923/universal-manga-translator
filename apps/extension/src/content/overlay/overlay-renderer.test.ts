@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
-import { reconstructBubbles, type BubbleOwnershipEvidence } from "@umt/core";
+import { FONT_BUBBLE_FIXTURES, reconstructBubbles, type BubbleOwnershipEvidence } from "@umt/core";
 import type { ManualOverridePayload } from "@umt/shared/protocol";
 import type { Rect, SurfaceResult } from "@umt/shared/types";
 import { clearManualEdits, loadManualEdit, OverlayRenderer, saveManualEdit } from "./overlay-renderer.js";
@@ -94,6 +94,26 @@ test("render preserves unchanged bubble nodes when a new result changes only one
   assert.equal(unchanged.querySelector("[data-umt-text-chip='true']")!.firstChild, unchangedTextNode);
   assert.equal(document.querySelector("[data-umt-region-id='r2']"), changed);
   assert.equal(changed.textContent, "changed second bubble");
+});
+
+test("renderer preserves distinct generated adjacent-dialogue fixture bubbles", () => {
+  const fixture = FONT_BUBBLE_FIXTURES.find((item) => item.id === "display-adjacent-dialogue")!;
+  const bubbles = reconstructBubbles(fixture.observations, fixture.evidence);
+  const { img } = setupDomWithImage({ x: 0, y: 0, width: 390, height: 230 });
+  const renderer = new OverlayRenderer();
+  const result = fakeResult("generated-adjacent-fixture");
+  result.regions = bubbles.map((bubble) => ({
+    ...result.regions[0]!,
+    id: bubble.id,
+    sourceText: bubble.sourceText,
+    translatedText: bubble.sourceText,
+    box: bubble.box,
+    kind: bubble.kind,
+  }));
+
+  renderer.render(img, { width: 390, height: 230 }, result);
+
+  assert.equal(document.querySelectorAll("[data-umt-surface-id='generated-adjacent-fixture']").length, fixture.expected.bubbleCount);
 });
 
 test("keeps distinct overlay nodes when a provider reuses a region id inside one surface", () => {
