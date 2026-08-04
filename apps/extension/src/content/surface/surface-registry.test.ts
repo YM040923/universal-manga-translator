@@ -205,3 +205,19 @@ test("SurfaceRegistry forwards background and canvas reader pages through the no
   assert.equal(captured[1]?.imageData, "data:image/png;base64,Y2FudmFz");
   assert.equal(isLikelyReaderPage(dom.window.document, registry.surfaces), true);
 });
+
+test("isLikelyReaderPage accepts query-driven reader routes with opaque image URLs", () => {
+  const dom = new JSDOM(`<!doctype html><html><body><img id="page" src="https://cdn.other-site.test/assets/a8f921.webp"></body></html>`, { url: "https://manga.example/title?chapter=60" });
+  globalThis.window = dom.window as unknown as Window & typeof globalThis;
+  globalThis.document = dom.window.document;
+  globalThis.HTMLElement = dom.window.HTMLElement;
+  globalThis.HTMLImageElement = dom.window.HTMLImageElement;
+  const page = dom.window.document.querySelector<HTMLImageElement>("#page")!;
+  Object.defineProperty(page, "naturalWidth", { value: 800, configurable: true });
+  Object.defineProperty(page, "naturalHeight", { value: 1600, configurable: true });
+  page.getBoundingClientRect = () => ({ x: 20, y: 100, left: 20, top: 100, right: 820, bottom: 1700, width: 800, height: 1600, toJSON: () => ({}) });
+
+  const surfaces = SurfaceRegistry.scan(dom.window.document).surfaces;
+
+  assert.equal(isLikelyReaderPage(dom.window.document, surfaces), true);
+});

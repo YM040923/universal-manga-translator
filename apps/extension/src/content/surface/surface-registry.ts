@@ -82,7 +82,9 @@ function looksLikeComicDirectoryUrl(url: string): boolean {
 function looksLikeChapterUrl(url: string): boolean {
   try {
     const parsed = new URL(url);
-    return /(?:^|\/)(chapter|chap|episode|ep|read|reader)(?:\/|-|_|$)|\/\d+(?:\/)?$/i.test(parsed.pathname);
+    if (/(?:^|\/)(chapter|chap|episode|ep|read|reader)(?:\/|-|_|$)|\/\d+(?:\/)?$/i.test(parsed.pathname)) return true;
+    return ["chapter", "chapter_id", "chap", "episode", "episode_id", "ep", "reader", "read", "page"]
+      .some((key) => Boolean(parsed.searchParams.get(key)?.trim()));
   } catch {
     return false;
   }
