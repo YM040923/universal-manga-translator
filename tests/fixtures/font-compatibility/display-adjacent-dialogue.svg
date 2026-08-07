@@ -1,7 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="390" height="230" viewBox="0 0 390 230">
-  <rect width="390" height="230" fill="#1e293b"/>
-  <ellipse cx="112" cy="115" rx="84" ry="58" fill="#fff" stroke="#111827" stroke-width="4"/>
-  <ellipse cx="278" cy="115" rx="72" ry="58" fill="#fff" stroke="#111827" stroke-width="4"/>
-  <text x="112" y="126" text-anchor="middle" font-family="Impact,Arial Black,sans-serif" font-size="38">WAIT!</text>
-  <text x="278" y="126" text-anchor="middle" font-family="Impact,Arial Black,sans-serif" font-size="38">RUN!</text>
-</svg>

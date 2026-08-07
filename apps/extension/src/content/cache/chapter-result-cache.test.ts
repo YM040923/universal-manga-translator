@@ -3,12 +3,11 @@ import assert from "node:assert/strict";
 import { ChapterResultCache, chapterResultCacheKey, type ChapterResultCacheStorage } from "./chapter-result-cache.js";
 import type { SurfaceResult } from "@umt/shared/types";
 
-test("chapterResultCacheKey normalizes URL and keeps its v2 storage identifier opaque", () => {
-  const left = chapterResultCacheKey({ pageUrl: "https://reader.example/comic/1?x=1#p2", targetLanguage: "zh-CN", providerProfile: "generic-ocr+gpt" });
-  const right = chapterResultCacheKey({ pageUrl: "https://reader.example/comic/1?x=2#p3", targetLanguage: "zh-CN", providerProfile: "generic-ocr+gpt" });
-  assert.match(left, /^umt\.chapter-cache:v2:/);
-  assert.equal(left, right);
-  assert.doesNotMatch(left, /reader\.example|generic-ocr/);
+test("chapterResultCacheKey normalizes URL and includes target/provider", () => {
+  assert.equal(
+    chapterResultCacheKey({ pageUrl: "https://reader.example/comic/1?x=1#p2", targetLanguage: "zh-CN", providerProfile: "generic-ocr+gpt" }),
+    "umt.chapter-cache:v1:https://reader.example/comic/1:zh-CN:generic-ocr+gpt",
+  );
 });
 
 test("ChapterResultCache saves and reads renderable results by image URL", async () => {
@@ -17,10 +16,10 @@ test("ChapterResultCache saves and reads renderable results by image URL", async
   const context = { pageUrl: "https://reader.example/ch/1", targetLanguage: "zh-CN", providerProfile: "generic-ocr" };
 
   await cache.save(context, "https://cdn.example/1.webp", fakeResult("s1"));
-  const entry = await cache.get(context, "https://cdn.example/1.webp");
+  const doc = await cache.read(context);
 
-  assert.equal(entry?.result.surfaceId, "s1");
-  assert.equal(entry?.result.regions.length, 1);
+  assert.equal(doc.entries["https://cdn.example/1.webp"]?.result.surfaceId, "s1");
+  assert.equal(doc.entries["https://cdn.example/1.webp"]?.result.regions.length, 1);
 });
 
 test("ChapterResultCache ignores empty results and can clear a chapter", async () => {

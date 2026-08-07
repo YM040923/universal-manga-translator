@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Universal Manga Translator",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Personal universal manga translation overlay for browser reading.",
   "icons": {
     "16": "icons/icon-16.png",
@@ -13,8 +13,7 @@
     "storage",
     "activeTab",
     "tabs",
-    "scripting",
-    "webNavigation"
+    "scripting"
   ],
   "host_permissions": [
     "<all_urls>"

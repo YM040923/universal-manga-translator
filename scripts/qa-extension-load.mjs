@@ -68,9 +68,9 @@ try {
   const worker = context.serviceWorkers()[0];
   if (worker) {
     const ocrKeys = splitKeys(env.OCR_API_KEYS || env.OCR_API_KEY);
-    await worker.evaluate(async ({ mode }) => {
-      await chrome.storage.sync.set({ runMode: mode });
-    }, { mode: runMode });
+    await worker.evaluate(async ({ domain, mode }) => {
+      await chrome.storage.sync.set({ enabledSites: domain ? { [domain]: true } : {}, runMode: mode });
+    }, { domain: qaDomain, mode: runMode });
     if (args.get("configure-direct") === "true") {
       await worker.evaluate(async (config) => {
         await chrome.storage.sync.set(config);
@@ -100,8 +100,6 @@ try {
   page.on("console", (msg) => report.console.push({ type: msg.type(), text: msg.text() }));
   page.on("pageerror", (err) => report.console.push({ type: "pageerror", text: String(err.stack || err) }));
   await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60_000 });
-  const activation = worker ? await activateCurrentPage(worker, page.url()) : { ok: false, error: "extension service worker unavailable" };
-  check("site-activation", activation.ok, activation.ok ? "enabled current primary domain and injected content script" : activation.error || "activation failed");
   await page.waitForTimeout(8_000);
 
   report.pageState = await readPageState(page);
@@ -178,23 +176,6 @@ async function readPageState(page) {
       return { x: Math.round(r.x), y: Math.round(r.y), width: Math.round(r.width), height: Math.round(r.height) };
     }
   });
-}
-
-async function activateCurrentPage(worker, pageUrl) {
-  return worker.evaluate(async (url) => {
-    const target = new URL(url);
-    const tabs = await chrome.tabs.query({ url: `${target.origin}/*` });
-    const tab = tabs.find((item) => item.url === url) ?? tabs[0];
-    if (!tab?.id) return { ok: false, error: "target tab was not found" };
-    const host = target.hostname.toLowerCase().replace(/^www\./, "");
-    const parts = host.split(".").filter(Boolean);
-    const domain = parts.length <= 2 ? host : parts.slice(-2).join(".");
-    const stored = await chrome.storage.sync.get("enabledSites");
-    const enabledSites = stored.enabledSites && typeof stored.enabledSites === "object" ? stored.enabledSites : {};
-    await chrome.storage.sync.set({ enabledSites: { ...enabledSites, [domain]: true } });
-    await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["content.js"] });
-    return { ok: true };
-  }, pageUrl);
 }
 
 

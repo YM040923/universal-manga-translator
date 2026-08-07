@@ -1,14 +1,6 @@
-import type { RecognitionUnit, Rect, TextRegion } from "@umt/shared";
+import type { Rect, TextRegion } from "@umt/shared";
 import type { ApiKeyPoolStatus } from "./api-key-pool.js";
-import { reconstructBubbles, type BubbleOwnershipEvidence } from "./bubble-reconstruction.js";
-import { classifyGenericOcrError, type GenericOcrImageInput, type GenericOcrRegion } from "./generic-ocr.js";
-import {
-  getOcrPreprocessVariant,
-  selectOcrRescueVariant,
-  type OcrPreprocessVariant,
-  type OcrPreprocessVariantId,
-} from "./ocr-preprocess.js";
-import { assessOcrQuality, shouldAcceptRescue, type OcrQualityReason } from "./ocr-quality.js";
+import type { GenericOcrImageInput, GenericOcrRegion } from "./generic-ocr.js";
 import type { TextTranslationItem, TextTranslationOptions, TextTranslationProvider, TextTranslationResult } from "./openai-translator.js";
 
 export type { GenericOcrRegion, TextTranslationItem, TextTranslationOptions, TextTranslationResult };
@@ -24,73 +16,10 @@ export interface CorePipelineInput extends GenericOcrImageInput {
   chapterContext?: string;
   previousTranslations?: Array<{ id: string; translatedText: string }>;
   termCandidates?: string[];
-  preCroppedOcrInputs?: CorePreCroppedOcrInput[];
-  preCroppedOcrInputLoader?: CorePreCroppedOcrInputLoader;
-  onOcrTileError?: (failure: CoreOcrTileFailure) => void;
-  recognitionUnit?: RecognitionUnit;
-  likelyTextEvidence?: boolean;
-  bubbleEvidenceExtractor?: CoreBubbleEvidenceExtractor;
-  maxOcrRescueCallsPerImage?: number;
-  ocrPreprocessLoader?: CoreOcrPreprocessLoader;
-  onOcrRescueDiagnostic?: (diagnostic: CoreOcrRescueDiagnostic) => void;
-}
-
-export interface CorePreCroppedOcrInput extends GenericOcrImageInput {
-  recognitionUnit: RecognitionUnit;
-  ocrVariant?: OcrPreprocessVariantId;
-}
-
-export interface CorePreCroppedOcrInputLoader {
-  tileCount: number;
-  forEach(consume: (input: CorePreCroppedOcrInput, index: number) => Promise<void>): Promise<void>;
-}
-
-export interface CoreBubbleEvidenceExtractionInput extends GenericOcrImageInput {
-  width: number;
-  height: number;
-  observations: readonly GenericOcrRegion[];
-  recognitionUnit: RecognitionUnit;
-}
-
-export type CoreBubbleEvidenceExtractor = (
-  input: CoreBubbleEvidenceExtractionInput,
-) => Promise<BubbleOwnershipEvidence[]>;
-
-export interface CoreOcrTileFailure {
-  tileIndex: number;
-  tileCount: number;
-  recognitionUnit: RecognitionUnit;
-  error: Error;
-}
-
-export interface CoreOcrPreprocessSourceInput extends GenericOcrImageInput {
-  recognitionUnit: RecognitionUnit;
-}
-
-export interface CoreOcrPreprocessLoader {
-  withVariant<T>(
-    source: CoreOcrPreprocessSourceInput,
-    variant: OcrPreprocessVariant,
-    consume: (input: CorePreCroppedOcrInput) => Promise<T>,
-  ): Promise<T>;
-}
-
-export interface CoreOcrRescueDiagnostic {
-  reasons: OcrQualityReason[];
-  variant: OcrPreprocessVariantId;
-  usedBudget: number;
-  remainingBudget: number;
-  originalScore: number;
-  rescueScore?: number;
-  selected: "original" | "rescue";
-  regionCount: number;
-  characterCount: number;
-  crop: Rect;
-  errorKind?: ReturnType<typeof classifyGenericOcrError>["kind"];
 }
 
 export interface CoreOcrProvider {
-  recognize(input: CorePipelineInput | CorePreCroppedOcrInput): Promise<GenericOcrRegion[]>;
+  recognize(input: CorePipelineInput): Promise<GenericOcrRegion[]>;
   keyStatus?(): ApiKeyPoolStatus;
 }
 
@@ -112,11 +41,6 @@ export interface CorePipelineResult {
   regions: TextRegion[];
 }
 
-interface CoreOcrReadResult {
-  regions: GenericOcrRegion[];
-  bubbleEvidence: BubbleOwnershipEvidence[];
-}
-
 export class OcrTranslatePipeline {
   readonly profile: string;
   lastOcrCacheStatus: "hit" | "miss" | "coalesced" | "disabled" = "disabled";
@@ -134,9 +58,8 @@ export class OcrTranslatePipeline {
   }
 
   async process(input: CorePipelineInput): Promise<CorePipelineResult> {
-    const ocrRead = await this.readOcrRegions(input);
-    const ocrRegions = ocrRead.regions.map((region) => classifyRegionKind(region, input.width, input.height));
-    const textBlocks = reconstructBubbles(ocrRegions, ocrRead.bubbleEvidence).map(bubbleToOcrRegion);
+    const ocrRegions = (await this.readOcrRegions(input)).map((region) => classifyRegionKind(region, input.width, input.height));
+    const textBlocks = groupOcrRegionsIntoTextBlocks(ocrRegions);
     const translationOptions: TextTranslationOptions = { retranslate: input.retranslate === true };
     if (input.glossary && Object.keys(input.glossary).length) translationOptions.glossary = input.glossary;
     if (input.chapterContext?.trim()) translationOptions.chapterContext = input.chapterContext.trim();
@@ -163,123 +86,12 @@ export class OcrTranslatePipeline {
     };
   }
 
-  private async readOcrRegions(input: CorePipelineInput): Promise<CoreOcrReadResult> {
-    const rescueBudget = createOcrRescueBudget(input.maxOcrRescueCallsPerImage);
-    if (input.preCroppedOcrInputLoader) {
-      return this.readTiledOcrRegions(
-        input,
-        input.preCroppedOcrInputLoader.tileCount,
-        input.preCroppedOcrInputLoader.forEach,
-        rescueBudget,
-      );
-    }
-    if (input.preCroppedOcrInputs?.length) {
-      return this.readTiledOcrRegions(input, input.preCroppedOcrInputs.length, async (consume) => {
-        for (const [index, ocrInput] of input.preCroppedOcrInputs!.entries()) await consume(ocrInput, index);
-      }, rescueBudget);
-    }
-    const recognitionUnit = input.recognitionUnit ?? createFullImageRecognitionUnit(input);
-    const original = await this.readSingleOcrInput(input, input);
-    const sourceInput = {
-      imageBytes: input.imageBytes,
-      ...(input.fileName ? { fileName: input.fileName } : {}),
-      ...(input.mimeType ? { mimeType: input.mimeType } : {}),
-      recognitionUnit,
-    };
-    const selected = await this.maybeRescueOcrRegions(input, sourceInput, original, [], rescueBudget, false);
-    const bubbleEvidence = await this.readBubbleEvidence(input, sourceInput, selected);
-    return { regions: selected, bubbleEvidence };
-  }
-
-  private async readTiledOcrRegions(
-    input: CorePipelineInput,
-    tileCount: number,
-    forEach: CorePreCroppedOcrInputLoader["forEach"],
-    rescueBudget: CoreOcrRescueBudget,
-  ): Promise<CoreOcrReadResult> {
-    const regions: GenericOcrRegion[] = [];
-    const bubbleEvidence: BubbleOwnershipEvidence[] = [];
-    await forEach(async (ocrInput, index) => {
-      try {
-        const original = await this.readSingleOcrInput(input, ocrInput, ocrInput.recognitionUnit, ocrInput.ocrVariant);
-        const selected = await this.maybeRescueOcrRegions(
-          input,
-          ocrInput,
-          original,
-          regions,
-          rescueBudget,
-          true,
-        );
-        const tileEvidence = await this.readBubbleEvidence(input, ocrInput, selected);
-        regions.push(...selected.map((region) => remapRegionToParent(region, ocrInput.recognitionUnit, input.width, input.height)));
-        bubbleEvidence.push(...tileEvidence.map((evidence) => remapBubbleEvidenceToParent(
-          evidence,
-          ocrInput.recognitionUnit,
-          input.width,
-          input.height,
-        )));
-      } catch (cause) {
-        const error = createOcrTileError(cause, index + 1, tileCount, ocrInput.recognitionUnit);
-        input.onOcrTileError?.({ tileIndex: index + 1, tileCount, recognitionUnit: ocrInput.recognitionUnit, error });
-        throw error;
-      }
-    });
-    return { regions, bubbleEvidence };
-  }
-
-  private async readBubbleEvidence(
-    parentInput: CorePipelineInput,
-    sourceInput: CoreOcrPreprocessSourceInput,
-    observations: GenericOcrRegion[],
-  ): Promise<BubbleOwnershipEvidence[]> {
-    const manualGroupId = sourceInput.recognitionUnit.reason === "manual-selection"
-      ? sourceInput.recognitionUnit.id
-      : undefined;
-    let extracted: BubbleOwnershipEvidence[] = [];
-    if (parentInput.bubbleEvidenceExtractor) {
-      try {
-        extracted = await parentInput.bubbleEvidenceExtractor({
-          imageBytes: sourceInput.imageBytes,
-          ...(sourceInput.fileName ? { fileName: sourceInput.fileName } : {}),
-          ...(sourceInput.mimeType ? { mimeType: sourceInput.mimeType } : {}),
-          width: sourceInput.recognitionUnit.pixelSize.width,
-          height: sourceInput.recognitionUnit.pixelSize.height,
-          observations,
-          recognitionUnit: sourceInput.recognitionUnit,
-        });
-      } catch {
-        extracted = [];
-      }
-    }
-    if (!manualGroupId) return extracted;
-    const extractedByObservationId = new Map(extracted.map((item) => [item.observationId, item]));
-    return observations.map((observation) => ({
-      ...extractedByObservationId.get(observation.id),
-      observationId: observation.id,
-      manualGroupId,
-      confidence: extractedByObservationId.get(observation.id)?.confidence ?? 1,
-      touchesBoundary: extractedByObservationId.get(observation.id)?.touchesBoundary ?? false,
-    }));
-  }
-
-  private async readSingleOcrInput(
-    parentInput: CorePipelineInput,
-    ocrInput: CorePipelineInput | CorePreCroppedOcrInput,
-    recognitionUnit?: RecognitionUnit,
-    ocrVariant?: OcrPreprocessVariantId,
-  ): Promise<GenericOcrRegion[]> {
+  private async readOcrRegions(input: CorePipelineInput): Promise<GenericOcrRegion[]> {
     if (!this.options.ocrCache) {
       this.lastOcrCacheStatus = "disabled";
-      return this.options.ocr.recognize(ocrInput);
+      return this.options.ocr.recognize(input);
     }
-    const key = buildOcrCacheKey(this.profile, {
-      imageHash: parentInput.imageHash,
-      width: parentInput.width,
-      height: parentInput.height,
-      sourceLanguage: parentInput.sourceLanguage,
-      ...(recognitionUnit ? { recognitionUnit } : {}),
-      ...(ocrVariant && ocrVariant !== "original" ? { ocrVariant } : {}),
-    });
+    const key = buildOcrCacheKey(this.profile, input);
     const cached = await this.options.ocrCache.get(key);
     if (cached) {
       this.lastOcrCacheStatus = "hit";
@@ -292,7 +104,7 @@ export class OcrTranslatePipeline {
     }
     this.lastOcrCacheStatus = "miss";
     const read = (async () => {
-      const regions = await this.options.ocr.recognize(ocrInput);
+      const regions = await this.options.ocr.recognize(input);
       if (regions.length > 0) await this.options.ocrCache!.set(key, regions);
       return regions;
     })();
@@ -303,276 +115,9 @@ export class OcrTranslatePipeline {
       if (inFlightOcrReads.get(key) === read) inFlightOcrReads.delete(key);
     }
   }
-
-  private async maybeRescueOcrRegions(
-    parentInput: CorePipelineInput,
-    sourceInput: CoreOcrPreprocessSourceInput,
-    originalRegions: GenericOcrRegion[],
-    overlappingParentRegions: GenericOcrRegion[],
-    budget: CoreOcrRescueBudget,
-    remapForComparison: boolean,
-  ): Promise<GenericOcrRegion[]> {
-    const comparableOriginal = remapForComparison
-      ? originalRegions.map((region) => remapRegionToParent(region, sourceInput.recognitionUnit, parentInput.width, parentInput.height))
-      : originalRegions;
-    const originalAssessment = assessOcrQuality(comparableOriginal, sourceInput.recognitionUnit, {
-      ...(parentInput.likelyTextEvidence !== undefined ? { likelyTextEvidence: parentInput.likelyTextEvidence } : {}),
-      overlappingObservations: overlappingParentRegions,
-    });
-    const variantId = selectOcrRescueVariant(originalAssessment);
-    if (
-      !variantId
-      || !parentInput.ocrPreprocessLoader
-      || budget.used >= budget.maximum
-    ) {
-      return originalRegions;
-    }
-
-    const variant = getOcrPreprocessVariant(variantId);
-    budget.used += 1;
-    try {
-      let variantUnit = sourceInput.recognitionUnit;
-      const rawRescueRegions = await parentInput.ocrPreprocessLoader.withVariant(sourceInput, variant, async (variantInput) => {
-        variantUnit = variantInput.recognitionUnit;
-        return this.readSingleOcrInput(
-          parentInput,
-          variantInput,
-          variantInput.recognitionUnit,
-          variantInput.ocrVariant ?? variant.id,
-        );
-      });
-      const rescueRegions = rawRescueRegions.map((region) => remapRegionBetweenUnits(
-        region,
-        variantUnit,
-        sourceInput.recognitionUnit,
-      ));
-      const comparableRescue = remapForComparison
-        ? rescueRegions.map((region) => remapRegionToParent(region, sourceInput.recognitionUnit, parentInput.width, parentInput.height))
-        : rescueRegions;
-      const rescueAssessment = assessOcrQuality(comparableRescue, sourceInput.recognitionUnit, {
-        ...(parentInput.likelyTextEvidence !== undefined ? { likelyTextEvidence: parentInput.likelyTextEvidence } : {}),
-        overlappingObservations: overlappingParentRegions,
-      });
-      const useRescue = shouldAcceptRescue(
-        { observations: comparableOriginal, assessment: originalAssessment },
-        { observations: comparableRescue, assessment: rescueAssessment },
-      );
-      parentInput.onOcrRescueDiagnostic?.({
-        reasons: [...originalAssessment.reasons],
-        variant: variant.id,
-        usedBudget: budget.used,
-        remainingBudget: budget.maximum - budget.used,
-        originalScore: originalAssessment.score,
-        rescueScore: rescueAssessment.score,
-        selected: useRescue ? "rescue" : "original",
-        regionCount: originalAssessment.metrics.regionCount,
-        characterCount: originalAssessment.metrics.characterCount,
-        crop: { ...sourceInput.recognitionUnit.crop },
-      });
-      return useRescue ? rescueRegions : originalRegions;
-    } catch (error) {
-      parentInput.onOcrRescueDiagnostic?.({
-        reasons: [...originalAssessment.reasons],
-        variant: variant.id,
-        usedBudget: budget.used,
-        remainingBudget: budget.maximum - budget.used,
-        originalScore: originalAssessment.score,
-        selected: "original",
-        regionCount: originalAssessment.metrics.regionCount,
-        characterCount: originalAssessment.metrics.characterCount,
-        crop: { ...sourceInput.recognitionUnit.crop },
-        errorKind: classifyGenericOcrError(error).kind,
-      });
-      throw createOcrRescueError(error, variant.id, sourceInput.recognitionUnit);
-    }
-  }
 }
 
 const inFlightOcrReads = new Map<string, Promise<GenericOcrRegion[]>>();
-
-interface CoreOcrRescueBudget {
-  maximum: number;
-  used: number;
-}
-
-function createOcrRescueBudget(value: number | undefined): CoreOcrRescueBudget {
-  const maximum = Number.isFinite(value) ? Math.max(0, Math.min(3, Math.trunc(value!))) : 1;
-  return { maximum, used: 0 };
-}
-
-function createFullImageRecognitionUnit(input: CorePipelineInput): RecognitionUnit {
-  return {
-    id: "full-image",
-    parentSurfaceId: "full-image",
-    imageHash: input.imageHash,
-    crop: { x: 0, y: 0, width: input.width, height: input.height },
-    naturalSize: { width: input.width, height: input.height },
-    pixelSize: { width: input.width, height: input.height },
-    scaleX: 1,
-    scaleY: 1,
-    priority: "p0",
-    reason: "automatic",
-    preprocessingVersion: "none-v1",
-  };
-}
-
-function remapRegionToParent(
-  region: GenericOcrRegion,
-  unit: RecognitionUnit,
-  parentWidth: number,
-  parentHeight: number,
-): GenericOcrRegion {
-  const left = clamp(unit.crop.x + region.box.x / unit.scaleX, 0, parentWidth);
-  const top = clamp(unit.crop.y + region.box.y / unit.scaleY, 0, parentHeight);
-  const right = clamp(unit.crop.x + (region.box.x + region.box.width) / unit.scaleX, 0, parentWidth);
-  const bottom = clamp(unit.crop.y + (region.box.y + region.box.height) / unit.scaleY, 0, parentHeight);
-  return {
-    ...region,
-    id: `${unit.id}:${region.id}`,
-    box: {
-      x: left,
-      y: top,
-      width: Math.max(0, right - left),
-      height: Math.max(0, bottom - top),
-    },
-  };
-}
-
-function remapBubbleEvidenceToParent(
-  evidence: BubbleOwnershipEvidence,
-  unit: RecognitionUnit,
-  parentWidth: number,
-  parentHeight: number,
-): BubbleOwnershipEvidence {
-  const remapped: BubbleOwnershipEvidence = {
-    observationId: `${unit.id}:${evidence.observationId}`,
-    confidence: evidence.confidence,
-    touchesBoundary: evidence.touchesBoundary,
-  };
-  if (evidence.manualGroupId) remapped.manualGroupId = `${unit.id}:${evidence.manualGroupId}`;
-  if (evidence.shape) remapped.shape = evidence.shape;
-  let parentComponentBox: Rect | undefined;
-  if (evidence.componentBox) {
-    parentComponentBox = remapRectToParent(evidence.componentBox, unit, parentWidth, parentHeight);
-    remapped.componentBox = parentComponentBox;
-  }
-  if (evidence.visualGroupId) {
-    if (evidence.visualFingerprint && parentComponentBox) {
-      remapped.visualGroupId = canonicalVisualGroupKey(
-        evidence.shape ?? "free-text",
-        parentComponentBox,
-        evidence.visualFingerprint,
-      );
-    } else {
-      // Arbitrary provider group IDs are not safe to merge across tiles.
-      remapped.visualGroupId = `tile:${unit.id}:${evidence.visualGroupId}`;
-    }
-  }
-  return remapped;
-}
-
-function canonicalVisualGroupKey(
-  shape: NonNullable<BubbleOwnershipEvidence["shape"]>,
-  box: Rect,
-  fingerprint: string,
-): string {
-  const quantum = 4;
-  const edges = [
-    box.x,
-    box.y,
-    box.x + box.width,
-    box.y + box.height,
-  ].map((value) => Math.round(value / quantum));
-  return `visual:${shape}:${fingerprint}:${edges.join(":")}`;
-}
-
-function remapRectToParent(
-  box: Rect,
-  unit: RecognitionUnit,
-  parentWidth: number,
-  parentHeight: number,
-): Rect {
-  const left = clamp(unit.crop.x + box.x / unit.scaleX, 0, parentWidth);
-  const top = clamp(unit.crop.y + box.y / unit.scaleY, 0, parentHeight);
-  const right = clamp(unit.crop.x + (box.x + box.width) / unit.scaleX, 0, parentWidth);
-  const bottom = clamp(unit.crop.y + (box.y + box.height) / unit.scaleY, 0, parentHeight);
-  return {
-    x: left,
-    y: top,
-    width: Math.max(0, right - left),
-    height: Math.max(0, bottom - top),
-  };
-}
-
-function remapRegionBetweenUnits(
-  region: GenericOcrRegion,
-  fromUnit: RecognitionUnit,
-  toUnit: RecognitionUnit,
-): GenericOcrRegion {
-  const naturalLeft = fromUnit.crop.x + region.box.x / fromUnit.scaleX;
-  const naturalTop = fromUnit.crop.y + region.box.y / fromUnit.scaleY;
-  const naturalRight = fromUnit.crop.x + (region.box.x + region.box.width) / fromUnit.scaleX;
-  const naturalBottom = fromUnit.crop.y + (region.box.y + region.box.height) / fromUnit.scaleY;
-  const left = clamp((naturalLeft - toUnit.crop.x) * toUnit.scaleX, 0, toUnit.pixelSize.width);
-  const top = clamp((naturalTop - toUnit.crop.y) * toUnit.scaleY, 0, toUnit.pixelSize.height);
-  const right = clamp((naturalRight - toUnit.crop.x) * toUnit.scaleX, 0, toUnit.pixelSize.width);
-  const bottom = clamp((naturalBottom - toUnit.crop.y) * toUnit.scaleY, 0, toUnit.pixelSize.height);
-  return {
-    ...region,
-    box: {
-      x: left,
-      y: top,
-      width: Math.max(0, right - left),
-      height: Math.max(0, bottom - top),
-    },
-  };
-}
-
-function clamp(value: number, minimum: number, maximum: number): number {
-  return Math.min(maximum, Math.max(minimum, value));
-}
-
-function createOcrTileError(cause: unknown, tileIndex: number, tileCount: number, unit: RecognitionUnit): Error {
-  const { crop } = unit;
-  const safeCause = createSafeOcrCause(cause);
-  const message = `OCR tile ${tileIndex}/${tileCount} (x=${formatDiagnosticNumber(crop.x)},y=${formatDiagnosticNumber(crop.y)},w=${formatDiagnosticNumber(crop.width)},h=${formatDiagnosticNumber(crop.height)}) failed: ${safeCause.message}`;
-  return new Error(message, { cause: safeCause });
-}
-
-function createOcrRescueError(cause: unknown, variant: OcrPreprocessVariantId, unit: RecognitionUnit): Error {
-  const { crop } = unit;
-  const safeCause = createSafeOcrCause(cause);
-  const message = `OCR rescue (${variant}, unit x=${formatDiagnosticNumber(crop.x)},y=${formatDiagnosticNumber(crop.y)},w=${formatDiagnosticNumber(crop.width)},h=${formatDiagnosticNumber(crop.height)}) failed: ${safeCause.message}`;
-  return new Error(message, { cause: safeCause });
-}
-
-function createSafeOcrCause(cause: unknown): Error {
-  const safeCause = new Error(safeErrorMessage(cause));
-  safeCause.name = "SafeOcrProviderError";
-  return safeCause;
-}
-
-function safeErrorMessage(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error);
-  return message
-    .replace(/\bimage[_-]?data\b\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s]+)/gi, "[redacted-image]")
-    .replace(/data:[^\s"'<>)]*/gi, "[redacted-image]")
-    .replace(/https?:\/\/[^\s"'<>)]*/gi, "[redacted-url]")
-    .replace(
-      /\b(authorization|proxy-authorization)\b\s*[:=]\s*(?:bearer\s+)?(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi,
-      "$1=[redacted]",
-    )
-    .replace(/\bbearer\s+(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi, "Bearer [redacted]")
-    .replace(
-      /["']?\b(api[_-]?key|access[_-]?token|refresh[_-]?token|token|client[_-]?secret|secret)\b["']?\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi,
-      "$1=[redacted]",
-    )
-    .slice(0, 500);
-}
-
-function formatDiagnosticNumber(value: number): string {
-  return String(normalizeCacheNumber(value));
-}
 
 function buildTranslationItems(regions: GenericOcrRegion[]): TextTranslationItem[] {
   return regions.map((region, index) => ({
@@ -675,73 +220,63 @@ function isSingleNameCandidate(term: string): boolean {
   return /^[A-Z][a-z][A-Za-z'\-]{2,}$/.test(term) && !COMMON_CAPITALIZED_WORDS.has(term);
 }
 
-export function buildOcrCacheKey(
-  profile: string,
-  input: {
-    imageHash: string;
-    width: number;
-    height: number;
-    sourceLanguage: string;
-    recognitionUnit?: RecognitionUnit;
-    ocrVariant?: OcrPreprocessVariantId;
-  },
-): string {
-  const base = {
+export function buildOcrCacheKey(profile: string, input: { imageHash: string; width: number; height: number; sourceLanguage: string }): string {
+  return JSON.stringify({
     v: 1,
     ocrProfile: profile.split("+openai-compatible:")[0],
     imageHash: input.imageHash,
     width: input.width,
     height: input.height,
     sourceLanguage: input.sourceLanguage,
-  };
-  if (!input.recognitionUnit && !input.ocrVariant) return JSON.stringify(base);
-  const unit = input.recognitionUnit;
-  if (!unit) {
-    return JSON.stringify({
-      ...base,
-      v: 3,
-      ocrVariant: input.ocrVariant,
-    });
-  }
-  if (!input.ocrVariant || input.ocrVariant === "original") {
-    return JSON.stringify({
-      ...base,
-      v: 2,
-      cropX: normalizeCacheNumber(unit.crop.x),
-      cropY: normalizeCacheNumber(unit.crop.y),
-      cropWidth: normalizeCacheNumber(unit.crop.width),
-      cropHeight: normalizeCacheNumber(unit.crop.height),
-      pixelWidth: normalizeCacheNumber(unit.pixelSize.width),
-      pixelHeight: normalizeCacheNumber(unit.pixelSize.height),
-      scaleX: normalizeCacheNumber(unit.scaleX),
-      scaleY: normalizeCacheNumber(unit.scaleY),
-      preprocessingVersion: unit.preprocessingVersion,
-    });
-  }
-  return JSON.stringify({
-    ...base,
-    v: 3,
-    cropX: normalizeCacheNumber(unit.crop.x),
-    cropY: normalizeCacheNumber(unit.crop.y),
-    cropWidth: normalizeCacheNumber(unit.crop.width),
-    cropHeight: normalizeCacheNumber(unit.crop.height),
-    pixelWidth: normalizeCacheNumber(unit.pixelSize.width),
-    pixelHeight: normalizeCacheNumber(unit.pixelSize.height),
-    scaleX: normalizeCacheNumber(unit.scaleX),
-    scaleY: normalizeCacheNumber(unit.scaleY),
-    preprocessingVersion: unit.preprocessingVersion,
-    ocrVariant: input.ocrVariant,
   });
 }
 
-function normalizeCacheNumber(value: number): number {
-  if (!Number.isFinite(value)) throw new Error("OCR cache key geometry must contain only finite numbers.");
-  const normalized = Math.round(value * 1_000_000) / 1_000_000;
-  return Object.is(normalized, -0) ? 0 : normalized;
+export function groupOcrRegionsIntoTextBlocks(regions: GenericOcrRegion[]): GenericOcrRegion[] {
+  const candidates = dedupeOcrRegions(regions)
+    .filter((region) => region.sourceText.trim().length > 0 && region.box.width > 1 && region.box.height > 1)
+    .sort(compareOcrReadingOrder);
+  const groups: GenericOcrRegion[][] = [];
+  for (const region of candidates) {
+    const lastGroup = groups.at(-1);
+    if (lastGroup && shouldJoinGroup(lastGroup, region)) lastGroup.push(region);
+    else groups.push([region]);
+  }
+  return groups.map((group) => group.length === 1 ? group[0]! : mergeGroup(group));
 }
 
-export function groupOcrRegionsIntoTextBlocks(regions: GenericOcrRegion[]): GenericOcrRegion[] {
-  return reconstructBubbles(regions).map(bubbleToOcrRegion);
+function shouldJoinGroup(group: GenericOcrRegion[], next: GenericOcrRegion): boolean {
+  const previous = group.at(-1)!;
+  if (previous.orientation !== next.orientation) return false;
+  if (previous.kind !== next.kind) return false;
+  if (previous.kind === "sfx" || next.kind === "sfx") return false;
+  if (next.orientation === "vertical") return false;
+  const union = unionRect(group.map((region) => region.box));
+  const averageHeight = (previous.box.height + next.box.height) / 2;
+  if (verticalOverlap(union, next.box) >= Math.min(union.height, next.box.height) * 0.55) {
+    const horizontalGap = Math.max(0, next.box.x - (union.x + union.width));
+    const maxSameLineGap = Math.max(80, averageHeight * 3.5);
+    if (next.kind === "narration" && horizontalGap <= maxSameLineGap) return true;
+    if (next.kind === "dialogue" && horizontalGap <= Math.max(60, averageHeight * 2.4)) return true;
+  }
+  const previousBottom = previous.box.y + previous.box.height;
+  const verticalGap = next.box.y - previousBottom;
+  const groupCenterX = union.x + union.width / 2;
+  const nextCenterX = next.box.x + next.box.width / 2;
+  const centerDistance = Math.abs(groupCenterX - nextCenterX);
+  const overlap = horizontalOverlap(union, next.box);
+  const merged = unionRect([...group.map((region) => region.box), next.box]);
+  const averageLineLength = Math.max(1, averageHeight);
+  const looksLikeSameLargeBubble =
+    next.kind === "dialogue"
+    && verticalGap >= -averageHeight * 0.45
+    && verticalGap <= Math.max(72, averageHeight * 1.75)
+    && centerDistance <= Math.max(merged.width * 0.48, averageHeight * 3.2)
+    && merged.height <= Math.max(360, averageLineLength * 6.2)
+    && merged.width <= Math.max(900, averageHeight * 12);
+  if (looksLikeSameLargeBubble) return true;
+  if (verticalGap < -averageHeight * 0.35 || verticalGap > Math.max(28, averageHeight * 0.9)) return false;
+  const maxReasonableDistance = Math.max(union.width, next.box.width) * 0.45;
+  return centerDistance <= maxReasonableDistance || overlap >= Math.min(union.width, next.box.width) * 0.25;
 }
 
 function classifyRegionKind(region: GenericOcrRegion, imageWidth: number, imageHeight: number): GenericOcrRegion {
@@ -761,13 +296,62 @@ function looksLikeActionLettering(region: GenericOcrRegion, imageWidth: number, 
   return largeActionBox && uppercaseRatio >= 0.78 && lines.length <= 4 && averageLineLength <= 9;
 }
 
-function bubbleToOcrRegion(bubble: ReturnType<typeof reconstructBubbles>[number]): GenericOcrRegion {
+function mergeGroup(group: GenericOcrRegion[]): GenericOcrRegion {
+  const union = unionRect(group.map((region) => region.box));
+  const padX = Math.max(8, Math.round(union.width * 0.03));
+  const padY = Math.max(8, Math.round(union.height * 0.05));
   return {
-    id: bubble.id,
-    box: bubble.box,
-    sourceText: bubble.sourceText,
-    confidence: bubble.confidence,
-    orientation: bubble.orientation,
-    kind: bubble.kind,
+    id: `block-${group[0]!.id}`,
+    box: { x: union.x - padX, y: union.y - padY, width: union.width + padX * 2, height: union.height + padY * 2 },
+    sourceText: group.map((region) => region.sourceText.trim()).join("\n"),
+    confidence: group.reduce((sum, region) => sum + region.confidence, 0) / group.length,
+    orientation: group[0]!.orientation,
+    kind: group[0]!.kind,
   };
+}
+
+function unionRect(rects: Rect[]): Rect {
+  const left = Math.min(...rects.map((rect) => rect.x));
+  const top = Math.min(...rects.map((rect) => rect.y));
+  const right = Math.max(...rects.map((rect) => rect.x + rect.width));
+  const bottom = Math.max(...rects.map((rect) => rect.y + rect.height));
+  return { x: left, y: top, width: right - left, height: bottom - top };
+}
+
+function horizontalOverlap(a: Rect, b: Rect): number {
+  return Math.max(0, Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x));
+}
+
+function verticalOverlap(a: Rect, b: Rect): number {
+  return Math.max(0, Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y));
+}
+
+function dedupeOcrRegions(regions: GenericOcrRegion[]): GenericOcrRegion[] {
+  const sorted = [...regions].sort((a, b) => b.confidence - a.confidence);
+  const kept: GenericOcrRegion[] = [];
+  for (const region of sorted) {
+    const duplicate = kept.some((existing) => normalizeText(existing.sourceText) === normalizeText(region.sourceText) && rectIoU(existing.box, region.box) > 0.65);
+    if (!duplicate) kept.push(region);
+  }
+  return kept.sort(compareOcrReadingOrder);
+}
+
+function compareOcrReadingOrder(a: GenericOcrRegion, b: GenericOcrRegion): number {
+  const sameHorizontalBand = Math.abs(a.box.y - b.box.y) <= Math.max(a.box.height, b.box.height) * 0.35;
+  if (sameHorizontalBand) return a.box.x - b.box.x;
+  return a.box.y - b.box.y || a.box.x - b.box.x;
+}
+
+function normalizeText(text: string): string {
+  return text.replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+function rectIoU(a: Rect, b: Rect): number {
+  const left = Math.max(a.x, b.x);
+  const top = Math.max(a.y, b.y);
+  const right = Math.min(a.x + a.width, b.x + b.width);
+  const bottom = Math.min(a.y + a.height, b.y + b.height);
+  const intersection = Math.max(0, right - left) * Math.max(0, bottom - top);
+  const union = a.width * a.height + b.width * b.height - intersection;
+  return union > 0 ? intersection / union : 0;
 }

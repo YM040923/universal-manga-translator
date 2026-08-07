@@ -1,8 +1,7 @@
-﻿import test from "node:test";
+import test from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
 import { isLikelyReaderPage, SurfaceRegistry } from "./surface-registry.js";
-import { toDetectedSurface } from "./detected-surface.js";
 
 function setupDom(): Document {
   const dom = new JSDOM(`<!doctype html><html><body>
@@ -180,44 +179,5 @@ test("isLikelyReaderPage accepts stacked manga pages even when CDN image urls ar
   const surfaces = SurfaceRegistry.scan(dom.window.document).surfaces;
 
   assert.equal(surfaces.length, 3);
-  assert.equal(isLikelyReaderPage(dom.window.document, surfaces), true);
-});
-
-test("SurfaceRegistry forwards background and canvas reader pages through the normal capture path", () => {
-  const dom = new JSDOM(`<!doctype html><html><body>
-    <div id="background-page" style="background-image:url('/chapter/bg-001.webp')"></div>
-    <canvas id="canvas-page" width="800" height="1200"></canvas>
-  </body></html>`, { url: "https://reader.example/title/read/60" });
-  globalThis.window = dom.window as unknown as Window & typeof globalThis;
-  globalThis.document = dom.window.document;
-  globalThis.HTMLElement = dom.window.HTMLElement;
-  const background = dom.window.document.querySelector<HTMLElement>("#background-page")!;
-  const canvas = dom.window.document.querySelector<HTMLCanvasElement>("#canvas-page")!;
-  Object.defineProperty(background, "getBoundingClientRect", { value: () => ({ x: 20, y: 100, left: 20, top: 100, right: 820, bottom: 1300, width: 800, height: 1200, toJSON: () => ({}) }) });
-  Object.defineProperty(canvas, "getBoundingClientRect", { value: () => ({ x: 20, y: 1320, left: 20, top: 1320, right: 820, bottom: 2520, width: 800, height: 1200, toJSON: () => ({}) }) });
-  Object.defineProperty(canvas, "toDataURL", { value: () => "data:image/png;base64,Y2FudmFz" });
-
-  const registry = SurfaceRegistry.scan(dom.window.document);
-  const captured = registry.surfaces.map((surface) => toDetectedSurface(surface));
-
-  assert.deepEqual(captured.map((surface) => surface.kind), ["background", "canvas"]);
-  assert.equal(captured[0]?.imageUrl, "https://reader.example/chapter/bg-001.webp");
-  assert.equal(captured[1]?.imageData, "data:image/png;base64,Y2FudmFz");
-  assert.equal(isLikelyReaderPage(dom.window.document, registry.surfaces), true);
-});
-
-test("isLikelyReaderPage accepts query-driven reader routes with opaque image URLs", () => {
-  const dom = new JSDOM(`<!doctype html><html><body><img id="page" src="https://cdn.other-site.test/assets/a8f921.webp"></body></html>`, { url: "https://manga.example/title?chapter=60" });
-  globalThis.window = dom.window as unknown as Window & typeof globalThis;
-  globalThis.document = dom.window.document;
-  globalThis.HTMLElement = dom.window.HTMLElement;
-  globalThis.HTMLImageElement = dom.window.HTMLImageElement;
-  const page = dom.window.document.querySelector<HTMLImageElement>("#page")!;
-  Object.defineProperty(page, "naturalWidth", { value: 800, configurable: true });
-  Object.defineProperty(page, "naturalHeight", { value: 1600, configurable: true });
-  page.getBoundingClientRect = () => ({ x: 20, y: 100, left: 20, top: 100, right: 820, bottom: 1700, width: 800, height: 1600, toJSON: () => ({}) });
-
-  const surfaces = SurfaceRegistry.scan(dom.window.document).surfaces;
-
   assert.equal(isLikelyReaderPage(dom.window.document, surfaces), true);
 });

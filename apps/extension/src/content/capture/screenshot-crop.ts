@@ -1,6 +1,5 @@
 import type { Rect, Size } from "@umt/shared/types";
 import type { DetectedSurface } from "../detector/surface-detector.js";
-import { createRecognitionCapture, type RecognitionCapture } from "./recognition-capture.js";
 
 export interface ScreenshotCropRect {
   x: number;
@@ -21,12 +20,6 @@ export interface CreateScreenshotSurfaceInput {
   element: HTMLElement;
   cropper?: ScreenshotCropper;
   upscale?: number;
-  devicePixelRatio?: number;
-}
-
-export interface ScreenshotSurfaceCapture {
-  surface: DetectedSurface;
-  capture: RecognitionCapture;
 }
 
 export function clampCropRectToImage(viewportRect: Rect, viewportSize: Size, screenshotSize: Size): ScreenshotCropRect {
@@ -44,43 +37,20 @@ export function clampCropRectToImage(viewportRect: Rect, viewportSize: Size, scr
 }
 
 export async function createScreenshotSurface(input: CreateScreenshotSurfaceInput): Promise<DetectedSurface> {
-  return (await createScreenshotSurfaceCapture(input)).surface;
-}
-
-export async function createScreenshotSurfaceCapture(input: CreateScreenshotSurfaceInput): Promise<ScreenshotSurfaceCapture> {
   const baseCrop = clampCropRectToImage(input.viewportRect, input.viewportSize, input.screenshotSize);
   if (baseCrop.width < 2 || baseCrop.height < 2) throw new Error("Screenshot crop is outside the visible screenshot");
   const upscale = normalizeUpscale(input.upscale);
   const crop = upscale > 1 ? { ...baseCrop, upscale } : baseCrop;
   const cropper = input.cropper ?? cropScreenshotDataUrl;
   const imageData = await cropper(input.screenshotDataUrl, crop);
-  const pixelSize = { width: crop.width * (crop.upscale ?? 1), height: crop.height * (crop.upscale ?? 1) };
-  const surface: DetectedSurface = {
+  return {
     surfaceId: input.surfaceId,
     kind: "screenshot",
     element: input.element,
     imageData,
     rect: input.viewportRect,
-    naturalSize: pixelSize,
+    naturalSize: { width: crop.width * (crop.upscale ?? 1), height: crop.height * (crop.upscale ?? 1) },
     score: 999,
-  };
-  const scaleX = input.screenshotSize.width / input.viewportSize.width;
-  const scaleY = input.screenshotSize.height / input.viewportSize.height;
-  return {
-    surface,
-    capture: createRecognitionCapture({
-      parentSurfaceId: input.surfaceId,
-      imageData,
-      naturalSize: input.screenshotSize,
-      pixelSize,
-      crop: baseCrop,
-      priority: "p0",
-      reason: "manual-selection",
-      captureSource: "manual-selection",
-      devicePixelRatio: input.devicePixelRatio ?? readDevicePixelRatio(),
-      viewportScaleX: scaleX,
-      viewportScaleY: scaleY,
-    }),
   };
 }
 
@@ -115,8 +85,4 @@ function loadImage(dataUrl: string): Promise<HTMLImageElement> {
 
 function normalizeUpscale(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) && value > 1 ? Math.min(4, Math.max(1, Math.round(value))) : 1;
-}
-
-function readDevicePixelRatio(): number {
-  return typeof globalThis.devicePixelRatio === "number" ? globalThis.devicePixelRatio : 1;
 }

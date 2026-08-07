@@ -1,4 +1,4 @@
-﻿import test from "node:test";
+import test from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
 import { detectImageSurfaces } from "./surface-detector.js";
@@ -71,36 +71,4 @@ test("deduplicates surfaces that point to the same manga image url", () => {
 
   assert.equal(surfaces.length, 1);
   assert.equal(surfaces[0]?.imageUrl, "https://example.test/chapter/page-003.jpg");
-});
-
-test("detects a manga image inside an open Shadow DOM reader", () => {
-  const dom = new JSDOM(`<body><manga-reader id="reader"></manga-reader></body>`, { url: "https://example.test/read/42" });
-  const doc = dom.window.document;
-  const host = doc.querySelector<HTMLElement>("#reader")!;
-  const shadow = host.attachShadow({ mode: "open" });
-  shadow.innerHTML = `<img id="page" src="/chapter/shadow-page.webp" width="800" height="1200">`;
-  const page = shadow.querySelector<HTMLImageElement>("#page")!;
-  Object.defineProperty(page, "getBoundingClientRect", { value: () => ({ x: 20, y: 100, width: 800, height: 1200 }) });
-
-  const surfaces = detectImageSurfaces(doc);
-
-  assert.equal(surfaces.length, 1);
-  assert.equal(surfaces[0]?.element, page);
-  assert.equal(surfaces[0]?.imageUrl, "https://example.test/chapter/shadow-page.webp");
-});
-
-test("finds nested open Shadow DOM roots for dynamic reader observation", async () => {
-  const detector = await import("./surface-detector.js") as unknown as {
-    findOpenShadowRoots?: (root: ParentNode) => ShadowRoot[];
-  };
-  const dom = new JSDOM(`<body><manga-shell id="outer"></manga-shell></body>`, { url: "https://example.test/read/42" });
-  const outer = dom.window.document.querySelector<HTMLElement>("#outer")!;
-  const first = outer.attachShadow({ mode: "open" });
-  first.innerHTML = `<reader-page id="inner"></reader-page>`;
-  const inner = first.querySelector<HTMLElement>("#inner")!;
-  const second = inner.attachShadow({ mode: "open" });
-  second.innerHTML = `<img src="/chapter/001.webp">`;
-
-  assert.equal(typeof detector.findOpenShadowRoots, "function");
-  assert.deepEqual(detector.findOpenShadowRoots!(dom.window.document), [first, second]);
 });

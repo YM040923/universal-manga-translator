@@ -1,8 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="300" height="290" viewBox="0 0 300 290">
-  <rect width="300" height="290" fill="#f1e8dc"/>
-  <ellipse cx="173" cy="145" rx="50" ry="105" fill="#fff" stroke="#111827" stroke-width="4"/>
-  <ellipse cx="83" cy="145" rx="34" ry="100" fill="#fff" stroke="#111827" stroke-width="4"/>
-  <text x="188" y="92" text-anchor="middle" font-family="serif" font-size="27">右</text><text x="188" y="130" text-anchor="middle" font-family="serif" font-size="27">列</text>
-  <text x="152" y="92" text-anchor="middle" font-family="serif" font-size="27">左</text><text x="152" y="130" text-anchor="middle" font-family="serif" font-size="27">列</text>
-  <text x="83" y="98" text-anchor="middle" font-family="serif" font-size="25">旁</text><text x="83" y="136" text-anchor="middle" font-family="serif" font-size="25">白</text>
-</svg>

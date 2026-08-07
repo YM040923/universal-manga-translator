@@ -1,21 +1,10 @@
 ﻿import test from "node:test";
 import assert from "node:assert/strict";
-import {
-  applyOcrPreprocessVariantToUnit,
-  planRecognitionUnits,
-  type CoreOcrPreprocessLoader,
-} from "@umt/core";
 import type { SurfaceTask } from "@umt/shared/types";
-import {
-  DIRECT_OCR_MAX_TILE_HEIGHT,
-  DIRECT_OCR_TILE_OVERLAP_RATIO,
-  DirectClient,
-} from "./direct-client.js";
+import { DirectClient } from "./direct-client.js";
 import type { ExtensionSettings } from "../../settings/settings.js";
 import { DEFAULT_SETTINGS } from "../../settings/settings.js";
 import { DirectOcrCache } from "../cache/direct-ocr-cache.js";
-import type { BrowserBubbleEvidenceExtractor } from "../capture/bubble-evidence-extractor.js";
-import type { RecognitionTileCropper } from "../capture/recognition-tile-cropper.js";
 
 function task(overrides: Partial<SurfaceTask> = {}): SurfaceTask {
   return {
@@ -58,32 +47,6 @@ function settingsWithCache(fetchImpl: typeof fetch, cache: DirectOcrCache): Exte
   return { ...settings(fetchImpl), __testOcrCache: cache } as ExtensionSettings & { __testFetch: typeof fetch; __testOcrCache: DirectOcrCache };
 }
 
-function settingsWithTileCropper(fetchImpl: typeof fetch, cropper: RecognitionTileCropper, maxOcrTilesPerImage = DEFAULT_SETTINGS.directOcr.maxOcrTilesPerImage, maxAutoOcrPages = DEFAULT_SETTINGS.directOcr.maxAutoOcrPages): ExtensionSettings {
-  const base = settings(fetchImpl);
-  return {
-    ...base,
-    directOcr: { ...base.directOcr, maxAutoOcrPages, maxOcrTilesPerImage },
-    __testRecognitionTileCropper: cropper,
-  } as ExtensionSettings;
-}
-
-function translatorResponse(init: RequestInit | undefined, translatedText: string): Response {
-  const body = JSON.parse(String(init?.body));
-  const prompt = String(body.messages[0].content);
-  const payload = JSON.parse(prompt.slice(prompt.lastIndexOf("\n") + 1)) as {
-    items: Array<{ id: string }>;
-  };
-  return new Response(JSON.stringify({
-    choices: [{
-      message: {
-        content: JSON.stringify({
-          items: payload.items.map((item) => ({ id: item.id, translatedText })),
-        }),
-      },
-    }],
-  }), { status: 200, headers: { "content-type": "application/json" } });
-}
-
 test("DirectClient submits imageData through OCR and translator", async () => {
   const calls: string[] = [];
   const fetchImpl = (async (url, init) => {
@@ -95,7 +58,7 @@ test("DirectClient submits imageData through OCR and translator", async () => {
     }
     const auth = new Headers(init?.headers).get("authorization");
     assert.equal(auth, "Bearer llm-key");
-    return translatorResponse(init, "你好");
+    return new Response(JSON.stringify({ choices: [{ message: { content: '{"items":[{"id":"network-ocr-1","translatedText":"你好"}]}' } }] }), { status: 200, headers: { "content-type": "application/json" } });
   }) as typeof fetch;
   const client = new DirectClient(settings(fetchImpl));
 
@@ -107,52 +70,6 @@ test("DirectClient submits imageData through OCR and translator", async () => {
   assert.equal(response.result?.regions[0]?.translatedText, "你好");
   assert.equal(response.result?.regions[0]?.box.x, 10);
   assert.deepEqual(calls, ["https://ocr.example/ocr", "https://api.example/v1/chat/completions"]);
-});
-
-test("DirectClient injects bubble evidence and sends translator items by logical bubble count", async () => {
-  let extractorCalls = 0;
-  let translatorItems = 0;
-  const extractor: BrowserBubbleEvidenceExtractor = async (input) => {
-    extractorCalls += 1;
-    assert.equal(input.imageBytes.byteLength > 0, true);
-    assert.deepEqual(input.observations.map((observation) => observation.id), ["network-ocr-1", "network-ocr-2"]);
-    return input.observations.map((observation) => ({
-      observationId: observation.id,
-      visualGroupId: "one-ellipse",
-      componentBox: { x: 5, y: 5, width: 120, height: 145 },
-      shape: "ellipse",
-      confidence: 0.94,
-      touchesBoundary: false,
-    }));
-  };
-  const fetchImpl = (async (url, init) => {
-    if (String(url).includes("ocr")) {
-      return new Response(JSON.stringify({
-        words_result: [
-          { words: "FIRST", location: { left: 20, top: 25, width: 80, height: 20 } },
-          { words: "SECOND", location: { left: 18, top: 105, width: 88, height: 20 } },
-        ],
-      }), { status: 200, headers: { "content-type": "application/json" } });
-    }
-    const body = JSON.parse(String(init?.body));
-    const prompt = String(body.messages[0].content);
-    const payload = JSON.parse(prompt.slice(prompt.lastIndexOf("\n") + 1)) as { items: Array<{ id: string; text: string }> };
-    translatorItems = payload.items.length;
-    return new Response(JSON.stringify({
-      choices: [{ message: { content: JSON.stringify({ items: payload.items.map((item) => ({ id: item.id, translatedText: item.text })) }) } }],
-    }), { status: 200, headers: { "content-type": "application/json" } });
-  }) as typeof fetch;
-  const client = new DirectClient({
-    ...settings(fetchImpl),
-    __testBubbleEvidenceExtractor: extractor,
-  } as ReturnType<typeof settings> & { __testBubbleEvidenceExtractor: BrowserBubbleEvidenceExtractor });
-
-  const response = await client.submit(task({ naturalSize: { width: 140, height: 160 }, renderSize: { width: 140, height: 160 } }));
-
-  assert.equal(response.ok, true);
-  assert.equal(extractorCalls, 1);
-  assert.equal(translatorItems, 1);
-  assert.equal(response.ok ? response.result?.regions.length : 0, 1);
 });
 
 test("DirectClient sends user glossary to translator and includes glossary version in profile", async () => {
@@ -262,27 +179,27 @@ test("DirectClient clearCache clears direct OCR cache entries", async () => {
   assert.equal(response.ok && response.deleted, 1);
 });
 
+
 test("DirectClient persists manual overrides and applies them to later cached results", async () => {
   let ocrCalls = 0;
   let translatorCalls = 0;
   const storage = fakeStorage();
   const cache = new DirectOcrCache(storage);
-  const fetchImpl = (async (url, init) => {
+  const fetchImpl = (async (url) => {
     if (String(url).includes("ocr")) {
       ocrCalls += 1;
       return new Response(JSON.stringify({ words_result: [{ words: "HELLO", location: { left: 10, top: 20, width: 60, height: 20 } }] }), { status: 200, headers: { "content-type": "application/json" } });
     }
     translatorCalls += 1;
-    return translatorResponse(init, "原始翻译");
+    return new Response(JSON.stringify({ choices: [{ message: { content: '{"items":[{"id":"network-ocr-1","translatedText":"原始翻译"}]}' } }] }), { status: 200, headers: { "content-type": "application/json" } });
   }) as typeof fetch;
 
   const first = new DirectClient({ ...settingsWithCache(fetchImpl, cache), __testManualOverrideStorage: storage } as ExtensionSettings & { __testFetch: typeof fetch; __testOcrCache: DirectOcrCache; __testManualOverrideStorage: ReturnType<typeof fakeStorage> });
   const firstResponse = await first.submit(task());
   assert.equal(firstResponse.ok && firstResponse.result?.regions[0]?.translatedText, "原始翻译");
   const imageHash = firstResponse.ok ? firstResponse.result!.imageHash : "";
-  const regionId = firstResponse.ok ? firstResponse.result!.regions[0]!.id : "";
 
-  await first.saveManualOverride({ imageHash, targetLanguage: "zh-CN", regionId, translatedText: "人工修正" });
+  await first.saveManualOverride({ imageHash, targetLanguage: "zh-CN", regionId: "network-ocr-1", translatedText: "人工修正" });
 
   const second = new DirectClient({ ...settingsWithCache(fetchImpl, cache), __testManualOverrideStorage: storage } as ExtensionSettings & { __testFetch: typeof fetch; __testOcrCache: DirectOcrCache; __testManualOverrideStorage: ReturnType<typeof fakeStorage> });
   const secondResponse = await second.submit(task());
@@ -393,7 +310,7 @@ test("DirectClient carries previous chapter translations into later page prompts
     const body = JSON.parse(String(init?.body));
     prompts.push(body.messages[0].content);
     const translatedText = prompts.length === 1 ? "克拉克来了" : "克拉克回来了";
-    return translatorResponse(init, translatedText);
+    return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ items: [{ id: "network-ocr-1", translatedText }] }) } }] }), { status: 200, headers: { "content-type": "application/json" } });
   }) as typeof fetch;
   const client = new DirectClient(settingsWithCache(fetchImpl, cache));
 
@@ -414,7 +331,7 @@ test("DirectClient sends previous page translation when retranslating", async ()
     const body = JSON.parse(String(init?.body));
     prompts.push(body.messages[0].content);
     const translatedText = prompts.length === 1 ? "我会回来的" : "我还会回来";
-    return translatorResponse(init, translatedText);
+    return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ items: [{ id: "network-ocr-1", translatedText }] }) } }] }), { status: 200, headers: { "content-type": "application/json" } });
   }) as typeof fetch;
   const client = new DirectClient(settingsWithCache(fetchImpl, cache));
 
@@ -473,6 +390,7 @@ test("DirectClient carries remembered term candidates into later prompts", async
   assert.match(prompts[1] ?? "", /Clark/);
 });
 
+
 test("DirectClient uses saved manual override as previous translation guidance on retranslate", async () => {
   const prompts: string[] = [];
   const cache = new DirectOcrCache(fakeStorage());
@@ -483,18 +401,13 @@ test("DirectClient uses saved manual override as previous translation guidance o
     const body = JSON.parse(String(init?.body));
     prompts.push(body.messages[0].content);
     const translatedText = prompts.length === 1 ? "我将返回" : "我会回来的";
-    return translatorResponse(init, translatedText);
+    return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ items: [{ id: "network-ocr-1", translatedText }] }) } }] }), { status: 200, headers: { "content-type": "application/json" } });
   }) as typeof fetch;
   const client = new DirectClient(settingsWithCache(fetchImpl, cache));
 
   const first = await client.submit(task());
   assert.equal(first.ok, true);
-  await client.saveManualOverride({
-    imageHash: first.ok ? first.result!.imageHash : "",
-    targetLanguage: "zh-CN",
-    regionId: first.ok ? first.result!.regions[0]!.id : "",
-    translatedText: "我一定会回来的",
-  });
+  await client.saveManualOverride({ imageHash: first.ok ? first.result!.imageHash : "", targetLanguage: "zh-CN", regionId: "network-ocr-1", translatedText: "我一定会回来的" });
   await client.retranslate(task());
 
   assert.match(prompts[1] ?? "", /Previous translations/i);
@@ -511,624 +424,15 @@ test("DirectClient excludes deleted manual overrides from retranslate guidance",
     }
     const body = JSON.parse(String(init?.body));
     prompts.push(body.messages[0].content);
-    return translatorResponse(init, "不要翻译这个");
+    return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ items: [{ id: "network-ocr-1", translatedText: "不要翻译这个" }] }) } }] }), { status: 200, headers: { "content-type": "application/json" } });
   }) as typeof fetch;
   const client = new DirectClient(settingsWithCache(fetchImpl, cache));
 
   const first = await client.submit(task());
   assert.equal(first.ok, true);
-  await client.saveManualOverride({
-    imageHash: first.ok ? first.result!.imageHash : "",
-    targetLanguage: "zh-CN",
-    regionId: first.ok ? first.result!.regions[0]!.id : "",
-    translatedText: "",
-  });
+  await client.saveManualOverride({ imageHash: first.ok ? first.result!.imageHash : "", targetLanguage: "zh-CN", regionId: "network-ocr-1", translatedText: "" });
   await client.retranslate(task());
 
   assert.doesNotMatch(prompts[1] ?? "", /Previous translations/);
   assert.doesNotMatch(prompts[1] ?? "", /不要翻译这个/);
 });
-
-test("DirectClient sends tall images through multiple ordered OCR tiles and one translation", async () => {
-  let ocrCalls = 0;
-  let translatorCalls = 0;
-  const croppedYs: number[] = [];
-  const cropper: RecognitionTileCropper = async (_imageData, units, consume) => {
-    for (const [index, unit] of units.entries()) {
-      croppedYs.push(unit.crop.y);
-      await consume({ unit, imageBytes: new Uint8Array([index + 1]), mimeType: "image/png" }, index, units.length);
-    }
-  };
-  const fetchImpl = (async (url) => {
-    if (String(url).includes("ocr")) {
-      ocrCalls += 1;
-      return new Response(JSON.stringify({
-        words_result: [{ words: `TILE ${ocrCalls}`, location: { left: 10, top: 20, width: 80, height: 20 } }],
-      }), { status: 200, headers: { "content-type": "application/json" } });
-    }
-    translatorCalls += 1;
-    return new Response(JSON.stringify({ choices: [{ message: { content: "" } }] }), { status: 200, headers: { "content-type": "application/json" } });
-  }) as typeof fetch;
-  const client = new DirectClient(settingsWithTileCropper(fetchImpl, cropper));
-  const signedSurfaceId = "surface:https://cdn.example/page.jpg?token=secret-token&X-Amz-Signature=secret-signature";
-
-  const response = await client.submit(task({ surfaceId: signedSurfaceId, naturalSize: { width: 1000, height: 16000 }, renderSize: { width: 1000, height: 16000 } }));
-
-  assert.equal(response.ok, true);
-  assert.equal(ocrCalls > 1, true);
-  assert.equal(translatorCalls, 1);
-  assert.equal(croppedYs[0], 0);
-  assert.deepEqual(croppedYs, [...croppedYs].sort((a, b) => a - b));
-  const diagnostics = await client.recentDiagnostics();
-  assert.equal(diagnostics.ok, true);
-  assert.equal(diagnostics.ok && Number(diagnostics.records[0]?.tileCount) > 1, true);
-  assert.match(String(diagnostics.ok ? diagnostics.records[0]?.imageId : ""), /^image:[a-f0-9]{12}$/);
-  const diagnosticText = JSON.stringify(diagnostics);
-  assert.equal(diagnosticText.includes("imageData"), false);
-  assert.equal(diagnosticText.includes(signedSurfaceId), false);
-  assert.equal(diagnosticText.includes("secret-token"), false);
-  assert.equal(diagnosticText.includes("X-Amz-Signature"), false);
-  assert.equal(diagnosticText.includes("secret-signature"), false);
-});
-
-test("DirectClient rescues automatic non-empty low-confidence OCR and selects the better result", async () => {
-  let ocrCalls = 0;
-  let translatorCalls = 0;
-  const variants: string[] = [];
-  const preprocessLoader: CoreOcrPreprocessLoader = {
-    withVariant: async (source, variant, consume) => {
-      variants.push(variant.id);
-      return consume({
-        imageBytes: new Uint8Array([7]),
-        fileName: `${variant.id}.png`,
-        mimeType: "image/png",
-        recognitionUnit: applyOcrPreprocessVariantToUnit(source.recognitionUnit, variant),
-        ocrVariant: variant.id,
-      });
-    },
-  };
-  const fetchImpl = (async (url) => {
-    if (String(url).includes("ocr")) {
-      ocrCalls += 1;
-      return new Response(JSON.stringify({
-        words_result: [{
-          words: ocrCalls === 1 ? "H3LL?" : "HELLO",
-          score: ocrCalls === 1 ? 0.2 : 0.96,
-          location: { left: 10, top: 20, width: 80, height: 20 },
-        }],
-      }), { status: 200, headers: { "content-type": "application/json" } });
-    }
-    translatorCalls += 1;
-    return new Response(JSON.stringify({
-      choices: [{ message: { content: '{"items":[{"id":"network-ocr-1","translatedText":"你好"}]}' } }],
-    }), { status: 200, headers: { "content-type": "application/json" } });
-  }) as typeof fetch;
-  const base = settings(fetchImpl);
-  const client = new DirectClient({
-    ...base,
-    directOcr: { ...base.directOcr, maxOcrRescueCallsPerImage: 1 },
-    __testOcrPreprocessLoader: preprocessLoader,
-  } as ExtensionSettings & { __testOcrPreprocessLoader: CoreOcrPreprocessLoader });
-
-  const response = await client.submit(task());
-
-  assert.equal(response.ok, true);
-  assert.equal(ocrCalls, 2);
-  assert.equal(translatorCalls, 1);
-  assert.deepEqual(variants, ["grayscale-contrast"]);
-  assert.equal(response.ok ? response.result?.regions[0]?.sourceText : "", "HELLO");
-  const diagnostics = await client.recentDiagnostics();
-  const rescue = diagnostics.ok ? diagnostics.records.find((record) => record.type === "ocr-quality-rescue") : undefined;
-  assert.equal(rescue?.usedBudget, 1);
-  assert.equal(rescue?.remainingBudget, 0);
-  assert.equal(rescue?.variant, "grayscale-contrast");
-  assert.equal(rescue?.selected, "rescue");
-  const diagnosticText = JSON.stringify(rescue);
-  assert.equal(diagnosticText.includes("H3LL?"), false);
-  assert.equal(diagnosticText.includes("HELLO"), false);
-  assert.equal(diagnosticText.includes("data:image"), false);
-  assert.equal(diagnosticText.includes("https://"), false);
-});
-
-test("DirectClient rescues manual empty OCR once but defers automatic empty rescue", async () => {
-  for (const mode of ["manual", "automatic"] as const) {
-    let ocrCalls = 0;
-    let preprocessCalls = 0;
-    const preprocessLoader: CoreOcrPreprocessLoader = {
-      withVariant: async (source, variant, consume) => {
-        preprocessCalls += 1;
-        return consume({
-          imageBytes: new Uint8Array([8]),
-          fileName: `${variant.id}.png`,
-          mimeType: "image/png",
-          recognitionUnit: applyOcrPreprocessVariantToUnit(source.recognitionUnit, variant),
-          ocrVariant: variant.id,
-        });
-      },
-    };
-    const fetchImpl = (async (url) => {
-      if (String(url).includes("ocr")) {
-        ocrCalls += 1;
-        return new Response(JSON.stringify({
-          words_result: ocrCalls === 1 ? [] : [{
-            words: "FOUND",
-            score: 0.95,
-            location: { left: 10, top: 20, width: 80, height: 20 },
-          }],
-        }), { status: 200, headers: { "content-type": "application/json" } });
-      }
-      return new Response(JSON.stringify({ choices: [{ message: { content: "" } }] }), { status: 200, headers: { "content-type": "application/json" } });
-    }) as typeof fetch;
-    const base = settings(fetchImpl);
-    const client = new DirectClient({
-      ...base,
-      directOcr: { ...base.directOcr, maxOcrRescueCallsPerImage: 1 },
-      __testOcrPreprocessLoader: preprocessLoader,
-    } as ExtensionSettings & { __testOcrPreprocessLoader: CoreOcrPreprocessLoader });
-
-    const response = await client.submit(task({ surfaceId: mode === "manual" ? "manual:selection-1" : "surface:auto" }));
-
-    assert.equal(response.ok, true, mode);
-    assert.equal(ocrCalls, mode === "manual" ? 2 : 1, mode);
-    assert.equal(preprocessCalls, mode === "manual" ? 1 : 0, mode);
-  }
-});
-
-test("DirectClient does not infer automatic empty rescue from halftone, face, rivet, or vertical pixel fixtures", async () => {
-  for (const fixture of automaticEmptyPixelFixtures()) {
-    let ocrCalls = 0;
-    let preprocessCalls = 0;
-    let translatorCalls = 0;
-    const preprocessLoader: CoreOcrPreprocessLoader = {
-      withVariant: async () => {
-        preprocessCalls += 1;
-        throw new Error("automatic empty OCR must not preprocess without bubble-aware evidence");
-      },
-    };
-    const fetchImpl = (async (url) => {
-      if (String(url).includes("ocr")) {
-        ocrCalls += 1;
-        return new Response(JSON.stringify({ words_result: [] }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        });
-      }
-      translatorCalls += 1;
-      return new Response(JSON.stringify({ choices: [{ message: { content: "" } }] }), { status: 200, headers: { "content-type": "application/json" } });
-    }) as typeof fetch;
-    const base = settings(fetchImpl);
-    const client = new DirectClient({
-      ...base,
-      directOcr: { ...base.directOcr, maxOcrRescueCallsPerImage: 1 },
-      __testOcrPreprocessLoader: preprocessLoader,
-    } as ExtensionSettings & { __testOcrPreprocessLoader: CoreOcrPreprocessLoader });
-
-    const response = await client.submit(task({
-      surfaceId: `surface:pixel-only:${fixture.name}`,
-      imageData: fixture.imageData,
-      naturalSize: fixture.size,
-      renderSize: fixture.size,
-    }));
-
-    assert.equal(response.ok, true, fixture.name);
-    assert.equal(response.status, "empty", fixture.name);
-    assert.equal(ocrCalls, 1, fixture.name);
-    assert.equal(preprocessCalls, 0, fixture.name);
-    assert.equal(translatorCalls, 0, fixture.name);
-    const diagnostics = await client.recentDiagnostics();
-    assert.equal(
-      diagnostics.ok && diagnostics.records.some((record) => record.type === "ocr-text-evidence"),
-      false,
-      fixture.name,
-    );
-  }
-});
-
-test("DirectClient fails submit and skips translator when rescue OCR returns a provider error", async () => {
-  let ocrCalls = 0;
-  let translatorCalls = 0;
-  const preprocessLoader: CoreOcrPreprocessLoader = {
-    withVariant: async (source, variant, consume) => consume({
-      imageBytes: new Uint8Array([8]),
-      fileName: `${variant.id}.png`,
-      mimeType: "image/png",
-      recognitionUnit: applyOcrPreprocessVariantToUnit(source.recognitionUnit, variant),
-      ocrVariant: variant.id,
-    }),
-  };
-  const fetchImpl = (async (url) => {
-    if (String(url).includes("ocr")) {
-      ocrCalls += 1;
-      if (ocrCalls === 1) {
-        return new Response(JSON.stringify({
-          words_result: [{ words: "H3LL?", score: 0.2, location: { left: 10, top: 20, width: 80, height: 20 } }],
-        }), { status: 200, headers: { "content-type": "application/json" } });
-      }
-      return new Response(JSON.stringify({ message: "quota exhausted" }), { status: 402, headers: { "content-type": "application/json" } });
-    }
-    translatorCalls += 1;
-    return new Response(JSON.stringify({ choices: [{ message: { content: "" } }] }), { status: 200, headers: { "content-type": "application/json" } });
-  }) as typeof fetch;
-  const base = settings(fetchImpl);
-  const client = new DirectClient({
-    ...base,
-    retryCount: 0,
-    directOcr: { ...base.directOcr, maxOcrRescueCallsPerImage: 1 },
-    __testOcrPreprocessLoader: preprocessLoader,
-  } as ExtensionSettings & { __testOcrPreprocessLoader: CoreOcrPreprocessLoader });
-
-  const response = await client.submit(task());
-
-  assert.equal(response.ok, false);
-  assert.match(response.ok ? "" : response.error, /^OCR rescue \(grayscale-contrast, unit x=0,y=0,w=100,h=100\) failed:/);
-  assert.equal(translatorCalls, 0);
-});
-
-test("DirectClient keeps short images on one OCR request without invoking the tile cropper", async () => {
-  let ocrCalls = 0;
-  let translatorCalls = 0;
-  const fetchImpl = (async (url) => {
-    if (String(url).includes("ocr")) {
-      ocrCalls += 1;
-      return new Response(JSON.stringify({ words_result: [{ words: "SHORT", location: { left: 10, top: 20, width: 80, height: 20 } }] }), { status: 200, headers: { "content-type": "application/json" } });
-    }
-    translatorCalls += 1;
-    return new Response(JSON.stringify({ choices: [{ message: { content: "" } }] }), { status: 200, headers: { "content-type": "application/json" } });
-  }) as typeof fetch;
-  const cropper: RecognitionTileCropper = async () => {
-    throw new Error("short images must not be cropped");
-  };
-  const client = new DirectClient(settingsWithTileCropper(fetchImpl, cropper));
-
-  const response = await client.submit(task({ naturalSize: { width: 1000, height: 6000 }, renderSize: { width: 1000, height: 6000 } }));
-
-  assert.equal(response.ok, true);
-  assert.equal(ocrCalls, 1);
-  assert.equal(translatorCalls, 1);
-});
-
-test("DirectClient keeps a tall image whole when the OCR call cap is one", async () => {
-  let ocrCalls = 0;
-  const fetchImpl = (async (url) => {
-    if (String(url).includes("ocr")) {
-      ocrCalls += 1;
-      return new Response(JSON.stringify({ words_result: [{ words: "WHOLE", location: { left: 10, top: 20, width: 80, height: 20 } }] }), { status: 200, headers: { "content-type": "application/json" } });
-    }
-    return new Response(JSON.stringify({ choices: [{ message: { content: "" } }] }), { status: 200, headers: { "content-type": "application/json" } });
-  }) as typeof fetch;
-  const cropper: RecognitionTileCropper = async () => {
-    throw new Error("cap=1 must preserve whole-image OCR");
-  };
-  const client = new DirectClient(settingsWithTileCropper(fetchImpl, cropper, 1));
-
-  const response = await client.submit(task({ naturalSize: { width: 1000, height: 16000 }, renderSize: { width: 1000, height: 16000 } }));
-
-  assert.equal(response.ok, true);
-  assert.equal(ocrCalls, 1);
-});
-
-test("DirectClient uses fixed 4096px tiles only when the independent per-image cap can cover the full image", async () => {
-  const naturalSize = { width: 1000, height: 16000 };
-  const requiredPlan = planRecognitionUnits({
-    surfaceId: "required",
-    naturalSize,
-    maxTileHeight: DIRECT_OCR_MAX_TILE_HEIGHT,
-    overlapRatio: DIRECT_OCR_TILE_OVERLAP_RATIO,
-    reason: "automatic",
-  });
-  const required = requiredPlan.units.length;
-
-  for (const cap of [2, 3, 4, 5, 6]) {
-    let ocrCalls = 0;
-    let cropperCalls = 0;
-    let croppedUnits = requiredPlan.units.slice(0, 0);
-    const cropper: RecognitionTileCropper = async (_imageData, units, consume) => {
-      cropperCalls += 1;
-      croppedUnits = units;
-      for (const [index, unit] of units.entries()) {
-        await consume({ unit, imageBytes: new Uint8Array([index + 1]), mimeType: "image/png" }, index, units.length);
-      }
-    };
-    const fetchImpl = (async (url) => {
-      if (String(url).includes("ocr")) {
-        ocrCalls += 1;
-        return new Response(JSON.stringify({
-          words_result: [{ words: `CAP ${cap}`, location: { left: 10, top: 20, width: 80, height: 20 } }],
-        }), { status: 200, headers: { "content-type": "application/json" } });
-      }
-      return new Response(JSON.stringify({ choices: [{ message: { content: "" } }] }), { status: 200, headers: { "content-type": "application/json" } });
-    }) as typeof fetch;
-    const client = new DirectClient(settingsWithTileCropper(fetchImpl, cropper, cap, 1));
-
-    const response = await client.submit(task({ naturalSize, renderSize: naturalSize }));
-
-    assert.equal(response.ok, true, `cap=${cap}`);
-    const diagnostics = await client.recentDiagnostics();
-    assert.equal(diagnostics.ok, true);
-    const record = diagnostics.ok ? diagnostics.records[0] : undefined;
-    if (required > cap) {
-      assert.equal(ocrCalls, 1, `cap=${cap} must fall back to one whole-image OCR`);
-      assert.equal(cropperCalls, 0, `cap=${cap} must not crop a partial page`);
-      assert.equal(record?.tileCount, 1);
-      assert.equal(record?.note, `tiling skipped: required ${required} > cap ${cap}`);
-    } else {
-      assert.equal(ocrCalls, required, `cap=${cap} must use every required tile`);
-      assert.equal(cropperCalls, 1);
-      assert.equal(croppedUnits.length, required);
-      assert.equal(croppedUnits.every((unit) => unit.crop.height <= DIRECT_OCR_MAX_TILE_HEIGHT), true);
-      const last = croppedUnits.at(-1)!;
-      assert.equal(last.crop.y + last.crop.height, naturalSize.height);
-      assert.equal(record?.tileCount, required);
-      assert.equal(record?.note, undefined);
-    }
-  }
-});
-
-test("DirectClient records anonymous failed tile diagnostics", async () => {
-  let ocrCalls = 0;
-  const cropper: RecognitionTileCropper = async (_imageData, units, consume) => {
-    for (const [index, unit] of units.entries()) {
-      await consume({ unit, imageBytes: new Uint8Array([index + 1]), mimeType: "image/png" }, index, units.length);
-    }
-  };
-  const fetchImpl = (async (url) => {
-    if (String(url).includes("ocr")) {
-      ocrCalls += 1;
-      if (ocrCalls >= 2) {
-        return new Response(JSON.stringify({ message: "provider timeout" }), { status: 400, headers: { "content-type": "application/json" } });
-      }
-      return new Response(JSON.stringify({ words_result: [] }), { status: 200, headers: { "content-type": "application/json" } });
-    }
-    throw new Error("translator must not run after a tile OCR failure");
-  }) as typeof fetch;
-  const client = new DirectClient(settingsWithTileCropper(fetchImpl, cropper));
-  const signedSurfaceId = "surface:https://cdn.example/page.jpg?token=secret-token&X-Amz-Signature=secret-signature";
-
-  const response = await client.submit(task({
-    surfaceId: signedSurfaceId,
-    naturalSize: { width: 1000, height: 16000 },
-    renderSize: { width: 1000, height: 16000 },
-  }));
-
-  assert.equal(response.ok, false);
-  assert.match(response.ok ? "" : response.error, /^OCR tile 2\/5 \(x=0,y=3584,w=1000,h=4096\) failed: Network OCR failed: 400 provider timeout/);
-  const diagnostics = await client.recentDiagnostics();
-  assert.equal(diagnostics.ok, true);
-  const failure = diagnostics.ok ? diagnostics.records.find((record) => record.type === "recognition-tile-failure") : undefined;
-  assert.match(String(failure?.imageId), /^image:[a-f0-9]{12}$/);
-  assert.equal(failure?.tileIndex, 2);
-  assert.equal(failure?.tileCount, 5);
-  assert.deepEqual(failure?.crop, { x: 0, y: 3584, width: 1000, height: 4096 });
-  const diagnosticText = JSON.stringify(diagnostics);
-  assert.equal(diagnosticText.includes("secret-token"), false);
-  assert.equal(diagnosticText.includes("X-Amz-Signature"), false);
-  assert.equal(diagnosticText.includes("data:image"), false);
-});
-
-test("DirectClient keeps at most one tile byte buffer active during OCR", async () => {
-  let activeTileBytes = 0;
-  let maxActiveTileBytes = 0;
-  let ocrCalls = 0;
-  let evidenceCalls = 0;
-  let translatorCalls = 0;
-  const releasedTiles: number[] = [];
-  const cropper: RecognitionTileCropper = async (_imageData, units, consume) => {
-    for (const [index, unit] of units.entries()) {
-      assert.equal(activeTileBytes, 0);
-      activeTileBytes += 1;
-      maxActiveTileBytes = Math.max(maxActiveTileBytes, activeTileBytes);
-      await consume({ unit, imageBytes: new Uint8Array([index + 1]), mimeType: "image/png" }, index, units.length);
-      assert.equal(ocrCalls, index + 1);
-      activeTileBytes -= 1;
-      releasedTiles.push(index + 1);
-    }
-  };
-  const fetchImpl = (async (url) => {
-    if (String(url).includes("ocr")) {
-      assert.equal(activeTileBytes, 1);
-      assert.deepEqual(releasedTiles, Array.from({ length: ocrCalls }, (_, index) => index + 1));
-      ocrCalls += 1;
-      return new Response(JSON.stringify({
-        words_result: [{ words: `STREAM ${ocrCalls}`, location: { left: 10, top: 20, width: 80, height: 20 } }],
-      }), { status: 200, headers: { "content-type": "application/json" } });
-    }
-    translatorCalls += 1;
-    assert.equal(activeTileBytes, 0);
-    assert.deepEqual(releasedTiles, [1, 2, 3, 4, 5]);
-    return new Response(JSON.stringify({ choices: [{ message: { content: "" } }] }), { status: 200, headers: { "content-type": "application/json" } });
-  }) as typeof fetch;
-  const bubbleEvidenceExtractor: BrowserBubbleEvidenceExtractor = async (input) => {
-    evidenceCalls += 1;
-    assert.equal(activeTileBytes, 1);
-    assert.equal(input.imageBytes.byteLength, 1);
-    return [];
-  };
-  const client = new DirectClient({
-    ...settingsWithTileCropper(fetchImpl, cropper),
-    __testBubbleEvidenceExtractor: bubbleEvidenceExtractor,
-  } as ExtensionSettings & { __testBubbleEvidenceExtractor: BrowserBubbleEvidenceExtractor });
-
-  const response = await client.submit(task({
-    naturalSize: { width: 1000, height: 16000 },
-    renderSize: { width: 1000, height: 16000 },
-  }));
-
-  assert.equal(response.ok, true);
-  assert.equal(maxActiveTileBytes, 1);
-  assert.equal(ocrCalls, 5);
-  assert.equal(evidenceCalls, 5);
-  assert.equal(translatorCalls, 1);
-});
-
-
-test("DirectClient rejects browser-unsafe image dimensions before invoking the tile cropper", async () => {
-  let cropperCalls = 0;
-  let fetchCalls = 0;
-  const cropper: RecognitionTileCropper = async () => {
-    cropperCalls += 1;
-    throw new Error("browser cropper must not run");
-  };
-  const fetchImpl = (async () => {
-    fetchCalls += 1;
-    throw new Error("network providers must not run");
-  }) as typeof fetch;
-  const client = new DirectClient(settingsWithTileCropper(fetchImpl, cropper));
-  const signedSurfaceId = "surface:https://cdn.example/page.jpg?token=secret-token&X-Amz-Signature=secret-signature";
-
-  const response = await client.submit(task({
-    surfaceId: signedSurfaceId,
-    naturalSize: { width: 1_000_000, height: 16000 },
-    renderSize: { width: 1_000_000, height: 16000 },
-  }));
-
-  assert.equal(response.ok, false);
-  const error = response.ok ? "" : response.error;
-  assert.match(error, /naturalSize\.width.*16384/i);
-  assert.equal(error.includes(signedSurfaceId), false);
-  assert.equal(error.includes("secret-token"), false);
-  assert.equal(error.includes("X-Amz-Signature"), false);
-  assert.equal(cropperCalls, 0);
-  assert.equal(fetchCalls, 0);
-});
-
-function automaticEmptyPixelFixtures(): Array<{
-  name: string;
-  imageData: string;
-  size: { width: number; height: number };
-}> {
-  const size = { width: 48, height: 48 };
-  return [
-    {
-      name: "halftone",
-      size,
-      imageData: bmpFixtureDataUrl(size.width, size.height, (set) => {
-        for (let y = 2; y < size.height; y += 4) {
-          for (let x = 2; x < size.width; x += 4) set(x, y, 32);
-        }
-      }),
-    },
-    {
-      name: "face",
-      size,
-      imageData: bmpFixtureDataUrl(size.width, size.height, (set) => {
-        drawFixtureEllipse(set, 24, 24, 17, 20, 36);
-        fillFixtureRect(set, 15, 18, 4, 5, 24);
-        fillFixtureRect(set, 29, 18, 4, 5, 24);
-        drawFixtureArc(set, 24, 27, 10, 7, 24);
-      }),
-    },
-    {
-      name: "rivets",
-      size,
-      imageData: bmpFixtureDataUrl(size.width, size.height, (set) => {
-        for (const y of [12, 24, 36]) {
-          for (const x of [12, 24, 36]) drawFixtureDisk(set, x, y, 3, 28);
-        }
-      }),
-    },
-    {
-      name: "vertical",
-      size,
-      imageData: bmpFixtureDataUrl(size.width, size.height, (set) => {
-        for (const y of [5, 16, 27, 38]) {
-          fillFixtureRect(set, 21, y, 3, 8, 20);
-          fillFixtureRect(set, 21, y, 8, 2, 20);
-        }
-      }),
-    },
-  ];
-}
-
-type FixturePixelWriter = (x: number, y: number, value: number) => void;
-
-function bmpFixtureDataUrl(
-  width: number,
-  height: number,
-  draw: (set: FixturePixelWriter) => void,
-): string {
-  const pixelBytes = width * height * 4;
-  const buffer = Buffer.alloc(54 + pixelBytes, 0);
-  buffer.fill(255, 54);
-  buffer.write("BM", 0, "ascii");
-  buffer.writeUInt32LE(buffer.length, 2);
-  buffer.writeUInt32LE(54, 10);
-  buffer.writeUInt32LE(40, 14);
-  buffer.writeInt32LE(width, 18);
-  buffer.writeInt32LE(-height, 22);
-  buffer.writeUInt16LE(1, 26);
-  buffer.writeUInt16LE(32, 28);
-  buffer.writeUInt32LE(pixelBytes, 34);
-  const set: FixturePixelWriter = (x, y, value) => {
-    if (x < 0 || x >= width || y < 0 || y >= height) return;
-    const offset = 54 + (y * width + x) * 4;
-    buffer[offset] = value;
-    buffer[offset + 1] = value;
-    buffer[offset + 2] = value;
-    buffer[offset + 3] = 255;
-  };
-  draw(set);
-  return `data:image/bmp;base64,${buffer.toString("base64")}`;
-}
-
-function fillFixtureRect(
-  set: FixturePixelWriter,
-  x: number,
-  y: number,
-  width: number,
-  height: number,
-  value: number,
-): void {
-  for (let row = y; row < y + height; row += 1) {
-    for (let column = x; column < x + width; column += 1) set(column, row, value);
-  }
-}
-
-function drawFixtureEllipse(
-  set: FixturePixelWriter,
-  centerX: number,
-  centerY: number,
-  radiusX: number,
-  radiusY: number,
-  value: number,
-): void {
-  for (let degrees = 0; degrees < 360; degrees += 2) {
-    const radians = degrees * Math.PI / 180;
-    set(
-      Math.round(centerX + Math.cos(radians) * radiusX),
-      Math.round(centerY + Math.sin(radians) * radiusY),
-      value,
-    );
-  }
-}
-
-function drawFixtureArc(
-  set: FixturePixelWriter,
-  centerX: number,
-  centerY: number,
-  radiusX: number,
-  radiusY: number,
-  value: number,
-): void {
-  for (let degrees = 20; degrees <= 160; degrees += 3) {
-    const radians = degrees * Math.PI / 180;
-    set(
-      Math.round(centerX + Math.cos(radians) * radiusX),
-      Math.round(centerY + Math.sin(radians) * radiusY),
-      value,
-    );
-  }
-}
-
-function drawFixtureDisk(
-  set: FixturePixelWriter,
-  centerX: number,
-  centerY: number,
-  radius: number,
-  value: number,
-): void {
-  for (let y = centerY - radius; y <= centerY + radius; y += 1) {
-    for (let x = centerX - radius; x <= centerX + radius; x += 1) {
-      if ((x - centerX) ** 2 + (y - centerY) ** 2 <= radius ** 2) set(x, y, value);
-    }
-  }
-}

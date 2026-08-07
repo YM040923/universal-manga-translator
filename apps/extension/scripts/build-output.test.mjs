@@ -26,37 +26,6 @@ test("content script build is a classic script without static module imports", (
   assert.equal(/import\(/.test(content), false);
 });
 
-test("content main wires automatic and manual capture APIs through safe summary logging", () => {
-  const main = readFileSync(resolve("src/content/main.ts"), "utf8");
-
-  assert.match(
-    main,
-    /import\s+\{\s*captureWithRecognitionSummary\s*\}\s+from\s+["']\.\/capture\/recognition-capture-log["'];/,
-  );
-  assert.match(
-    main,
-    /captureWithRecognitionSummary\(\s*\(\)\s*=>\s*createSurfaceTaskWithImageDataCapture\(/,
-  );
-  assert.match(
-    main,
-    /captureWithRecognitionSummary\(\s*\(\)\s*=>\s*createScreenshotSurfaceCapture\(/,
-  );
-  assert.equal(main.includes('logger.info("recognition capture"'), false);
-});
-
-test("content main does not enable heuristic paid rescue for automatic empty OCR", () => {
-  const main = readFileSync(resolve("src/content/main.ts"), "utf8");
-  const directClient = readFileSync(resolve("src/content/client/direct-client.ts"), "utf8");
-
-  assert.doesNotMatch(main, /ocr-text-evidence|OcrTextEvidenceProvider|createBrowserOcrTextEvidenceProvider/);
-  assert.match(main, /new\s+DirectClient\(current\)/);
-  assert.doesNotMatch(main, /new\s+DirectClient\(current\s*,/);
-  assert.match(directClient, /Bubble extraction is observation-driven only/);
-  assert.match(directClient, /Do not infer likelyTextEvidence from raw pixels/);
-  assert.match(directClient, /Bubble-aware reconstruction is limited to the direct extension path/);
-  assert.match(directClient, /Legacy server translation remains outside this reconstruction path/);
-});
-
 test("manifest uses dynamic injection and does not expose an options page", () => {
   const manifest = JSON.parse(readFileSync(resolve(dist, "manifest.json"), "utf8"));
   assert.equal(manifest.host_permissions.includes("<all_urls>"), true);

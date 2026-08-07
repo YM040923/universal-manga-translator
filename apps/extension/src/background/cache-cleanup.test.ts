@@ -1,59 +1,99 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { cleanupTranslationCachesForDate, type CacheCleanupStorage } from "./cache-cleanup.js";
+import {
+  ROLLBACK_CACHE_CLEANUP_END_MS,
+  ROLLBACK_CACHE_CLEANUP_MARKER,
+  ROLLBACK_CACHE_CLEANUP_START_MS,
+  cleanupTranslationCachesForRange,
+  type CacheCleanupStorage,
+} from "./cache-cleanup.js";
 
-const DAY_START = 1785945600000;
-const DAY_END = 1786032000000;
+const START_MS = 1785945600000; // 2026-08-06 00:00:00 +08:00
+const END_MS = 1786118400000; // 2026-08-08 00:00:00 +08:00
 
-test("rollback cache cleanup removes only today's translation cache and preserves OCR/configuration", async () => {
-  const storage = fakeStorage({
-    "umt.content-fingerprint-cache:v2:today": { savedAt: DAY_START + 100, result: { status: "completed" } },
-    "umt.content-fingerprint-cache:v2:old": { savedAt: DAY_START - 100, result: { status: "completed" } },
-    "umt.chapter-cache:v2:chapter": {
-      version: 2,
-      entries: {
-        today: { savedAt: DAY_START + 200, result: { status: "completed", regions: [{}] } },
-        old: { savedAt: DAY_START - 200, result: { status: "completed", regions: [{}] } },
-      },
-    },
-    "umt.bubble-result-cache:v2:bubbles": {
-      savedAt: DAY_START + 300,
-      entries: [
-        { id: "today", savedAt: DAY_START + 300, translatedText: "今天" },
-        { id: "old", savedAt: DAY_START - 300, translatedText: "旧缓存" },
-      ],
-    },
-    "umt.direct-ocr-cache:v2:ocr": { savedAt: DAY_START + 400, regions: [{}] },
-    "umt.settings": { directOcr: { apiKeys: ["keep-me"] } },
-  });
-
-  const summary = await cleanupTranslationCachesForDate(storage, DAY_START, DAY_END);
-  const remaining = storage.snapshot();
-
-  assert.equal(summary.alreadyRun, false);
-  assert.equal(remaining["umt.content-fingerprint-cache:v2:today"], undefined);
-  assert.ok(remaining["umt.content-fingerprint-cache:v2:old"]);
-  assert.deepEqual(Object.keys((remaining["umt.chapter-cache:v2:chapter"] as { entries: Record<string, unknown> }).entries), ["old"]);
-  assert.deepEqual((remaining["umt.bubble-result-cache:v2:bubbles"] as { entries: Array<{ id: string }> }).entries.map((entry) => entry.id), ["old"]);
-  assert.ok(remaining["umt.direct-ocr-cache:v2:ocr"]);
-  assert.ok(remaining["umt.settings"]);
+test("rollback cleanup covers Aug 6 and Aug 7 in China Standard Time", () => {
+  assert.equal(ROLLBACK_CACHE_CLEANUP_START_MS, START_MS);
+  assert.equal(ROLLBACK_CACHE_CLEANUP_END_MS, END_MS);
 });
 
-test("rollback cache cleanup is idempotent after its marker is written", async () => {
-  const storage = fakeStorage({});
-  const first = await cleanupTranslationCachesForDate(storage, DAY_START, DAY_END);
-  const second = await cleanupTranslationCachesForDate(storage, DAY_START, DAY_END);
+test("rollback cleanup removes Aug 6-7 translation results but preserves OCR, settings, and manual edits", async () => {
+  const chapterKey = "umt.chapter-cache:v1:https://reader.example/ch/1:zh-CN:provider";
+  const manualSelectionKey = "umt.manual-selection-cache:v1:https://reader.example/ch/1:zh-CN:provider";
+  const directOcrKey = "umt.direct-ocr-cache:v1:image";
+  const manualOverrideKey = "umt.manual-overrides:v1:image:zh-CN";
+  const storage = fakeStorage({
+    [chapterKey]: {
+      version: 1,
+      key: chapterKey,
+      entries: {
+        old: { savedAt: START_MS - 1, result: { regions: [{ translatedText: "旧译文" }] } },
+        aug6: { savedAt: START_MS, result: { regions: [{ translatedText: "错误译文一" }] } },
+        aug7: { savedAt: END_MS - 1, result: { regions: [{ translatedText: "错误译文二" }] } },
+      },
+    },
+    [manualSelectionKey]: {
+      version: 1,
+      key: manualSelectionKey,
+      entries: [
+        { id: "old", savedAt: START_MS - 1 },
+        { id: "aug7", savedAt: END_MS - 1 },
+      ],
+    },
+    [directOcrKey]: { version: 1, savedAt: END_MS - 1, regions: [{ sourceText: "OCR" }] },
+    [manualOverrideKey]: { version: 1, updatedAt: END_MS - 1, overrides: { r1: { translatedText: "我的修改" } } },
+    "umt.settings": { directOcr: { apiKeys: ["secret"] } },
+    "umt.rollback-cache-cleanup:2026-08-06": { cleanedAt: START_MS },
+  });
 
-  assert.equal(first.alreadyRun, false);
-  assert.equal(second.alreadyRun, true);
+  const summary = await cleanupTranslationCachesForRange(storage, START_MS, END_MS);
+  const data = storage.snapshot();
+
+  assert.deepEqual(Object.keys((data[chapterKey] as { entries: Record<string, unknown> }).entries), ["old"]);
+  assert.deepEqual((data[manualSelectionKey] as { entries: Array<{ id: string }> }).entries.map((entry) => entry.id), ["old"]);
+  assert.deepEqual(data[directOcrKey], { version: 1, savedAt: END_MS - 1, regions: [{ sourceText: "OCR" }] });
+  assert.deepEqual(data[manualOverrideKey], { version: 1, updatedAt: END_MS - 1, overrides: { r1: { translatedText: "我的修改" } } });
+  assert.deepEqual(data["umt.settings"], { directOcr: { apiKeys: ["secret"] } });
+  assert.equal(Boolean(data[ROLLBACK_CACHE_CLEANUP_MARKER]), true);
+  assert.deepEqual(summary, { alreadyRun: false, removedKeys: 0, updatedKeys: 2 });
+});
+
+test("rollback cleanup removes translation documents containing only affected entries and runs once per marker", async () => {
+  const chapterKey = "umt.chapter-cache:v1:https://reader.example/ch/2:zh-CN:provider";
+  const storage = fakeStorage({
+    [chapterKey]: {
+      version: 1,
+      key: chapterKey,
+      entries: {
+        aug7: { savedAt: END_MS - 1 },
+      },
+    },
+  });
+
+  assert.deepEqual(
+    await cleanupTranslationCachesForRange(storage, START_MS, END_MS),
+    { alreadyRun: false, removedKeys: 1, updatedKeys: 0 },
+  );
+  assert.equal(chapterKey in storage.snapshot(), false);
+  assert.deepEqual(
+    await cleanupTranslationCachesForRange(storage, START_MS, END_MS),
+    { alreadyRun: true, removedKeys: 0, updatedKeys: 0 },
+  );
 });
 
 function fakeStorage(initial: Record<string, unknown>): CacheCleanupStorage & { snapshot(): Record<string, unknown> } {
-  const data = { ...initial };
+  const data = structuredClone(initial);
   return {
-    async get() { return { ...data }; },
-    async set(value) { Object.assign(data, value); },
-    async remove(keys) { for (const key of Array.isArray(keys) ? keys : [keys]) delete data[key]; },
-    snapshot() { return { ...data }; },
+    async get() {
+      return structuredClone(data);
+    },
+    async set(value) {
+      Object.assign(data, structuredClone(value));
+    },
+    async remove(keys) {
+      for (const key of Array.isArray(keys) ? keys : [keys]) delete data[key];
+    },
+    snapshot() {
+      return structuredClone(data);
+    },
   };
 }

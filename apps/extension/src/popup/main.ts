@@ -1,4 +1,4 @@
-import {
+﻿import {
   DEFAULT_SETTINGS,
   enableSiteForUrl,
   isSiteEnabled,
@@ -11,7 +11,7 @@ import {
   normalizeSettings,
   type ExtensionSettings,
 } from "../settings/settings.js";
-import type { UmtActivateSiteResponse, UmtContentCommand, UmtContentCommandName, UmtContentCommandResponse, UmtPageRuntimeSnapshot } from "../content/messages.js";
+import type { UmtActivateSiteResponse, UmtContentCommand, UmtContentCommandName } from "../content/messages.js";
 import { readDirectConfigFromDom } from "./config-form.js";
 import { runSelfTest } from "./self-test.js";
 import { popupStyles } from "./styles.js";
@@ -54,57 +54,25 @@ const TEXT = {
   resetAppearance: "\u6062\u590d\u9ed8\u8ba4\u663e\u793a",
 };
 
-type PageActionFeedback = {
-  operation: "competing" | "cancel";
-  command: UmtContentCommandName;
-  revision: number;
-  kind: "pending" | "success" | "error";
-  text: string;
-};
-
-type PopupPageAction = "translate" | "retranslate" | "pause" | "clear" | "cancel" | "select-region";
-
-type PopupFocusTarget = {
-  attribute: "data-action" | "data-field";
-  value: string;
-};
-
 export async function mountPopupPage(root: HTMLElement, deps: PopupDeps = {}): Promise<void> {
   const storage = deps.storage;
   let settings = await loadSettings(storage);
   const tab = await queryActiveTab(deps);
   let backendOnline: boolean | null = null;
   let selfTestSummary = "";
-  let competingPageActionBusy = false;
-  let cancelBusy = false;
-  let pageActionFeedback: PageActionFeedback | null = null;
-  let cancelActionFeedback: PageActionFeedback | null = null;
-  let pageActionFeedbackRevision = 0;
-  let pageRuntimeState: UmtPageRuntimeSnapshot | null = null;
+  let pageActionBusy = false;
+  let pageActionFeedback: { kind: "pending" | "success" | "error"; text: string } | null = null;
   let view: "main" | "api" = "main";
 
-  const render = (options: { preserveScroll?: boolean; focusTarget?: PopupFocusTarget } = {}): void => {
+  const render = (options: { preserveScroll?: boolean } = {}): void => {
     const url = tab?.url ?? "";
     const domain = primaryDomainFromUrl(url);
     const unsupported = !domain || !tab?.id;
     const enabled = !unsupported && isSiteEnabled(settings, url);
     const effectiveSite = getEffectiveSiteSettings(settings, url);
     const previousScrollTop = options.preserveScroll === false ? 0 : root.querySelector<HTMLElement>(".umt-popup")?.scrollTop ?? 0;
-    root.innerHTML = markup({
-      settings,
-      backendOnline,
-      domain,
-      unsupported,
-      enabled,
-      autoTranslate: effectiveSite.autoTranslate,
-      selfTestSummary,
-      pageRuntimeState,
-      pageActionFeedback: selectPageActionFeedback(pageActionFeedback, cancelActionFeedback, cancelBusy),
-      view,
-    });
+    root.innerHTML = markup({ settings, backendOnline, domain, unsupported, enabled, autoTranslate: effectiveSite.autoTranslate, selfTestSummary, pageActionBusy, pageActionFeedback, view });
     bind({ unsupported, enabled });
-    const focusTarget = options.focusTarget ? findPopupFocusTarget(root, options.focusTarget) : null;
-    if (focusTarget && !focusTarget.hasAttribute("disabled")) focusTarget.focus();
     const popup = root.querySelector<HTMLElement>(".umt-popup");
     if (popup) popup.scrollTop = previousScrollTop;
   };
@@ -132,59 +100,32 @@ export async function mountPopupPage(root: HTMLElement, deps: PopupDeps = {}): P
     settings = await saveSettings(settings, storage);
   };
 
-  const sendCommand = async (command: UmtContentCommandName, extra: Partial<UmtContentCommand> = {}): Promise<unknown> => {
+  const sendCommand = async (command: UmtContentCommandName, extra: Partial<UmtContentCommand> = {}): Promise<void> => {
     if (!tab?.id) return;
     const message: UmtContentCommand = { source: "umt-popup", command, ...extra };
     try {
-      return await (deps.sendMessageToTab ?? defaultSendMessageToTab)(tab.id, message);
+      await (deps.sendMessageToTab ?? defaultSendMessageToTab)(tab.id, message);
     } catch (error) {
       if (!tab.url) throw error;
       const response = await (deps.activateSite ?? defaultActivateSite)(tab.id, tab.url);
       if (!response.ok) throw error;
-      return await (deps.sendMessageToTab ?? defaultSendMessageToTab)(tab.id, message);
+      await (deps.sendMessageToTab ?? defaultSendMessageToTab)(tab.id, message);
     }
   };
 
-  const runPageAction = async (action: PopupPageAction, label: string, command: UmtContentCommandName, kind: "competing" | "cancel" = "competing"): Promise<void> => {
-    if (kind === "cancel" ? cancelBusy : competingPageActionBusy || cancelBusy) return;
-    const restoreFocusedAction = kind === "competing" && root.ownerDocument.activeElement?.getAttribute("data-action") === action;
-    const feedback = (state: PageActionFeedback["kind"], text: string): PageActionFeedback => ({
-      operation: kind,
-      command,
-      revision: ++pageActionFeedbackRevision,
-      kind: state,
-      text,
-    });
-    if (kind === "cancel") {
-      if (!competingPageActionBusy) pageActionFeedback = null;
-      cancelBusy = true;
-      cancelActionFeedback = feedback("pending", `正在发送“${label}”…`);
-    } else {
-      competingPageActionBusy = true;
-      cancelActionFeedback = null;
-      pageActionFeedback = feedback("pending", `正在发送“${label}”…`);
-    }
-    render(restoreFocusedAction ? { focusTarget: { attribute: "data-action", value: "cancel" } } : {});
+  const runPageAction = async (label: string, command: UmtContentCommandName): Promise<void> => {
+    if (pageActionBusy) return;
+    pageActionBusy = true;
+    pageActionFeedback = { kind: "pending", text: `正在发送“${label}”…` };
+    render();
     try {
-      const response = await sendCommand(command);
-      const commandError = readPageRuntimeError(response);
-      if (commandError) throw new Error(commandError);
-      pageRuntimeState = readPageRuntimeState(response) ?? pageRuntimeState;
-      const result = feedback("success", pageRuntimeState ? `${label}：${pageRuntimeActionSummary(pageRuntimeState)}` : `${label}已接收，页面会显示实际进度。`);
-      if (kind === "cancel") cancelActionFeedback = result;
-      else pageActionFeedback = result;
+      await sendCommand(command);
+      pageActionFeedback = { kind: "success", text: `${label}已接收，页面会显示实际进度。` };
     } catch (error) {
-      const result = feedback("error", `${label}失败：${pageActionErrorMessage(error)}`);
-      if (kind === "cancel") cancelActionFeedback = result;
-      else pageActionFeedback = result;
+      pageActionFeedback = { kind: "error", text: `${label}失败：${pageActionErrorMessage(error)}` };
     } finally {
-      const activeFocusTarget = restoreFocusedAction ? readPopupFocusTarget(root) : null;
-      const completionFocusTarget = activeFocusTarget && !(activeFocusTarget.attribute === "data-action" && activeFocusTarget.value === "cancel")
-        ? activeFocusTarget
-        : { attribute: "data-action" as const, value: action };
-      if (kind === "cancel") cancelBusy = false;
-      else competingPageActionBusy = false;
-      render(restoreFocusedAction ? { focusTarget: completionFocusTarget } : {});
+      pageActionBusy = false;
+      render();
     }
   };
 
@@ -214,12 +155,12 @@ export async function mountPopupPage(root: HTMLElement, deps: PopupDeps = {}): P
         render();
       });
     });
-    root.querySelector<HTMLButtonElement>("[data-action='translate']")?.addEventListener("click", () => void runPageAction("translate", TEXT.translate, "translate"));
-    root.querySelector<HTMLButtonElement>("[data-action='retranslate']")?.addEventListener("click", () => void runPageAction("retranslate", TEXT.retranslate, "retranslateVisible"));
-    root.querySelector<HTMLButtonElement>("[data-action='pause']")?.addEventListener("click", () => void runPageAction("pause", TEXT.pause, "togglePause"));
-    root.querySelector<HTMLButtonElement>("[data-action='clear']")?.addEventListener("click", () => void runPageAction("clear", TEXT.clear, "clearPage"));
-    root.querySelector<HTMLButtonElement>("[data-action='cancel']")?.addEventListener("click", () => void runPageAction("cancel", TEXT.cancel, "cancelQueue", "cancel"));
-    root.querySelector<HTMLButtonElement>("[data-action='select-region']")?.addEventListener("click", () => void runPageAction("select-region", TEXT.select, "selectRegion"));
+    root.querySelector<HTMLButtonElement>("[data-action='translate']")?.addEventListener("click", () => void runPageAction(TEXT.translate, "translate"));
+    root.querySelector<HTMLButtonElement>("[data-action='retranslate']")?.addEventListener("click", () => void runPageAction(TEXT.retranslate, "retranslateVisible"));
+    root.querySelector<HTMLButtonElement>("[data-action='pause']")?.addEventListener("click", () => void runPageAction(TEXT.pause, "togglePause"));
+    root.querySelector<HTMLButtonElement>("[data-action='clear']")?.addEventListener("click", () => void runPageAction(TEXT.clear, "clearPage"));
+    root.querySelector<HTMLButtonElement>("[data-action='cancel']")?.addEventListener("click", () => void runPageAction(TEXT.cancel, "cancelQueue"));
+    root.querySelector<HTMLButtonElement>("[data-action='select-region']")?.addEventListener("click", () => void runPageAction(TEXT.select, "selectRegion"));
     root.querySelector<HTMLInputElement>("[data-field='overlay-visible']")?.addEventListener("change", (event) => {
       const visible = (event.currentTarget as HTMLInputElement).checked;
       void persist(setTranslationOverlayVisible(settings, visible));
@@ -266,8 +207,7 @@ export async function mountPopupPage(root: HTMLElement, deps: PopupDeps = {}): P
         void sendCommand("applyOverlayAppearance", { appearance: next.overlayAppearance });
       });
     }
-    if (competingPageActionBusy || cancelBusy) root.querySelectorAll<HTMLButtonElement>("[data-page-action]:not([data-action='cancel'])").forEach((node) => { node.disabled = true; });
-    if (cancelBusy) root.querySelector<HTMLButtonElement>("[data-action='cancel']")!.disabled = true;
+    if (pageActionBusy) root.querySelectorAll<HTMLButtonElement>("[data-page-action]").forEach((node) => { node.disabled = true; });
     if (unsupported || !enabled) root.querySelectorAll<HTMLButtonElement | HTMLInputElement | HTMLSelectElement>("[data-requires-enabled]").forEach((node) => { node.disabled = true; });
   };
 
@@ -276,8 +216,8 @@ export async function mountPopupPage(root: HTMLElement, deps: PopupDeps = {}): P
   void refreshBackendStatus();
 }
 
-function markup(input: { settings: ExtensionSettings; backendOnline: boolean | null; domain: string | null; unsupported: boolean; enabled: boolean; autoTranslate: boolean; selfTestSummary: string; pageActionFeedback: PageActionFeedback | null; pageRuntimeState: UmtPageRuntimeSnapshot | null; view: "main" | "api" }): string {
-  const { settings, backendOnline, domain, unsupported, enabled, autoTranslate, selfTestSummary, pageActionFeedback, pageRuntimeState, view } = input;
+function markup(input: { settings: ExtensionSettings; backendOnline: boolean | null; domain: string | null; unsupported: boolean; enabled: boolean; autoTranslate: boolean; selfTestSummary: string; pageActionBusy: boolean; pageActionFeedback: { kind: "pending" | "success" | "error"; text: string } | null; view: "main" | "api" }): string {
+  const { settings, backendOnline, domain, unsupported, enabled, autoTranslate, selfTestSummary, pageActionBusy, pageActionFeedback, view } = input;
   const status = unsupported ? TEXT.unsupported : enabled ? TEXT.enabled : TEXT.disabled;
   const directReady = Boolean(settings.directOcr.apiUrl && settings.directOcr.apiKeys.length && settings.directTranslator.baseUrl && settings.directTranslator.apiKey && settings.directTranslator.model);
   const healthClass = settings.runMode === "direct" ? directReady ? "ok" : "bad" : backendOnline === true ? "ok" : backendOnline === null ? "checking" : "bad";
@@ -299,7 +239,6 @@ function markup(input: { settings: ExtensionSettings; backendOnline: boolean | n
       <button class="muted" data-action="clear" data-page-action data-requires-enabled>${TEXT.clear}</button>
       <button class="danger" data-action="cancel" data-page-action data-requires-enabled>${TEXT.cancel}</button>
       ${pageActionFeedback ? `<div class="action-feedback ${pageActionFeedback.kind}" data-action-feedback role="status" aria-live="polite">${escapeHtml(pageActionFeedback.text)}</div>` : ""}
-      ${pageRuntimeState ? `<small class="page-runtime" data-page-runtime-state>${escapeHtml(pageRuntimeSummary(pageRuntimeState))}</small>` : ""}
     </section>
     <section class="card toggles"><b>${TEXT.switches}</b>
       ${toggle(TEXT.overlay, "overlay-visible", settings.translationOverlayVisible, true)}
@@ -318,57 +257,6 @@ function markup(input: { settings: ExtensionSettings; backendOnline: boolean | n
       <button class="muted wide" data-action="reset-appearance" data-requires-enabled>${TEXT.resetAppearance}</button>
     </section>
   </section>`;
-}
-
-function readPageRuntimeState(value: unknown): UmtPageRuntimeSnapshot | null {
-  if (!value || typeof value !== "object") return null;
-  const response = value as Partial<UmtContentCommandResponse>;
-  const state = response.state;
-  if (response.ok !== true || !state || typeof state !== "object") return null;
-  const queue = state.queue as unknown;
-  if (!queue || typeof queue !== "object" || !["total", "queued", "processing", "completed", "cached", "empty", "failed", "cancelled"].every((key) => typeof (queue as Record<string, unknown>)[key] === "number")) return null;
-  return state;
-}
-
-function readPageRuntimeError(value: unknown): string | null {
-  if (!value || typeof value !== "object") return null;
-  const response = value as Partial<UmtContentCommandResponse>;
-  return response.ok === false && typeof response.error === "string" && response.error.trim() ? response.error : null;
-}
-
-function pageRuntimeActionSummary(state: UmtPageRuntimeSnapshot): string {
-  if (!state.readerActive) return "当前页面尚未识别为漫画阅读页";
-  if (state.queue.paused) return `已暂停；${pageRuntimeSummary(state)}`;
-  if (state.queue.processing > 0 || state.queue.queued > 0) return `处理中 ${state.queue.processing}，排队 ${state.queue.queued}`;
-  return pageRuntimeSummary(state);
-}
-
-function pageRuntimeSummary(state: UmtPageRuntimeSnapshot): string {
-  const queue = state.queue;
-  return `总计 ${queue.total} · 完成 ${queue.completed + queue.cached} · 处理中 ${queue.processing} · 排队 ${queue.queued} · 空 ${queue.empty} · 失败 ${queue.failed} · 取消 ${queue.cancelled}`;
-}
-
-function selectPageActionFeedback(pageFeedback: PageActionFeedback | null, cancelFeedback: PageActionFeedback | null, cancelBusy: boolean): PageActionFeedback | null {
-  if (cancelBusy && cancelFeedback?.operation === "cancel" && cancelFeedback.kind === "pending") return cancelFeedback;
-  const candidates = [pageFeedback, cancelFeedback].filter((feedback): feedback is PageActionFeedback => feedback !== null);
-  const errors = candidates.filter((feedback) => feedback.kind === "error");
-  const visible = errors.length > 0 ? errors : candidates;
-  return visible.reduce<PageActionFeedback | null>((latest, feedback) => !latest || feedback.revision > latest.revision ? feedback : latest, null);
-}
-
-function readPopupFocusTarget(root: HTMLElement): PopupFocusTarget | null {
-  const active = root.ownerDocument.activeElement;
-  if (!active || !root.contains(active)) return null;
-  for (const attribute of ["data-action", "data-field"] as const) {
-    const value = active.getAttribute(attribute);
-    if (value) return { attribute, value };
-  }
-  return null;
-}
-
-function findPopupFocusTarget(root: HTMLElement, target: PopupFocusTarget): HTMLElement | null {
-  return [...root.querySelectorAll<HTMLElement>(`[${target.attribute}]`)]
-    .find((node) => node.getAttribute(target.attribute) === target.value) ?? null;
 }
 
 
@@ -410,8 +298,6 @@ const DIRECT_CONFIG_FIELDS = [
   "direct-ocr-confidence-paths",
   "direct-ocr-static-fields",
   "direct-ocr-max-auto-pages",
-  "direct-ocr-max-tiles-per-image",
-  "direct-ocr-max-rescue-calls-per-image",
   "direct-ocr-stop-after-failures",
   "glossary-text",
 ] as const;
@@ -441,11 +327,9 @@ function apiSettingsMarkup(settings: ExtensionSettings, selfTestSummary: string)
       <label><span>staticFields JSON</span><textarea data-field="direct-ocr-static-fields" rows="2">${escapeHtml(settings.directOcr.staticFieldsText)}</textarea></label>
     </details>
     <details class="advanced-config"><summary>OCR 成本保护</summary>
-      <small>自动翻译按第一页优先；自动页数、单图长图分块数、质量救援次数和连续失败分别限额。</small>
+      <small>自动翻译会按第一页优先；达到页数或连续失败上限后停止，避免无意义扣费。</small>
       <div class="config-grid">
         <label><span>每次自动最多 OCR 页</span><input data-field="direct-ocr-max-auto-pages" type="number" min="1" max="120" value="${settings.directOcr.maxAutoOcrPages}"></label>
-        <label><span>单张长图最多 OCR 分块数</span><input data-field="direct-ocr-max-tiles-per-image" type="number" min="1" max="12" value="${settings.directOcr.maxOcrTilesPerImage}"></label>
-        <label><span>单张图最多 OCR 质量救援</span><input data-field="direct-ocr-max-rescue-calls-per-image" type="number" min="0" max="3" value="${settings.directOcr.maxOcrRescueCallsPerImage}"></label>
         <label><span>连续失败后停止</span><input data-field="direct-ocr-stop-after-failures" type="number" min="1" max="10" value="${settings.directOcr.stopAfterConsecutiveFailures}"></label>
       </div>
     </details>
@@ -495,9 +379,7 @@ async function defaultCheckBackend(backendUrl: string): Promise<boolean> {
   }
 }
 
-async function defaultSendMessageToTab(tabId: number, message: UmtContentCommand): Promise<unknown> {
-  return await chrome.runtime.sendMessage({ source: "umt-popup", command: "dispatchContentCommand", tabId, message });
-}
+async function defaultSendMessageToTab(tabId: number, message: UmtContentCommand): Promise<unknown> { return await chrome.tabs.sendMessage(tabId, message); }
 async function defaultActivateSite(tabId: number, url: string): Promise<UmtActivateSiteResponse> { return await chrome.runtime.sendMessage({ source: "umt-popup", command: "activateSite", tabId, url }); }
 function escapeHtml(value: string): string { return value.replace(/[&<>"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;" })[char] ?? char); }
 function escapeAttr(value: string): string { return escapeHtml(value); }

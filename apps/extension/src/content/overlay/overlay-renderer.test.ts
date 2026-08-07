@@ -1,7 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
-import { FONT_BUBBLE_FIXTURES, reconstructBubbles, type BubbleOwnershipEvidence } from "@umt/core";
 import type { ManualOverridePayload } from "@umt/shared/protocol";
 import type { Rect, SurfaceResult } from "@umt/shared/types";
 import { clearManualEdits, loadManualEdit, OverlayRenderer, saveManualEdit } from "./overlay-renderer.js";
@@ -47,109 +46,6 @@ test("refreshAll updates existing overlay nodes instead of recreating them durin
   const after = document.querySelector<HTMLElement>("[data-umt-region-id='r1']")!;
   assert.equal(after, before);
   assert.equal(after.style.top, "83px");
-});
-
-test("refreshAll keeps the immutable layout snapshot when a caller mutates the prior result during scroll", () => {
-  let rect = { x: 10, y: 220, width: 500, height: 1000 };
-  const { img } = setupDomWithImage(() => rect);
-  Object.defineProperty(window, "scrollY", { value: 200, configurable: true });
-  const renderer = new OverlayRenderer();
-  const result = fakeResult("immutable-scroll");
-  renderer.render(img, { width: 1000, height: 2000 }, result);
-  const wrapper = document.querySelector<HTMLElement>("[data-umt-region-id='r1']")!;
-  const chip = wrapper.querySelector<HTMLElement>("[data-umt-text-chip='true']")!;
-  const firstTextNode = chip.firstChild;
-  const firstLeft = wrapper.style.left;
-  const firstTop = wrapper.style.top;
-
-  result.regions[0]!.translatedText = "mutated after render";
-  result.regions[0]!.box.x = 600;
-  rect = { ...rect, y: 120 };
-  Object.defineProperty(window, "scrollY", { value: 300, configurable: true });
-  renderer.refreshAll();
-
-  assert.equal(chip.textContent, "hello translated");
-  assert.equal(chip.firstChild, firstTextNode);
-  assert.equal(wrapper.style.left, firstLeft);
-  assert.equal(wrapper.style.top, firstTop);
-});
-
-test("render preserves unchanged bubble nodes when a new result changes only one bubble", () => {
-  const { img } = setupDomWithImage({ x: 0, y: 0, width: 500, height: 500 });
-  const renderer = new OverlayRenderer();
-  const result = fakeResult("bubble-diff");
-  result.regions = [
-    result.regions[0]!,
-    { ...result.regions[0]!, id: "r2", box: { x: 500, y: 100, width: 200, height: 100 }, translatedText: "second bubble" },
-  ];
-  renderer.render(img, { width: 1000, height: 1000 }, result);
-  const unchanged = document.querySelector<HTMLElement>("[data-umt-region-id='r1']")!;
-  const changed = document.querySelector<HTMLElement>("[data-umt-region-id='r2']")!;
-  const unchangedTextNode = unchanged.querySelector("[data-umt-text-chip='true']")!.firstChild;
-
-  const next = { ...result, regions: [result.regions[0]!, { ...result.regions[1]!, translatedText: "changed second bubble" }] };
-  renderer.render(img, { width: 1000, height: 1000 }, next);
-
-  assert.equal(document.querySelector("[data-umt-region-id='r1']"), unchanged);
-  assert.equal(unchanged.querySelector("[data-umt-text-chip='true']")!.firstChild, unchangedTextNode);
-  assert.equal(document.querySelector("[data-umt-region-id='r2']"), changed);
-  assert.equal(changed.textContent, "changed second bubble");
-});
-
-test("renderer preserves distinct generated adjacent-dialogue fixture bubbles", () => {
-  const fixture = FONT_BUBBLE_FIXTURES.find((item) => item.id === "display-adjacent-dialogue")!;
-  const bubbles = reconstructBubbles(fixture.observations, fixture.evidence);
-  const { img } = setupDomWithImage({ x: 0, y: 0, width: 390, height: 230 });
-  const renderer = new OverlayRenderer();
-  const result = fakeResult("generated-adjacent-fixture");
-  result.regions = bubbles.map((bubble) => ({
-    ...result.regions[0]!,
-    id: bubble.id,
-    sourceText: bubble.sourceText,
-    translatedText: bubble.sourceText,
-    box: bubble.box,
-    kind: bubble.kind,
-  }));
-
-  renderer.render(img, { width: 390, height: 230 }, result);
-
-  assert.equal(document.querySelectorAll("[data-umt-surface-id='generated-adjacent-fixture']").length, fixture.expected.bubbleCount);
-});
-
-test("keeps distinct overlay nodes when a provider reuses a region id inside one surface", () => {
-  const { img } = setupDomWithImage({ x: 0, y: 0, width: 500, height: 500 });
-  const renderer = new OverlayRenderer();
-  const result = fakeResult("duplicate-region-ids");
-  result.regions = [
-    { ...result.regions[0]!, id: "duplicate", box: { x: 40, y: 80, width: 160, height: 80 }, sourceText: "First", translatedText: "第一句" },
-    { ...result.regions[0]!, id: "duplicate", box: { x: 280, y: 300, width: 160, height: 80 }, sourceText: "Second", translatedText: "第二句" },
-  ];
-
-  renderer.render(img, { width: 500, height: 500 }, result);
-
-  const nodes = [...document.querySelectorAll<HTMLElement>("[data-umt-surface-id='duplicate-region-ids'][data-umt-region-id='duplicate']")];
-  assert.equal(nodes.length, 2);
-  assert.deepEqual(nodes.map((node) => node.textContent).sort(), ["第一句", "第二句"]);
-  assert.notEqual(nodes[0]?.dataset.umtRegionKey, nodes[1]?.dataset.umtRegionKey);
-});
-
-test("removes stale overlay nodes when a surface is replaced with a new image host", () => {
-  const dom = new JSDOM(`<body><div id="first" style="transform:translateZ(0)"><img id="page-one" /></div><div id="second" style="transform:translateZ(0)"><img id="page-two" /></div></body>`, { url: "https://example.test" });
-  globalThis.document = dom.window.document;
-  globalThis.window = dom.window as unknown as Window & typeof globalThis;
-  globalThis.CSS = dom.window.CSS;
-  const first = document.querySelector<HTMLImageElement>("#page-one")!;
-  const second = document.querySelector<HTMLImageElement>("#page-two")!;
-  const rect = { x: 0, y: 0, width: 500, height: 500, top: 0, left: 0, right: 500, bottom: 500, toJSON: () => ({}) } as DOMRect;
-  first.getBoundingClientRect = () => rect;
-  second.getBoundingClientRect = () => rect;
-  const renderer = new OverlayRenderer();
-
-  renderer.render(first, { width: 500, height: 500 }, fakeResult("replaced-surface"));
-  renderer.render(second, { width: 500, height: 500 }, fakeResult("replaced-surface"));
-
-  assert.equal(document.querySelectorAll("[data-umt-surface-id='replaced-surface']").length, 1);
-  assert.equal(document.querySelector("[data-umt-overlay-root='true']")?.parentElement?.id, "second");
 });
 
 
@@ -282,7 +178,7 @@ test("empty manual edit removes the translation bubble and stores a deleted mark
 
   assert.equal(document.querySelector("[data-umt-region-id='r1']"), null);
   assert.equal(loadManualEdit("hash", "zh-CN", "r1"), "");
-  assert.deepEqual(saved, { imageHash: "hash", targetLanguage: "zh-CN", regionId: "r1", translatedText: "", sourceText: "Hello", box: { x: 100, y: 100, width: 200, height: 100 }, neighborhood: [] });
+  assert.deepEqual(saved, { imageHash: "hash", targetLanguage: "zh-CN", regionId: "r1", translatedText: "" });
 
   renderer.render(img, { width: 1000, height: 2000 }, fakeResult("delete-edit"));
   assert.equal(document.querySelector("[data-umt-region-id='r1']"), null);
@@ -297,7 +193,7 @@ test("manual edit callback receives override payload", () => {
 
   document.querySelector<HTMLElement>("[data-umt-text-chip='true']")!.click();
 
-  assert.deepEqual(saved, { imageHash: "hash", targetLanguage: "zh-CN", regionId: "r1", translatedText: "manual edit", sourceText: "Hello", box: { x: 100, y: 100, width: 200, height: 100 }, neighborhood: [] });
+  assert.deepEqual(saved, { imageHash: "hash", targetLanguage: "zh-CN", regionId: "r1", translatedText: "manual edit" });
 });
 
 test("creating a replacement renderer removes the previous overlay root so old manual bubbles follow popup visibility", () => {
@@ -670,7 +566,7 @@ test("renders sfx/action lettering without a huge opaque speech-bubble mask", ()
 
 
 
-test("does not merge overlapping logical bubbles a second time in the renderer", () => {
+test("merges overlapping split text regions before rendering to avoid stacked bubbles", () => {
   const { img } = setupDomWithImage({ x: 0, y: 0, width: 800, height: 620 });
   const renderer = new OverlayRenderer();
   const result = fakeResult("split-caption-merge");
@@ -694,38 +590,11 @@ test("does not merge overlapping logical bubbles a second time in the renderer",
   renderer.render(img, { width: 800, height: 620 }, result);
 
   const wrappers = document.querySelectorAll<HTMLElement>("[data-umt-region-id]");
-  assert.equal(wrappers.length, 2);
-  assert.deepEqual([...wrappers].map((wrapper) => wrapper.dataset.umtRegionId), ["top", "bottom"]);
-});
-
-test("distinct visual ownership renders two nodes and keeps manual overrides isolated", () => {
-  const { img } = setupDomWithImage({ x: 0, y: 0, width: 400, height: 300 });
-  const bubbles = reconstructBubbles([
-    coreRegion("group-c-text", 100),
-    coreRegion("group-d-text", 250),
-  ], [
-    coreEvidence("group-c-text", "group-c", 50),
-    coreEvidence("group-d-text", "group-d", 230),
-  ]);
-  assert.equal(bubbles.length, 2);
-  assert.equal(new Set(bubbles.map((bubble) => bubble.id)).size, 2);
-  const result = fakeResult("distinct-ownership");
-  result.regions = bubbles.map((bubble, index) => ({
-    ...result.regions[0]!,
-    id: bubble.id,
-    box: bubble.box,
-    sourceText: bubble.sourceText,
-    translatedText: index === 0 ? "first bubble" : "second bubble",
-  }));
-  saveManualEdit(result.imageHash, "zh-CN", bubbles[0]!.id, "manual first bubble");
-
-  new OverlayRenderer().render(img, { width: 400, height: 300 }, result);
-
-  const wrappers = document.querySelectorAll<HTMLElement>("[data-umt-region-id]");
-  assert.equal(wrappers.length, 2);
-  assert.equal(document.querySelector(`[data-umt-region-id='${bubbles[0]!.id}']`)?.textContent, "manual first bubble");
-  assert.equal(document.querySelector(`[data-umt-region-id='${bubbles[1]!.id}']`)?.textContent, "second bubble");
-  assert.equal(loadManualEdit(result.imageHash, "zh-CN", bubbles[1]!.id), null);
+  assert.equal(wrappers.length, 1);
+  assert.equal(wrappers[0]!.textContent!.includes("\u9996\u5148"), true);
+  assert.equal(wrappers[0]!.textContent!.includes("\u7075\u9b42\u80fd\u91cf"), true);
+  assert.equal(wrappers[0]!.textContent!.includes("\\n"), false);
+  assert.equal(wrappers[0]!.textContent!.includes("\n"), true);
 });
 
 test("adds glyph-safe inset for large CJK text so strokes are not clipped", () => {
@@ -747,32 +616,6 @@ test("adds glyph-safe inset for large CJK text so strokes are not clipped", () =
   assert.equal(chip.style.overflow, "visible");
   assert.equal(chip.style.maxHeight, "none");
 });
-
-function coreRegion(id: string, x: number) {
-  return {
-    id,
-    sourceText: "SAME",
-    box: { x, y: 100, width: 100, height: 40 },
-    confidence: 0.92,
-    orientation: "horizontal" as const,
-    kind: "dialogue" as const,
-  };
-}
-
-function coreEvidence(
-  observationId: string,
-  visualGroupId: string,
-  x: number,
-): BubbleOwnershipEvidence {
-  return {
-    observationId,
-    visualGroupId,
-    componentBox: { x, y: 30, width: 180, height: 100 },
-    shape: "ellipse",
-    confidence: 0.94,
-    touchesBoundary: false,
-  };
-}
 
 test("expands mask slightly around OCR text box to cover original glyph edges", () => {
   const { img } = setupDomWithImage({ x: 0, y: 0, width: 500, height: 500 });

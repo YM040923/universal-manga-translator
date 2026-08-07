@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
-import { clampCropRectToImage, createScreenshotSurface, createScreenshotSurfaceCapture, type ScreenshotCropRect } from "./screenshot-crop.js";
+import { clampCropRectToImage, createScreenshotSurface, type ScreenshotCropRect } from "./screenshot-crop.js";
 
 test("clampCropRectToImage maps viewport rect to device pixels", () => {
   const crop = clampCropRectToImage(
@@ -46,56 +46,6 @@ test("createScreenshotSurface builds a manual screenshot surface", async () => {
   assert.deepEqual(surface.naturalSize, { width: 400, height: 600 });
   assert.deepEqual(surface.rect, { x: 50, y: 100, width: 200, height: 300 });
   assert.deepEqual(calls[0], { x: 100, y: 200, width: 400, height: 600 });
-});
-
-test("createScreenshotSurfaceCapture preserves a non-zero crop origin in parent screenshot pixels", async () => {
-  const dom = new JSDOM("<body></body>");
-  globalThis.document = dom.window.document;
-  const result = await createScreenshotSurfaceCapture({
-    screenshotDataUrl: "data:image/png;base64,full",
-    viewportRect: { x: 50, y: 100, width: 200, height: 300 },
-    viewportSize: { width: 500, height: 1000 },
-    screenshotSize: { width: 1000, height: 2000 },
-    devicePixelRatio: 2,
-    surfaceId: "manual:2x",
-    element: document.body,
-    cropper: async () => "data:image/png;base64,YWJj",
-  });
-
-  assert.deepEqual(result.surface.rect, { x: 50, y: 100, width: 200, height: 300 });
-  assert.deepEqual(result.surface.naturalSize, { width: 400, height: 600 });
-  assert.deepEqual(result.capture.unit.crop, { x: 100, y: 200, width: 400, height: 600 });
-  assert.deepEqual(result.capture.unit.naturalSize, { width: 1000, height: 2000 });
-  assert.deepEqual(result.capture.unit.pixelSize, { width: 400, height: 600 });
-  assert.equal(result.capture.unit.scaleX, 1);
-  assert.equal(result.capture.unit.scaleY, 1);
-  assert.equal(result.capture.unit.priority, "p0");
-  assert.equal(result.capture.unit.reason, "manual-selection");
-  assert.equal(result.capture.devicePixelRatio, 2);
-  assert.equal(result.capture.viewportScaleX, 2);
-  assert.equal(result.capture.viewportScaleY, 2);
-  assert.equal(result.capture.captureSource, "manual-selection");
-});
-
-test("createScreenshotSurfaceCapture records upscale only in OCR pixel size and scale", async () => {
-  const dom = new JSDOM("<body></body>");
-  globalThis.document = dom.window.document;
-  const result = await createScreenshotSurfaceCapture({
-    screenshotDataUrl: "data:image/png;base64,full",
-    viewportRect: { x: 10, y: 20, width: 100, height: 80 },
-    viewportSize: { width: 400, height: 300 },
-    screenshotSize: { width: 800, height: 600 },
-    surfaceId: "manual:upscaled",
-    element: document.body,
-    upscale: 2,
-    cropper: async () => "data:image/png;base64,YWJj",
-  });
-
-  assert.deepEqual(result.capture.unit.naturalSize, { width: 800, height: 600 });
-  assert.deepEqual(result.capture.unit.crop, { x: 20, y: 40, width: 200, height: 160 });
-  assert.deepEqual(result.capture.unit.pixelSize, { width: 400, height: 320 });
-  assert.equal(result.capture.unit.scaleX, 2);
-  assert.equal(result.capture.unit.scaleY, 2);
 });
 
 test("createScreenshotSurface can request an upscaled crop for OCR fallback", async () => {

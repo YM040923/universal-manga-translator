@@ -1,4 +1,4 @@
-import test from "node:test";
+﻿import test from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
 import { mountPopupPage, type PopupDeps } from "./main.js";
@@ -114,7 +114,7 @@ test("popup locks page actions while a command is being sent and confirms accept
   root.querySelector<HTMLButtonElement>("[data-action='translate']")!.click();
 
   assert.equal(root.querySelector<HTMLButtonElement>("[data-action='translate']")?.disabled, true);
-  assert.equal(root.querySelector<HTMLButtonElement>("[data-action='cancel']")?.disabled, false);
+  assert.equal(root.querySelector<HTMLButtonElement>("[data-action='cancel']")?.disabled, true);
   assert.match(root.querySelector<HTMLElement>("[data-action-feedback]")?.textContent ?? "", /\u6b63\u5728\u53d1\u9001/);
   root.querySelector<HTMLButtonElement>("[data-action='translate']")!.click();
   assert.equal(sends, 1);
@@ -124,187 +124,6 @@ test("popup locks page actions while a command is being sent and confirms accept
 
   assert.equal(root.querySelector<HTMLButtonElement>("[data-action='translate']")?.disabled, false);
   assert.match(root.querySelector<HTMLElement>("[data-action-feedback]")?.textContent ?? "", /\u7ffb\u8bd1\u672c\u9875.*\u5df2\u63a5\u6536/);
-});
-
-test("popup shows the actual page queue snapshot returned by a translation command", async () => {
-  const dom = setupDom();
-  const storage = fakeStorage(enableSiteForUrl(DEFAULT_SETTINGS, "https://asurascans.com/a"));
-  const root = dom.window.document.querySelector<HTMLElement>("#app")!;
-
-  await mountPopupPage(root, deps({
-    storage,
-    tabUrl: "https://asurascans.com/a",
-    sendMessageToTab: async (_tabId, message) => message.command === "translate"
-      ? { ok: true, state: { readerActive: true, overlayVisible: true, autoTranslate: false, queue: { total: 12, queued: 9, processing: 1, completed: 2, cached: 0, empty: 0, failed: 0, cancelled: 0, paused: false } } }
-      : undefined,
-  }));
-
-  root.querySelector<HTMLButtonElement>("[data-action='translate']")!.click();
-  await new Promise((resolve) => setTimeout(resolve, 0));
-
-  assert.match(root.querySelector<HTMLElement>("[data-action-feedback]")?.textContent ?? "", /处理中 1.*排队 9/);
-  assert.match(root.querySelector<HTMLElement>("[data-page-runtime-state]")?.textContent ?? "", /总计 12.*完成 2.*处理中 1/);
-});
-
-test("popup moves focus to cancel while a focused page action is pending and restores it afterward", async () => {
-  const dom = setupDom();
-  const storage = fakeStorage(enableSiteForUrl(DEFAULT_SETTINGS, "https://asurascans.com/a"));
-  const root = dom.window.document.querySelector<HTMLElement>("#app")!;
-  let resolveSend!: () => void;
-  const pendingSend = new Promise<void>((resolve) => { resolveSend = resolve; });
-
-  await mountPopupPage(root, deps({
-    storage,
-    tabUrl: "https://asurascans.com/a",
-    sendMessageToTab: async () => { await pendingSend; },
-  }));
-
-  const translate = root.querySelector<HTMLButtonElement>("[data-action='translate']")!;
-  translate.focus();
-  assert.equal(dom.window.document.activeElement, translate);
-
-  translate.click();
-
-  assert.equal(dom.window.document.activeElement, root.querySelector<HTMLButtonElement>("[data-action='cancel']"));
-
-  resolveSend();
-  await new Promise((resolve) => setTimeout(resolve, 0));
-
-  assert.equal(dom.window.document.activeElement, root.querySelector<HTMLButtonElement>("[data-action='translate']"));
-});
-
-test("popup preserves focus when the user moves away from cancel while a page action is pending", async () => {
-  const dom = setupDom();
-  const storage = fakeStorage(enableSiteForUrl(DEFAULT_SETTINGS, "https://asurascans.com/a"));
-  const root = dom.window.document.querySelector<HTMLElement>("#app")!;
-  let resolveSend!: () => void;
-  const pendingSend = new Promise<void>((resolve) => { resolveSend = resolve; });
-
-  await mountPopupPage(root, deps({
-    storage,
-    tabUrl: "https://asurascans.com/a",
-    sendMessageToTab: async () => { await pendingSend; },
-  }));
-
-  const translate = root.querySelector<HTMLButtonElement>("[data-action='translate']")!;
-  translate.focus();
-  translate.click();
-  assert.equal(dom.window.document.activeElement, root.querySelector<HTMLButtonElement>("[data-action='cancel']"));
-
-  const apiSettings = root.querySelector<HTMLButtonElement>("[data-action='open-api-settings']")!;
-  apiSettings.focus();
-  assert.equal(dom.window.document.activeElement, apiSettings);
-
-  resolveSend();
-  await new Promise((resolve) => setTimeout(resolve, 0));
-
-  assert.equal(dom.window.document.activeElement, root.querySelector<HTMLButtonElement>("[data-action='open-api-settings']"));
-});
-
-test("popup keeps cancel available during another pending page action and sends cancel only once", async () => {
-  const dom = setupDom();
-  const storage = fakeStorage(enableSiteForUrl(DEFAULT_SETTINGS, "https://asurascans.com/a"));
-  const root = dom.window.document.querySelector<HTMLElement>("#app")!;
-  const sentCommands: string[] = [];
-  let resolveTranslate!: () => void;
-  let resolveCancel!: () => void;
-  const pendingTranslate = new Promise<void>((resolve) => { resolveTranslate = resolve; });
-  const pendingCancel = new Promise<void>((resolve) => { resolveCancel = resolve; });
-
-  await mountPopupPage(root, deps({
-    storage,
-    tabUrl: "https://asurascans.com/a",
-    sendMessageToTab: async (_tabId, message) => {
-      sentCommands.push(message.command);
-      if (message.command === "translate") await pendingTranslate;
-      if (message.command === "cancelQueue") await pendingCancel;
-    },
-  }));
-
-  root.querySelector<HTMLButtonElement>("[data-action='translate']")!.click();
-
-  assert.equal(root.querySelector<HTMLButtonElement>("[data-action='translate']")?.disabled, true);
-  assert.equal(root.querySelector<HTMLButtonElement>("[data-action='cancel']")?.disabled, false);
-
-  root.querySelector<HTMLButtonElement>("[data-action='cancel']")!.click();
-  root.querySelector<HTMLButtonElement>("[data-action='cancel']")!.click();
-
-  assert.deepEqual(sentCommands, ["translate", "cancelQueue"]);
-  assert.equal(root.querySelector<HTMLButtonElement>("[data-action='cancel']")?.disabled, true);
-
-  resolveCancel();
-  resolveTranslate();
-  await new Promise((resolve) => setTimeout(resolve, 0));
-});
-
-test("popup keeps pending cancel feedback when the interrupted page action completes first", async () => {
-  const dom = setupDom();
-  const storage = fakeStorage(enableSiteForUrl(DEFAULT_SETTINGS, "https://asurascans.com/a"));
-  const root = dom.window.document.querySelector<HTMLElement>("#app")!;
-  let resolveTranslate!: () => void;
-  let resolveCancel!: () => void;
-  const pendingTranslate = new Promise<void>((resolve) => { resolveTranslate = resolve; });
-  const pendingCancel = new Promise<void>((resolve) => { resolveCancel = resolve; });
-
-  await mountPopupPage(root, deps({
-    storage,
-    tabUrl: "https://asurascans.com/a",
-    sendMessageToTab: async (_tabId, message) => {
-      if (message.command === "translate") await pendingTranslate;
-      if (message.command === "cancelQueue") await pendingCancel;
-    },
-  }));
-
-  root.querySelector<HTMLButtonElement>("[data-action='translate']")!.click();
-  root.querySelector<HTMLButtonElement>("[data-action='cancel']")!.click();
-
-  assert.match(root.querySelector<HTMLElement>("[data-action-feedback]")?.textContent ?? "", /\u6b63\u5728\u53d1\u9001.*\u53d6\u6d88\u961f\u5217/);
-
-  resolveTranslate();
-  await new Promise((resolve) => setTimeout(resolve, 0));
-
-  assert.match(root.querySelector<HTMLElement>("[data-action-feedback]")?.textContent ?? "", /\u6b63\u5728\u53d1\u9001.*\u53d6\u6d88\u961f\u5217/);
-
-  resolveCancel();
-  await new Promise((resolve) => setTimeout(resolve, 0));
-
-  assert.match(root.querySelector<HTMLElement>("[data-action-feedback]")?.textContent ?? "", /\u53d6\u6d88\u961f\u5217.*\u5df2\u63a5\u6536/);
-});
-
-test("popup shows a later page action error after cancel succeeds first", async () => {
-  const dom = setupDom();
-  const storage = fakeStorage(enableSiteForUrl(DEFAULT_SETTINGS, "https://asurascans.com/a"));
-  const root = dom.window.document.querySelector<HTMLElement>("#app")!;
-  let resolveTranslate!: () => void;
-  let resolveCancel!: () => void;
-  const pendingTranslate = new Promise<void>((resolve) => { resolveTranslate = resolve; });
-  const pendingCancel = new Promise<void>((resolve) => { resolveCancel = resolve; });
-
-  await mountPopupPage(root, deps({
-    storage,
-    tabUrl: "https://asurascans.com/a",
-    sendMessageToTab: async (_tabId, message) => {
-      if (message.command === "translate") {
-        await pendingTranslate;
-        throw new Error("translation transport failed");
-      }
-      if (message.command === "cancelQueue") await pendingCancel;
-    },
-  }));
-
-  root.querySelector<HTMLButtonElement>("[data-action='translate']")!.click();
-  root.querySelector<HTMLButtonElement>("[data-action='cancel']")!.click();
-
-  resolveCancel();
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  assert.match(root.querySelector<HTMLElement>("[data-action-feedback]")?.textContent ?? "", /\u53d6\u6d88\u961f\u5217.*\u5df2\u63a5\u6536/);
-
-  resolveTranslate();
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  await new Promise((resolve) => setTimeout(resolve, 0));
-
-  assert.match(root.querySelector<HTMLElement>("[data-action-feedback]")?.textContent ?? "", /\u7ffb\u8bd1\u672c\u9875.*\u5931\u8d25/);
-  assert.equal(root.querySelector<HTMLElement>("[data-action-feedback]")?.classList.contains("error"), true);
 });
 
 test("popup restores page actions and shows a readable command error", async () => {
@@ -970,7 +789,7 @@ test("popup direct self-test prefers a real current-page sample when the synthet
   assert.doesNotMatch(selfTest, /测试图未返回文字区域/);
 });
 
-test("popup direct self-test uses the default background frame dispatch response for current-page samples", async () => {
+test("popup direct self-test uses the default chrome tabs message response for current-page samples", async () => {
   const dom = setupDom();
   const configured = enableSiteForUrl({
     ...DEFAULT_SETTINGS,
@@ -981,15 +800,14 @@ test("popup direct self-test uses the default background frame dispatch response
   const storage = fakeStorage(configured);
   const root = dom.window.document.querySelector<HTMLElement>("#app")!;
   const previousChrome = globalThis.chrome;
-  const requests: unknown[] = [];
   globalThis.chrome = {
-    runtime: {
-      sendMessage: async (request: { command?: string; tabId?: number; message?: { command?: string } }) => {
-        requests.push(request);
-        if (request.command === "dispatchContentCommand" && request.message?.command === "sampleOcrSelfTest") return { ok: true, status: "ok", surfaceIndex: 2, regionCount: 9, elapsedMs: 1200 };
+    tabs: {
+      sendMessage: async (_tabId: number, message: { command: string }) => {
+        if (message.command === "sampleOcrSelfTest") return { ok: true, status: "ok", surfaceIndex: 2, regionCount: 9, elapsedMs: 1200 };
         return undefined;
       },
     },
+    runtime: { sendMessage: async () => undefined },
   } as never;
 
   try {
@@ -1012,7 +830,6 @@ test("popup direct self-test uses the default background frame dispatch response
     assert.match(selfTest, /页面样本 OCR 正常/);
     assert.match(selfTest, /第 2 张/);
     assert.match(selfTest, /9 个区域/);
-    assert.deepEqual(requests, [{ source: "umt-popup", command: "dispatchContentCommand", tabId: 123, message: { source: "umt-popup", command: "sampleOcrSelfTest" } }]);
   } finally {
     globalThis.chrome = previousChrome;
   }
@@ -1169,18 +986,12 @@ test("popup saves OCR cost protection settings", async () => {
   root.querySelector<HTMLButtonElement>("[data-action='open-api-settings']")!.click();
 
   assert.ok(root.querySelector("[data-field='direct-ocr-max-auto-pages']"));
-  assert.ok(root.querySelector("[data-field='direct-ocr-max-tiles-per-image']"));
-  assert.ok(root.querySelector("[data-field='direct-ocr-max-rescue-calls-per-image']"));
   assert.ok(root.querySelector("[data-field='direct-ocr-stop-after-failures']"));
   setValue(root, dom, "direct-ocr-max-auto-pages", "25");
-  setValue(root, dom, "direct-ocr-max-tiles-per-image", "7");
-  setValue(root, dom, "direct-ocr-max-rescue-calls-per-image", "2");
   setValue(root, dom, "direct-ocr-stop-after-failures", "3");
   root.querySelector<HTMLButtonElement>("[data-action='save-api-settings']")!.click();
   await new Promise((resolve) => setTimeout(resolve, 0));
 
   assert.equal(storage.current.directOcr.maxAutoOcrPages, 25);
-  assert.equal(storage.current.directOcr.maxOcrTilesPerImage, 7);
-  assert.equal(storage.current.directOcr.maxOcrRescueCallsPerImage, 2);
   assert.equal(storage.current.directOcr.stopAfterConsecutiveFailures, 3);
 });

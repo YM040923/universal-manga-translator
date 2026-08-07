@@ -1,9 +1,0 @@
-{
-  "version": 1,
-  "cases": [
-    { "id": "latin-serif-dialogue", "image": "latin-serif-dialogue.svg", "orientation": "horizontal", "kind": "dialogue", "bubbleCount": 1, "boxes": [{ "x": 64, "y": 42, "width": 218, "height": 182 }] },
-    { "id": "display-adjacent-dialogue", "image": "display-adjacent-dialogue.svg", "orientation": "horizontal", "kind": "dialogue", "bubbleCount": 2, "boxes": [{ "x": 28, "y": 56, "width": 164, "height": 112 }, { "x": 202, "y": 56, "width": 142, "height": 112 }] },
-    { "id": "narration-panel", "image": "narration-panel.svg", "orientation": "horizontal", "kind": "narration", "bubbleCount": 1, "boxes": [{ "x": 20, "y": 28, "width": 320, "height": 76 }] },
-    { "id": "vertical-dialogue", "image": "vertical-dialogue.svg", "orientation": "vertical", "kind": "dialogue", "bubbleCount": 2, "boxes": [{ "x": 123, "y": 40, "width": 100, "height": 210 }, { "x": 49, "y": 45, "width": 68, "height": 200 }] }
-  ]
-}

@@ -1,21 +1,20 @@
-import { BackendClient, SurfaceSubmitTracker } from "./client/backend-client";
+﻿import { BackendClient, SurfaceSubmitTracker } from "./client/backend-client";
 import { DirectClient } from "./client/direct-client";
 import { supportsEventStream, type TranslatorClient } from "./client/translator-client";
 import { hasRelevantContentSettingChange } from "./settings-change";
 import { ChapterResultCache, type ChapterResultCacheContext } from "./cache/chapter-result-cache";
 import { ManualSelectionCache, type ManualSelectionCacheContext } from "./cache/manual-selection-cache";
 import { ExtensionManualOverrideStore } from "./cache/manual-overrides";
-import { createSurfaceTask, createSurfaceTaskWithImageData, createSurfaceTaskWithImageDataCapture } from "./capture/surface-capture";
-import { createScreenshotSurfaceCapture, readImageSize } from "./capture/screenshot-crop";
+import { createSurfaceTask, createSurfaceTaskWithImageData } from "./capture/surface-capture";
+import { createScreenshotSurface, readImageSize } from "./capture/screenshot-crop";
 import { requestVisibleTabScreenshot } from "./capture/screenshot-request";
-import { captureWithRecognitionSummary } from "./capture/recognition-capture-log";
 import { DebugOverlayRenderer } from "./debug-overlay-renderer";
 import { createContentLogger } from "./content-logger";
 import type { ServerEvent } from "@umt/shared/protocol";
 import { EventResultRouter } from "./events/event-result-router";
-import { isUmtContentCommand, type UmtContentCommandResponse, type UmtFrameAuthorizationResponse, type UmtPageSampleSelfTestResponse } from "./messages";
+import { isUmtContentCommand, type UmtPageSampleSelfTestResponse } from "./messages";
 import { OverlayRenderer } from "./overlay/overlay-renderer";
-import { createDocumentRectOverlayAnchor, documentRectFromViewportRect } from "./overlay/rect-anchor";
+import { createDocumentRectOverlayAnchor } from "./overlay/rect-anchor";
 import { ChapterProgress } from "./progress/chapter-progress";
 import { FloatingPanel } from "./panel/floating-panel";
 import { ManualSelectionController } from "./selection/manual-selection";
@@ -25,7 +24,6 @@ import { SurfaceControl } from "./surface/surface-control";
 import { toDetectedSurface } from "./surface/detected-surface";
 import { selectVisibleSurfaces } from "./surface/visible-surfaces";
 import { isLikelyReaderPage, SurfaceRegistry, type RegisteredSurface } from "./surface/surface-registry";
-import { findOpenShadowRoots } from "./detector/surface-detector";
 import { isRenderableSurfaceResult } from "./translation-result";
 import { createJobSessionId, debounce, formatShortError, isUmtOwnedMutation, requestBackendHttp } from "./utils";
 import { getEffectiveSiteSettings, isSiteEnabled, loadSettings, saveSettings, setSiteSettings, setTranslationOverlayVisible, type ExtensionSettings } from "../settings/settings";
@@ -41,12 +39,7 @@ if (bootstrapWindow.__umtContentBootstrapState !== "starting" && bootstrapWindow
 
 async function bootstrap(): Promise<boolean> {
   let settings = await loadSettings();
-  let enabledSiteUrl = window.location.href;
-  if (!isSiteEnabled(settings, enabledSiteUrl)) {
-    const authorization = await chrome.runtime.sendMessage({ source: "umt-content", command: "authorizeEmbeddedFrame" }) as UmtFrameAuthorizationResponse | undefined;
-    if (!authorization?.ok || !authorization.siteUrl) return false;
-    enabledSiteUrl = authorization.siteUrl;
-  }
+  if (!isSiteEnabled(settings, window.location.href)) return false;
   let client = createClient(settings);
   let renderer = createRenderer(settings, client);
   const debugRenderer = new DebugOverlayRenderer();
@@ -115,7 +108,7 @@ async function bootstrap(): Promise<boolean> {
   }
 
   function site() {
-    return getEffectiveSiteSettings(settings, enabledSiteUrl);
+    return getEffectiveSiteSettings(settings, window.location.href);
   }
 
   function shouldAutoTranslate(): boolean {
@@ -145,10 +138,9 @@ async function bootstrap(): Promise<boolean> {
   }
 
   async function restoreCachedChapterResults(surfaces: RegisteredSurface[]): Promise<void> {
+    const doc = await chapterCache.read(cacheContext());
     for (const surface of surfaces) {
-      const imageUrl = surface.imageUrl;
-      if (!imageUrl) continue;
-      const entry = await chapterCache.get(cacheContext(), imageUrl);
+      const entry = doc.entries[surface.imageUrl];
       if (!entry) continue;
       const result = await manualOverrides.applyToResult({ ...entry.result, surfaceId: surface.surfaceId, status: "cached" as const }, settings.targetLanguage);
       renderer.render(surface.element, surface.naturalSize, result);
@@ -156,24 +148,6 @@ async function bootstrap(): Promise<boolean> {
       eventResultRouter.track(surface.surfaceId, surface.element, surface.naturalSize);
       markSurface(surface.surfaceId, "cached");
     }
-  }
-
-  function pageRuntimeSnapshot(): UmtContentCommandResponse {
-    return {
-      ok: true,
-      state: {
-        readerActive: readerUiMounted,
-        overlayVisible: settings.translationOverlayVisible,
-        autoTranslate: shouldAutoTranslate(),
-        queue: queue.snapshot(),
-      },
-    };
-  }
-
-  async function restoreCachedResults(surfaces: RegisteredSurface[]): Promise<void> {
-    // Manual selections establish protected overlay regions before ordinary cache restores.
-    await restoreCachedManualSelections();
-    await restoreCachedChapterResults(surfaces);
   }
 
   function cacheContext(): ChapterResultCacheContext {
@@ -238,7 +212,8 @@ async function bootstrap(): Promise<boolean> {
     renderer.refreshAll();
     updateProgress();
     logger.info("surface registry scan", `${reason} | found=${surfaces.length}`);
-    void restoreCachedResults(surfaces).catch((error) => logger.error("restore cached results failed", error));
+    void restoreCachedChapterResults(surfaces).catch((error) => logger.error("restore chapter cache failed", error));
+    void restoreCachedManualSelections().catch((error) => logger.error("restore manual selection cache failed", error));
     return surfaces;
   }
 
@@ -286,10 +261,7 @@ async function bootstrap(): Promise<boolean> {
     try {
       const detected = toDetectedSurface(surface);
       eventResultRouter.track(surface.surfaceId, surface.element, surface.naturalSize);
-      const { task } = await captureWithRecognitionSummary(
-        () => createSurfaceTaskWithImageDataCapture(detected, "p2", settings.targetLanguage, { allowImageUrlFallback: settings.runMode !== "direct" }),
-        logger,
-      );
+      const task = await createSurfaceTaskWithImageData(detected, "p2", settings.targetLanguage, { allowImageUrlFallback: settings.runMode !== "direct" });
       logger.info("submit surface", `${surface.surfaceId} | #${surface.index} | ${task.imageData ? "imageData" : "imageUrl"}`);
       markSurface(surface.surfaceId, "ocr");
       const response = force ? await client.retranslate(task, jobSessionId) : await client.submit(task, jobSessionId);
@@ -298,7 +270,7 @@ async function bootstrap(): Promise<boolean> {
         renderer.render(surface.element, surface.naturalSize, result);
         renderer.setVisible(settings.translationOverlayVisible);
         debugRenderer.markResult(surface.element, surface.naturalSize, result);
-        if (surface.imageUrl) void chapterCache.save(cacheContext(), surface.imageUrl, result).catch((error) => logger.error("save chapter cache failed", error));
+        void chapterCache.save(cacheContext(), surface.imageUrl, result).catch((error) => logger.error("save chapter cache failed", error));
         return result.status === "cached" ? "cached" : "completed";
       }
       if (response.ok && response.result?.status === "empty") return "empty";
@@ -390,27 +362,21 @@ async function bootstrap(): Promise<boolean> {
 
   async function translateManualRect(rect: { x: number; y: number; width: number; height: number }): Promise<void> {
     ensureEventStream();
-    // Preserve where the selection was made before OCR yields to the event loop.
-    // The reader may be scrolled by the time the translated result returns.
-    const documentRect = documentRectFromViewportRect(rect);
     try {
       const screenshotDataUrl = await requestVisibleTabScreenshot();
       const screenshotSize = await readImageSize(screenshotDataUrl);
-      const { surface } = await captureWithRecognitionSummary(
-        () => createScreenshotSurfaceCapture({
-          screenshotDataUrl,
-          viewportRect: rect,
-          viewportSize: { width: window.innerWidth, height: window.innerHeight },
-          screenshotSize,
-          devicePixelRatio: window.devicePixelRatio,
-          surfaceId: `manual:${Date.now()}:${Math.round(rect.x)}:${Math.round(rect.y)}`,
-          element: document.body,
-        }),
-        logger,
-      );
+      const surface = await createScreenshotSurface({
+        screenshotDataUrl,
+        viewportRect: rect,
+        viewportSize: { width: window.innerWidth, height: window.innerHeight },
+        screenshotSize,
+        surfaceId: `manual:${Date.now()}:${Math.round(rect.x)}:${Math.round(rect.y)}`,
+        element: document.body,
+      });
       const response = await client.submit(createSurfaceTask(surface, "p0", settings.targetLanguage), jobSessionId);
       if (response.ok && isRenderableSurfaceResult(response.result)) {
         const result = await manualOverrides.applyToResult(response.result, settings.targetLanguage);
+        const documentRect = { x: rect.x + window.scrollX, y: rect.y + window.scrollY, width: rect.width, height: rect.height };
         renderer.render(createDocumentRectOverlayAnchor(documentRect), surface.naturalSize, result);
         renderer.setVisible(settings.translationOverlayVisible);
         void manualSelectionCache.save(manualSelectionCacheContext(), { id: surface.surfaceId, documentRect, naturalSize: surface.naturalSize, result }).catch((error) => logger.error("save manual selection cache failed", error));
@@ -475,7 +441,7 @@ async function bootstrap(): Promise<boolean> {
     const previousDirectTranslator = JSON.stringify(settings.directTranslator);
     const previousTargetLanguage = settings.targetLanguage;
     settings = await loadSettings();
-    if (!isSiteEnabled(settings, enabledSiteUrl)) return;
+    if (!isSiteEnabled(settings, window.location.href)) return;
     debugRenderer.setEnabled(settings.debugOverlayEnabled);
     renderer.setVisible(settings.translationOverlayVisible);
     floatingPanel?.setOverlayVisible(settings.translationOverlayVisible);
@@ -533,26 +499,11 @@ async function bootstrap(): Promise<boolean> {
     if (shouldAutoTranslate()) void translatePage(false);
   }, 600);
 
-  const observerOptions: MutationObserverInit = { childList: true, subtree: true, attributes: true, attributeFilter: ["src", "srcset", "data-src", "data-original", "style"] };
-  const observedShadowRoots = new WeakSet<ShadowRoot>();
   const observer = new MutationObserver((mutations) => {
     if (mutations.every(isUmtOwnedMutation)) return;
-    for (const mutation of mutations) {
-      for (const node of mutation.addedNodes) {
-        if ("querySelectorAll" in node) observeOpenShadowRoots(node as ParentNode);
-      }
-    }
     rescan("mutation");
   });
-  const observeOpenShadowRoots = (root: ParentNode): void => {
-    for (const shadowRoot of findOpenShadowRoots(root)) {
-      if (observedShadowRoots.has(shadowRoot)) continue;
-      observedShadowRoots.add(shadowRoot);
-      observer.observe(shadowRoot, observerOptions);
-    }
-  };
-  observer.observe(document.documentElement, observerOptions);
-  observeOpenShadowRoots(document);
+  observer.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ["src", "srcset", "data-src", "data-original", "style"] });
 
   window.addEventListener("scroll", () => refreshControls(), { passive: true });
   window.addEventListener("resize", () => refreshLayout());
@@ -568,45 +519,39 @@ async function bootstrap(): Promise<boolean> {
       void sampleOcrSelfTest().then(sendResponse);
       return true;
     }
-    if (message.command === "getPageState") {
-      sendResponse(pageRuntimeSnapshot());
-      return false;
+    if (message.command === "translate") void translatePage(false);
+    if (message.command === "refresh") void resetPageState("popup-refresh", false);
+    if (message.command === "togglePause") {
+      if (queue.snapshot().paused) { queue.resume(); void translatePage(false); }
+      else queue.pause();
+      updateProgress();
     }
-    void (async () => {
-      if (message.command === "translate") void translatePage(false);
-      if (message.command === "refresh") await resetPageState("popup-refresh", false);
-      if (message.command === "togglePause") {
-        if (queue.snapshot().paused) { queue.resume(); void translatePage(false); }
-        else queue.pause();
-        updateProgress();
-      }
-      if (message.command === "clearPage") await resetPageState("popup-clear", true);
-      if (message.command === "selectRegion") startManualSelection();
-      if (message.command === "retranslate") void translatePage(true);
-      if (message.command === "retranslateVisible") void retranslateVisibleSurfaces();
-      if (message.command === "cancelQueue") await cancelCurrentQueue("popup-cancel");
-      if (message.command === "setOverlayVisibility") await setOverlayVisibility(message.visible !== false);
-      if (message.command === "toggleOverlayVisibility") await toggleOverlayVisibility();
-      if (message.command === "applySiteSettings") {
-        settings = setSiteSettings(settings, enabledSiteUrl, { autoTranslate: message.autoTranslate === true });
-        if (message.autoTranslate === true) void translatePage(false);
-        else await cancelCurrentQueue("auto-off");
-      }
-      if (message.command === "applyOverlayAppearance") {
-        settings = { ...settings, overlayAppearance: message.appearance ? { ...settings.overlayAppearance, ...message.appearance } : settings.overlayAppearance };
-        renderer.setAppearance(settings.overlayAppearance);
-      }
-      if (message.command === "applyWidgetSettings") {
-        if (typeof message.floatingButtonEnabled === "boolean") setFloatingButtonEnabled(message.floatingButtonEnabled);
-        if (typeof message.progressWidgetEnabled === "boolean") await setProgressWidgetEnabled(message.progressWidgetEnabled);
-      }
-      await Promise.resolve();
-      sendResponse(pageRuntimeSnapshot());
-    })().catch((error) => {
-      logger.error("content command failed", error);
-      sendResponse({ ok: false, error: "页面操作未完成，请重试或查看运行日志。", state: pageRuntimeSnapshot().state });
-    });
-    return true;
+    if (message.command === "clearPage") void resetPageState("popup-clear", true);
+    if (message.command === "selectRegion") startManualSelection();
+    if (message.command === "retranslate") void translatePage(true);
+    if (message.command === "retranslateVisible") void retranslateVisibleSurfaces();
+    if (message.command === "cancelQueue") void cancelCurrentQueue("popup-cancel");
+    if (message.command === "setOverlayVisibility") void setOverlayVisibility(message.visible !== false);
+    if (message.command === "toggleOverlayVisibility") void toggleOverlayVisibility();
+    if (message.command === "applySiteSettings") {
+      settings = setSiteSettings(settings, window.location.href, { autoTranslate: message.autoTranslate === true });
+      if (message.autoTranslate === true) void translatePage(false);
+      else void cancelCurrentQueue("auto-off");
+    }
+    if (message.command === "applyOverlayAppearance") {
+      settings = { ...settings, overlayAppearance: message.appearance ? { ...settings.overlayAppearance, ...message.appearance } : settings.overlayAppearance };
+      renderer.setAppearance(settings.overlayAppearance);
+    }
+    if (message.command === "applyWidgetSettings") {
+      if (typeof message.floatingButtonEnabled === "boolean") setFloatingButtonEnabled(message.floatingButtonEnabled);
+      if (typeof message.progressWidgetEnabled === "boolean") void setProgressWidgetEnabled(message.progressWidgetEnabled);
+    }
+    return false;
   });
   return true;
 }
+
+
+
+
+

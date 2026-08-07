@@ -1,6 +1,6 @@
-import type { OverlayAppearance } from "../settings/settings.js";
+﻿import type { OverlayAppearance } from "../settings/settings.js";
 
-export type UmtContentCommandName = "translate" | "refresh" | "togglePause" | "clearPage" | "selectRegion" | "retranslate" | "retranslateVisible" | "cancelQueue" | "setOverlayVisibility" | "toggleOverlayVisibility" | "applyOverlayAppearance" | "applySiteSettings" | "applyWidgetSettings" | "getPageState" | "sampleOcrSelfTest";
+export type UmtContentCommandName = "translate" | "refresh" | "togglePause" | "clearPage" | "selectRegion" | "retranslate" | "retranslateVisible" | "cancelQueue" | "setOverlayVisibility" | "toggleOverlayVisibility" | "applyOverlayAppearance" | "applySiteSettings" | "applyWidgetSettings" | "sampleOcrSelfTest";
 
 export interface UmtContentCommand {
   source: "umt-popup" | "umt-page";
@@ -12,72 +12,10 @@ export interface UmtContentCommand {
   progressWidgetEnabled?: boolean;
 }
 
-export interface UmtPageQueueSnapshot {
-  total: number;
-  queued: number;
-  processing: number;
-  completed: number;
-  cached: number;
-  empty: number;
-  failed: number;
-  cancelled: number;
-  paused: boolean;
-}
-
-export interface UmtPageRuntimeSnapshot {
-  readerActive: boolean;
-  overlayVisible: boolean;
-  autoTranslate: boolean;
-  queue: UmtPageQueueSnapshot;
-}
-
-export interface UmtContentCommandSuccessResponse {
-  ok: true;
-  state: UmtPageRuntimeSnapshot;
-}
-
-export interface UmtContentCommandFailureResponse {
-  ok: false;
-  error: string;
-  state: UmtPageRuntimeSnapshot;
-}
-
-export type UmtContentCommandResponse = UmtContentCommandSuccessResponse | UmtContentCommandFailureResponse;
-
 export type UmtPageSampleSelfTestResponse =
   | { ok: true; status: "ok"; surfaceId?: string; surfaceIndex: number; regionCount: number; elapsedMs: number; providerProfile?: string }
   | { ok: false; status: "no-reader-page" | "no-surface" | "empty" | "failed"; detail: string; surfaceId?: string; surfaceIndex?: number; elapsedMs?: number; providerProfile?: string };
 
-export interface UmtFrameAuthorizationRequest {
-  source: "umt-content";
-  command: "authorizeEmbeddedFrame";
-}
-
-export interface UmtFrameAuthorizationResponse {
-  ok: boolean;
-  siteUrl?: string;
-  error?: string;
-}
-
-export interface UmtDispatchContentCommandRequest {
-  source: "umt-popup";
-  command: "dispatchContentCommand";
-  tabId: number;
-  message: UmtContentCommand;
-}
-
-export function isUmtFrameAuthorizationRequest(value: unknown): value is UmtFrameAuthorizationRequest {
-  if (!value || typeof value !== "object") return false;
-  const candidate = value as Partial<UmtFrameAuthorizationRequest>;
-  return candidate.source === "umt-content" && candidate.command === "authorizeEmbeddedFrame";
-}
-
-export function isUmtDispatchContentCommandRequest(value: unknown): value is UmtDispatchContentCommandRequest {
-  if (!value || typeof value !== "object") return false;
-  const candidate = value as Partial<UmtDispatchContentCommandRequest>;
-  return candidate.source === "umt-popup" && candidate.command === "dispatchContentCommand"
-    && typeof candidate.tabId === "number" && isUmtContentCommand(candidate.message);
-}
 export interface UmtCaptureVisibleTabRequest {
   source: "umt-content";
   command: "captureVisibleTab";
@@ -195,7 +133,6 @@ export function isUmtContentCommand(value: unknown): value is UmtContentCommand 
     candidate.command === "applyOverlayAppearance" ||
     candidate.command === "applySiteSettings" ||
     candidate.command === "applyWidgetSettings" ||
-    candidate.command === "getPageState" ||
     candidate.command === "sampleOcrSelfTest"
   );
 }
@@ -266,3 +203,6 @@ export function isUmtActivateSiteRequest(value: unknown): value is UmtActivateSi
     && typeof candidate.tabId === "number"
     && typeof candidate.url === "string";
 }
+
+
+

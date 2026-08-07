@@ -8,11 +8,10 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = resolve(__dirname, "../..");
 const extensionPath = resolve(root, "apps/extension/dist");
 const fixtureOrigin = "http://manga.test:47832";
-const embeddedReaderOrigin = "http://reader-frame.test:47832";
 
-function spawnFixtureServer(): ChildProcess {
-  const httpServer = resolve(root, "node_modules/http-server/bin/http-server");
-  return spawn(process.execPath, [httpServer, "tests/fixtures", "-p", "47832", "-a", "127.0.0.1", "--silent"], { cwd: root, stdio: "ignore" });
+function spawnProcess(command: string, args: string[]): ChildProcess {
+  if (process.platform === "win32") return spawn("cmd.exe", ["/d", "/s", "/c", command, ...args], { cwd: root, stdio: "ignore" });
+  return spawn(command, args, { cwd: root, stdio: "ignore" });
 }
 
 async function launchContext(): Promise<BrowserContext> {
@@ -21,7 +20,7 @@ async function launchContext(): Promise<BrowserContext> {
     args: [
       `--disable-extensions-except=${extensionPath}`,
       `--load-extension=${extensionPath}`,
-      "--host-resolver-rules=MAP manga.test 127.0.0.1, MAP reader-frame.test 127.0.0.1",
+      "--host-resolver-rules=MAP manga.test 127.0.0.1",
     ],
   });
 }
@@ -33,14 +32,14 @@ async function activateCurrentPage(context: BrowserContext, page: Page): Promise
     const tab = tabs.find((item) => item.url === url) ?? tabs[0];
     if (!tab?.id) return { ok: false, error: "fixture tab not found" };
     await chrome.storage.sync.set({ enabledSites: { "manga.test": true } });
-    const injected = await chrome.scripting.executeScript({ target: { tabId: tab.id, allFrames: true }, files: ["content.js"] });
+    const injected = await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["content.js"] });
     return { ok: true, injectedLength: injected.length, tabUrl: tab.url };
   }, page.url());
   expect(result.ok).toBe(true);
 }
 
 test("loaded extension stays inactive until the manga site is explicitly enabled", async () => {
-  const staticServer = spawnFixtureServer();
+  const staticServer = spawnProcess("pnpm", ["exec", "http-server", "tests/fixtures", "-p", "47832", "-a", "127.0.0.1", "--silent"]);
   const context = await launchContext();
   try {
     const page = await context.newPage();
@@ -53,8 +52,7 @@ test("loaded extension stays inactive until the manga site is explicitly enabled
 
     await expect(page.locator("[data-umt-panel]")).toBeVisible({ timeout: 10000 });
     await expect(page.locator("[data-umt-chapter-progress='true']")).toBeVisible();
-    // The generic reader detector now exposes the regular image plus the exportable canvas page.
-    await expect(page.locator("[data-umt-surface-button]")).toHaveCount(2);
+    await expect(page.locator("[data-umt-surface-button]")).toHaveCount(1);
   } finally {
     await context.close();
     staticServer.kill();
@@ -62,7 +60,7 @@ test("loaded extension stays inactive until the manga site is explicitly enabled
 });
 
 test("enabled extension mounts controls for dynamically appended manga images", async () => {
-  const staticServer = spawnFixtureServer();
+  const staticServer = spawnProcess("pnpm", ["exec", "http-server", "tests/fixtures", "-p", "47832", "-a", "127.0.0.1", "--silent"]);
   const context = await launchContext();
   try {
     const page = await context.newPage();
@@ -75,66 +73,6 @@ test("enabled extension mounts controls for dynamically appended manga images", 
     await expect(page.locator(".reader img.page-image")).toHaveCount(1, { timeout: 5000 });
     await expect(page.locator("[data-umt-panel]")).toBeVisible({ timeout: 10000 });
     await expect(page.locator("[data-umt-surface-button]")).toHaveCount(1);
-  } finally {
-    await context.close();
-    staticServer.kill();
-  }
-});
-
-test("enabled top-level sites activate a cross-origin embedded reader frame", async () => {
-  const staticServer = spawnFixtureServer();
-  const context = await launchContext();
-  try {
-    const page = await context.newPage();
-    await page.goto(`${fixtureOrigin}/iframe-reader.html`);
-    await expect(page.locator("iframe")).toHaveCount(1);
-    await expect.poll(() => page.frames().some((frame) => frame.url().startsWith(embeddedReaderOrigin))).toBe(true);
-
-    await activateCurrentPage(context, page);
-
-    const readerFrame = page.frames().find((frame) => frame.url().startsWith(embeddedReaderOrigin));
-    expect(readerFrame).toBeDefined();
-    await expect(readerFrame!.locator("[data-umt-surface-button]")).toHaveCount(1, { timeout: 10000 });
-    await expect(page.locator("[data-umt-surface-button]")).toHaveCount(0);
-
-    const worker = context.serviceWorkers()[0] ?? await context.waitForEvent("serviceworker", { timeout: 10000 });
-    const tabId = await worker.evaluate(async (url) => {
-      const tab = (await chrome.tabs.query({ url: `${new URL(url).origin}/*` }))[0];
-      return tab?.id;
-    }, page.url());
-    expect(tabId).toBeTruthy();
-    const extensionId = new URL(worker.url()).host;
-    const popup = await context.newPage();
-    await popup.goto(`chrome-extension://${extensionId}/popup.html`);
-    const routed = await popup.evaluate(async (currentTabId) => {
-      return await chrome.runtime.sendMessage({
-        source: "umt-popup",
-        command: "dispatchContentCommand",
-        tabId: currentTabId,
-        message: { source: "umt-popup", command: "getPageState" },
-      });
-    }, tabId);
-    expect(routed).toMatchObject({ ok: true, state: { readerActive: true, queue: { total: 1 } } });
-  } finally {
-    await context.close();
-    staticServer.kill();
-  }
-});
-
-test("enabled sites activate an embedded reader that is added after initial page load", async () => {
-  const staticServer = spawnFixtureServer();
-  const context = await launchContext();
-  try {
-    const page = await context.newPage();
-    await page.goto(`${fixtureOrigin}/dynamic-iframe-reader.html`);
-    await activateCurrentPage(context, page);
-    await expect(page.locator("iframe")).toHaveCount(0);
-
-    await page.getByRole("button", { name: "Open reader" }).click();
-    await expect.poll(() => page.frames().some((frame) => frame.url().startsWith(embeddedReaderOrigin))).toBe(true);
-    const readerFrame = page.frames().find((frame) => frame.url().startsWith(embeddedReaderOrigin));
-    expect(readerFrame).toBeDefined();
-    await expect(readerFrame!.locator("[data-umt-surface-button]")).toHaveCount(1, { timeout: 10000 });
   } finally {
     await context.close();
     staticServer.kill();
