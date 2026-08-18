@@ -1,4 +1,4 @@
-﻿import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildServer } from "./api/server.js";
@@ -23,6 +23,10 @@ const db = openDatabase(resolve(dataDir, "cache.sqlite"));
 const surfaceCache = new SurfaceCache(db);
 const ocrCache = new OcrCache(db);
 const manualOverrideStore = new ManualOverrideStore(db);
+// Bound cache growth: drop entries untouched for 30 days at startup.
+const CACHE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+surfaceCache.clearExpired(CACHE_MAX_AGE_MS);
+ocrCache.clearExpired(CACHE_MAX_AGE_MS);
 const visionProvider = createVisionProvider(config);
 const eventBus = new EventBus();
 const diagnosticsPath = resolve(dataDir, "diagnostics.log");
@@ -40,7 +44,7 @@ const app = await buildServer({
   updateConfig: async (patch) => {
     config = mergeConfigPatch(config, patch);
     const currentEnvText = existsSync(envPath) ? readFileSync(envPath, "utf8") : "";
-    writeFileSync(envPath, upsertConfigEnvText(currentEnvText, config), "utf8");
+    writeFileSync(envPath, upsertConfigEnvText(currentEnvText, config), { encoding: "utf8", mode: 0o600 });
     const nextProvider = createVisionProvider(config);
     return {
       ...serverState(config, nextProvider),

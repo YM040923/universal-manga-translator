@@ -1,4 +1,4 @@
-﻿import {
+import {
   DEFAULT_SETTINGS,
   enableSiteForUrl,
   isSiteEnabled,
@@ -92,10 +92,40 @@ export async function mountPopupPage(root: HTMLElement, deps: PopupDeps = {}): P
     render();
   };
 
-  const persist = async (next: ExtensionSettings): Promise<void> => {
+  let persistChain: Promise<void> = Promise.resolve();
+  let debounceTimer: ReturnType<typeof setTimeout> | undefined;
+  let debouncedSnapshot: ExtensionSettings | null = null;
+
+  const enqueueWrite = (snapshot: ExtensionSettings): Promise<void> => {
+    const write = persistChain
+      .then(() => saveSettings(snapshot, storage))
+      .then((saved) => { settings = saved; })
+      .catch((error: unknown) => { selfTestSummary = `保存失败：${formatError(error)}`; render(); });
+    persistChain = write;
+    return write;
+  };
+
+  /** Immediate serialized write for discrete controls (toggles, buttons, saves). */
+  const persist = (next: ExtensionSettings): Promise<void> => {
     settings = next;
     render();
-    settings = await saveSettings(settings, storage);
+    return enqueueWrite(next);
+  };
+
+  /** Debounced serialized write for high-frequency inputs (slider drags) so chrome.storage.sync's write quota is not exhausted. */
+  const persistDebounced = (next: ExtensionSettings): Promise<void> => {
+    settings = next;
+    render();
+    debouncedSnapshot = next;
+    if (debounceTimer === undefined) {
+      debounceTimer = setTimeout(() => {
+        debounceTimer = undefined;
+        const snapshot = debouncedSnapshot;
+        debouncedSnapshot = null;
+        if (snapshot) void enqueueWrite(snapshot);
+      }, 150);
+    }
+    return persistChain;
   };
 
   const sendCommand = async (command: UmtContentCommandName, extra: Partial<UmtContentCommand> = {}): Promise<void> => {
@@ -104,10 +134,19 @@ export async function mountPopupPage(root: HTMLElement, deps: PopupDeps = {}): P
     try {
       await (deps.sendMessageToTab ?? defaultSendMessageToTab)(tab.id, message);
     } catch (error) {
-      if (!tab.url) throw error;
-      const response = await (deps.activateSite ?? defaultActivateSite)(tab.id, tab.url);
-      if (!response.ok) throw error;
-      await (deps.sendMessageToTab ?? defaultSendMessageToTab)(tab.id, message);
+      if (!tab.url) {
+        selfTestSummary = `命令发送失败：${formatError(error)}`;
+        render();
+        return;
+      }
+      try {
+        const response = await (deps.activateSite ?? defaultActivateSite)(tab.id, tab.url);
+        if (!response.ok) throw error;
+        await (deps.sendMessageToTab ?? defaultSendMessageToTab)(tab.id, message);
+      } catch {
+        selfTestSummary = `命令发送失败：${formatError(error)}`;
+        render();
+      }
     }
   };
 
@@ -125,9 +164,11 @@ export async function mountPopupPage(root: HTMLElement, deps: PopupDeps = {}): P
     root.querySelector<HTMLButtonElement>("[data-action='save-api-settings']")?.addEventListener("click", () => {
       const next = readDirectConfigFromDom(root, settings);
       backendOnline = null;
-      selfTestSummary = "已保存 API 设置";
-      void persist(next);
-      if (next.runMode === "backend") void refreshBackendStatus();
+      void persist(next).then(() => {
+        selfTestSummary = "已保存 API 设置";
+        render();
+        if (next.runMode === "backend") void refreshBackendStatus();
+      });
     });
     root.querySelector<HTMLButtonElement>("[data-action='self-test']")?.addEventListener("click", () => {
       selfTestSummary = "正在自检…";
@@ -185,7 +226,7 @@ export async function mountPopupPage(root: HTMLElement, deps: PopupDeps = {}): P
               : field === "overlay-ellipse-y" ? "ellipseY"
                 : "opacity";
         const next = normalizeSettings({ ...settings, overlayAppearance: { ...settings.overlayAppearance, [key]: Number((event.currentTarget as HTMLInputElement).value) } });
-        void persist(next);
+        void persistDebounced(next);
         void sendCommand("applyOverlayAppearance", { appearance: next.overlayAppearance });
       });
     }
@@ -351,6 +392,8 @@ async function defaultSendMessageToTab(tabId: number, message: UmtContentCommand
 async function defaultActivateSite(tabId: number, url: string): Promise<UmtActivateSiteResponse> { return await chrome.runtime.sendMessage({ source: "umt-popup", command: "activateSite", tabId, url }); }
 function escapeHtml(value: string): string { return value.replace(/[&<>"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;" })[char] ?? char); }
 function escapeAttr(value: string): string { return escapeHtml(value); }
+
+function formatError(error: unknown): string { return error instanceof Error ? error.message : String(error); }
 
 if (typeof document !== "undefined") {
   document.addEventListener("DOMContentLoaded", () => {

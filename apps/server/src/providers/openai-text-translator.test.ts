@@ -1,4 +1,4 @@
-﻿import test from "node:test";
+import test from "node:test";
 import assert from "node:assert/strict";
 import { OpenAITextTranslator, parseTranslationResults } from "./openai-text-translator.js";
 
@@ -27,9 +27,9 @@ test("OpenAITextTranslator sends text-only chat completion request", async () =>
 
     assert.equal(body.model, "gpt-test");
     assert.equal(body.messages[0].role, "user");
-    assert.match(body.messages[0].content, /Translate the following OCR text/);
+    assert.match(body.messages[0].content, /Translate the OCR text below/);
     assert.match(body.messages[0].content, /proper names/i);
-    assert.match(body.messages[0].content, /all-caps/i);
+    assert.match(body.messages[0].content, /half-translated names/i);
     assert.deepEqual(results, [{ id: "r1", translatedText: "你好" }]);
   } finally {
     globalThis.fetch = originalFetch;
@@ -106,11 +106,10 @@ test("OpenAITextTranslator uses a manga localization prompt with name guidance",
     const translator = new OpenAITextTranslator({ baseUrl: "https://api.example.test/v1", apiKey: "key", model: "gpt-test" });
     await translator.translate([{ id: "r1", text: "CLARK" }], "zh-CN", "auto");
 
-    assert.match(prompt, /manga.*localization/i);
-    assert.match(prompt, /speech bubbles/i);
-    assert.match(prompt, /natural Chinese/i);
+    assert.match(prompt, /professional manga localizer/i);
+    assert.match(prompt, /natural, colloquial/i);
     assert.match(prompt, /proper names/i);
-    assert.match(prompt, /do not translate.*names.*literally/i);
+    assert.match(prompt, /Never output half-translated names/i);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -129,8 +128,8 @@ test("OpenAITextTranslator can add retranslation improvement guidance", async ()
     await translator.translate([{ id: "r1", text: "Retry this" }], "zh-CN", "auto", { retranslate: true });
 
     assert.match(prompt, /retranslation/i);
-    assert.match(prompt, /previous result may be poor/i);
-    assert.match(prompt, /improve/i);
+    assert.match(prompt, /previous version was poor/i);
+    assert.match(prompt, /rewrite the Chinese/i);
   } finally {
     globalThis.fetch = originalFetch;
   }

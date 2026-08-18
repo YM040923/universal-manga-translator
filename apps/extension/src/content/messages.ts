@@ -1,4 +1,4 @@
-﻿import type { OverlayAppearance } from "../settings/settings.js";
+import type { OverlayAppearance } from "../settings/settings.js";
 
 export type UmtContentCommandName = "translate" | "refresh" | "togglePause" | "clearPage" | "selectRegion" | "retranslate" | "retranslateVisible" | "cancelQueue" | "setOverlayVisibility" | "toggleOverlayVisibility" | "applyOverlayAppearance" | "applySiteSettings" | "applyWidgetSettings" | "sampleOcrSelfTest";
 
@@ -146,7 +146,39 @@ export function isUmtCaptureVisibleTabRequest(value: unknown): value is UmtCaptu
 export function isUmtFetchImageDataRequest(value: unknown): value is UmtFetchImageDataRequest {
   if (!value || typeof value !== "object") return false;
   const candidate = value as Partial<UmtFetchImageDataRequest>;
-  return candidate.source === "umt-content" && candidate.command === "fetchImageData" && typeof candidate.url === "string" && candidate.url.length > 0;
+  return candidate.source === "umt-content" && candidate.command === "fetchImageData" && typeof candidate.url === "string" && candidate.url.length > 0 && fetchImageUrlPolicyError(candidate.url) === "";
+}
+
+/**
+ * Policy for fetching manga page images from the background worker. Public
+ * CDNs and self-hosted LAN readers (NAS) are legitimate; loopback, link-local
+ * (cloud metadata) and reserved ranges are not, and would turn the extension
+ * into an SSRF probe on enabled sites.
+ */
+export function fetchImageUrlPolicyError(value: string): string {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "https:" && url.protocol !== "http:") return "Image URL must use http(s).";
+    if (url.username || url.password) return "Image URL must not contain credentials.";
+    if (isBlockedNetworkHost(url.hostname)) return "Image URL host is not allowed.";
+    return "";
+  } catch {
+    return "Image URL is invalid.";
+  }
+}
+
+function isBlockedNetworkHost(hostname: string): boolean {
+  const host = hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  if (host === "localhost" || host === "::1" || host === "0.0.0.0") return true;
+  if (!/^\d+\.\d+\.\d+\.\d+$/.test(host)) return false;
+  const parts = host.split(".").map(Number);
+  const a = parts[0] ?? 0;
+  const b = parts[1] ?? 0;
+  if (a === 127) return true; // loopback
+  if (a === 169 && b === 254) return true; // link-local (cloud metadata)
+  if (a === 100 && b >= 64 && b <= 127) return true; // CGNAT
+  if (a === 0 || a >= 224) return true; // reserved / multicast / broadcast
+  return false;
 }
 
 export function isUmtBackendHttpRequest(value: unknown): value is UmtBackendHttpRequest {

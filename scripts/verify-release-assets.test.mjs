@@ -258,10 +258,11 @@ function runVerifier(zipPath, shaPath, buildInfoPath) {
 }
 
 function writeCompleteMinimalExtension(source, iconDir) {
+  const extensionVersion = JSON.parse(readFileSync(path.join(root, "apps", "extension", "public", "manifest.json"), "utf8")).version;
   writeFileSync(path.join(source, "manifest.json"), JSON.stringify({
     manifest_version: 3,
     name: "Test Extension",
-    version: "0.0.0",
+    version: extensionVersion,
     icons: {
       16: "icons/icon-16.png",
     },

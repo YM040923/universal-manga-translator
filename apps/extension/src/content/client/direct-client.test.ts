@@ -1,4 +1,4 @@
-﻿import test from "node:test";
+import test from "node:test";
 import assert from "node:assert/strict";
 import type { SurfaceTask } from "@umt/shared/types";
 import { DirectClient } from "./direct-client.js";
@@ -385,7 +385,7 @@ test("DirectClient carries remembered term candidates into later prompts", async
   await client.submit(task({ surfaceId: "s1", imageData: "data:image/jpeg;base64,dGVybXMx" }));
   await client.submit(task({ surfaceId: "s2", imageData: "data:image/jpeg;base64,dGVybXMy" }));
 
-  assert.match(prompts[1] ?? "", /Auto-detected term candidates/i);
+  assert.match(prompts[1] ?? "", /Likely proper names on this page/i);
   assert.match(prompts[1] ?? "", /Heavenly Demon/);
   assert.match(prompts[1] ?? "", /Clark/);
 });

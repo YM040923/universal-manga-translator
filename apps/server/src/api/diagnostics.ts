@@ -1,6 +1,8 @@
-﻿import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, truncateSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, truncateSync } from "node:fs";
 import { dirname } from "node:path";
 import type { JobStatus, Size } from "@umt/shared";
+
+const MAX_LOG_BYTES = 5 * 1024 * 1024;
 
 export interface SubmitDiagnosticsRecord {
   surfaceId: string;
@@ -58,7 +60,23 @@ export class FileDiagnosticsWriter implements DiagnosticsWriter {
       tileCount: record.tileCount,
       note: sanitizeNote(record.note),
     };
+    this.rotateIfNeeded();
     appendFileSync(this.path, `${JSON.stringify(safe)}\n`, "utf8");
+  }
+
+  private rotateIfNeeded(): void {
+    try {
+      if (statSync(this.path).size <= MAX_LOG_BYTES) return;
+    } catch {
+      return; // file does not exist yet
+    }
+    try {
+      const backup = `${this.path}.1`;
+      if (existsSync(backup)) rmSync(backup);
+      renameSync(this.path, backup);
+    } catch {
+      // Rotation is best-effort; keep appending to the current file.
+    }
   }
 }
 

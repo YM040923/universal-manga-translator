@@ -1,4 +1,4 @@
-﻿import { spawn, execFile, type ChildProcess, type SpawnOptions } from "node:child_process";
+import { spawn, execFile, type ChildProcess, type SpawnOptions } from "node:child_process";
 import { cpSync, existsSync, symlinkSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -94,9 +94,15 @@ export function createBackendManager(deps: BackendManagerDeps) {
 
   async function cleanupExistingBackend(): Promise<CleanupBackendResult> {
     stopOwnedBackend();
-    const port = portFromBackendUrl(deps.backendUrl);
-    const result = await (deps.killPortProcess ?? defaultKillPortProcess)(port);
-    return { ...result, status: await getStatus() };
+    const before = await getStatus();
+    // Only kill the port when it is provably our backend (health check with a
+    // provider string); never kill an unrelated process on that port.
+    if (before.running) {
+      const port = portFromBackendUrl(deps.backendUrl);
+      const result = await (deps.killPortProcess ?? defaultKillPortProcess)(port);
+      return { ...result, status: await getStatus() };
+    }
+    return { killed: false, pids: [], status: before };
   }
 
   function stopOwnedBackend(): boolean {
@@ -145,7 +151,9 @@ export async function defaultFetchHealth(backendUrl: string): Promise<BackendHea
     const response = await fetch(`${backendUrl.replace(/\/$/, "")}/health`, { cache: "no-store" });
     if (!response.ok) return { ok: false };
     const body = await response.json() as BackendHealth;
-    const health: BackendHealth = { ok: body.ok === true };
+    // The UMT backend always reports a provider string; anything else on the
+    // port is not our backend.
+    const health: BackendHealth = { ok: body.ok === true && typeof body.provider === "string" };
     if (body.provider) health.provider = body.provider;
     if (body.targetLanguage) health.targetLanguage = body.targetLanguage;
     return health;

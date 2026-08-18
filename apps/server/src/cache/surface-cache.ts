@@ -1,4 +1,4 @@
-﻿import type { SurfaceResult } from "@umt/shared";
+import type { SurfaceResult } from "@umt/shared";
 import type { UmtDatabase } from "./db.js";
 
 export interface SurfaceCacheStats {
@@ -35,5 +35,11 @@ export class SurfaceCache {
   clear(): SurfaceCacheClearResult {
     const result = this.db.prepare("DELETE FROM surface_results").run();
     return { deleted: result.changes };
+  }
+
+  clearExpired(maxAgeMs: number): number {
+    const cutoff = Date.now() - Math.max(0, maxAgeMs);
+    const result = this.db.prepare("DELETE FROM surface_results WHERE updated_at < ?").run(cutoff);
+    return result.changes;
   }
 }

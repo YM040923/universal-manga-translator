@@ -1,8 +1,7 @@
-﻿import test from "node:test";
+import test from "node:test";
 import assert from "node:assert/strict";
 import { buildServer } from "./server.js";
 import { EventBus } from "./events.js";
-
 const task = {
   surfaceId: "surface-events",
   pageUrl: "https://example.test/chapter/1",
@@ -38,6 +37,16 @@ test("websocket receives submit lifecycle events", async () => {
     ws?.close();
     await app.close();
   }
+});
+
+test("a throwing listener does not break the event chain for other listeners", () => {
+  const eventBus = new EventBus();
+  const received: string[] = [];
+  eventBus.subscribe(() => { throw new Error("listener boom"); });
+  eventBus.subscribe((event) => { received.push(event.type); });
+
+  assert.doesNotThrow(() => eventBus.publish({ type: "job.queued", surfaceId: "s1" }));
+  assert.deepEqual(received, ["job.queued"]);
 });
 
 

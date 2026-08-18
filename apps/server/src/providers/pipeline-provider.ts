@@ -1,6 +1,6 @@
 import type { Rect, TextRegion } from "@umt/shared";
 import type { OcrCacheStore } from "../cache/ocr-cache.js";
-import type { ApiKeyPoolStatus } from "./api-key-pool.js";
+import type { ApiKeyPoolStatus } from "@umt/core";
 import type { ProviderInput, VisionProvider } from "./provider.js";
 
 export interface OcrRegion {
@@ -28,6 +28,8 @@ export interface TextTranslationResult {
 
 export interface TextTranslationOptions {
   retranslate?: boolean;
+  /** External cancellation signal (user cancel); aborts in-flight requests. */
+  signal?: AbortSignal;
 }
 
 export interface TextTranslationProvider {
@@ -62,11 +64,13 @@ export class OcrThenTranslateProvider implements VisionProvider {
   async process(input: ProviderInput): Promise<TextRegion[]> {
     const ocrRegions = (await this.readOcrRegions(input)).map((region) => classifyRegionKind(region, input.width, input.height));
     const textBlocks = groupOcrRegionsIntoTextBlocks(ocrRegions);
+    const translationOptions: TextTranslationOptions = { retranslate: input.forceRetranslate === true };
+    if (input.signal) translationOptions.signal = input.signal;
     const translated = await this.options.translator.translate(
       textBlocks.map((region) => ({ id: region.id, text: region.sourceText })),
       input.task.targetLanguage,
       input.task.sourceLanguage,
-      { retranslate: input.forceRetranslate === true },
+      translationOptions,
     );
     const translatedById = new Map(translated.map((item) => [item.id, item.translatedText]));
     return textBlocks.map((region) => ({

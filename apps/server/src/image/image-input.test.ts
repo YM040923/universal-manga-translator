@@ -1,7 +1,7 @@
-﻿import test from "node:test";
+import test from "node:test";
 import assert from "node:assert/strict";
 import type { SurfaceTask } from "@umt/shared";
-import { readTaskImage } from "./image-input.js";
+import { assertAllowedImageUrl, readTaskImage } from "./image-input.js";
 
 const baseTask: SurfaceTask = {
   surfaceId: "s1",
@@ -49,4 +49,23 @@ test("readTaskImage retries transient image url fetch failures", async () => {
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test("assertAllowedImageUrl rejects SSRF-prone URLs", () => {
+  assert.throws(() => assertAllowedImageUrl("file:///etc/passwd"), /must use http or https/);
+  assert.throws(() => assertAllowedImageUrl("ftp://cdn.example.test/1.jpg"), /must use http or https/);
+  assert.throws(() => assertAllowedImageUrl("https://user:pass@cdn.example.test/1.jpg"), /must not contain credentials/);
+  assert.throws(() => assertAllowedImageUrl("http://169.254.169.254/latest/meta-data/"), /host is not allowed/);
+  assert.throws(() => assertAllowedImageUrl("http://127.0.0.1:9000/image.png"), /host is not allowed/);
+  assert.throws(() => assertAllowedImageUrl("http://localhost/image.png"), /host is not allowed/);
+  assert.throws(() => assertAllowedImageUrl("http://10.0.0.5/image.png"), /host is not allowed/);
+  assert.throws(() => assertAllowedImageUrl("http://192.168.1.10/image.png"), /host is not allowed/);
+  assert.throws(() => assertAllowedImageUrl("http://172.20.0.1/image.png"), /host is not allowed/);
+  assert.throws(() => assertAllowedImageUrl("http://100.64.0.1/image.png"), /host is not allowed/);
+  assert.throws(() => assertAllowedImageUrl("http://0.0.0.0/image.png"), /host is not allowed/);
+});
+
+test("assertAllowedImageUrl allows public CDN urls", () => {
+  assert.doesNotThrow(() => assertAllowedImageUrl("https://cdn.example.test/chapter/1.webp"));
+  assert.doesNotThrow(() => assertAllowedImageUrl("http://example.test/image.png"));
 });

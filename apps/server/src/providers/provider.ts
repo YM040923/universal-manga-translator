@@ -1,5 +1,5 @@
 import type { SurfaceTask, TextRegion } from "@umt/shared";
-import type { ApiKeyPoolStatus } from "./api-key-pool.js";
+import type { ApiKeyPoolStatus } from "@umt/core";
 
 export interface ProviderInput {
   task: SurfaceTask;
@@ -8,6 +8,8 @@ export interface ProviderInput {
   width: number;
   height: number;
   forceRetranslate?: boolean;
+  /** External cancellation signal (user cancel); aborts in-flight OCR/LLM calls. */
+  signal?: AbortSignal;
 }
 
 export interface VisionProvider {

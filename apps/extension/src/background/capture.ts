@@ -1,4 +1,4 @@
-﻿import { isUmtBackendHttpRequest, isUmtCaptureVisibleTabRequest, isUmtDirectHttpRequest, isUmtFetchImageDataRequest, type UmtBackendHttpRequest, type UmtBackendHttpResponse, type UmtCaptureVisibleTabRequest, type UmtCaptureVisibleTabResponse, type UmtDirectHttpFormField, type UmtDirectHttpRequest, type UmtDirectHttpResponse, type UmtFetchImageDataRequest, type UmtFetchImageDataResponse } from "../content/messages.js";
+import { isUmtBackendHttpRequest, isUmtCaptureVisibleTabRequest, isUmtDirectHttpRequest, isUmtFetchImageDataRequest, type UmtBackendHttpRequest, type UmtBackendHttpResponse, type UmtCaptureVisibleTabRequest, type UmtCaptureVisibleTabResponse, type UmtDirectHttpFormField, type UmtDirectHttpRequest, type UmtDirectHttpResponse, type UmtFetchImageDataRequest, type UmtFetchImageDataResponse } from "../content/messages.js";
 
 export type CaptureVisibleTabFn = (windowId: number, options: chrome.tabs.CaptureVisibleTabOptions) => Promise<string>;
 export type FetchImageFn = (url: string, init?: RequestInit) => Promise<Response>;
@@ -18,6 +18,8 @@ export async function handleCaptureVisibleTabMessage(
   }
 }
 
+const MAX_IMAGE_FETCH_BYTES = 32 * 1024 * 1024;
+
 export async function handleFetchImageDataMessage(
   message: UmtFetchImageDataRequest,
   fetchImage: FetchImageFn = fetch,
@@ -33,7 +35,14 @@ export async function handleFetchImageDataMessage(
     if (!response.ok) throw new Error(`Image fetch failed: ${response.status} ${message.url}`);
     const contentType = response.headers.get("content-type")?.split(";", 1)[0] || mimeFromUrl(message.url) || "image/png";
     if (!contentType.startsWith("image/")) throw new Error(`URL did not return an image: ${contentType}`);
+    const declaredLength = Number(response.headers.get("content-length") ?? 0);
+    if (Number.isFinite(declaredLength) && declaredLength > MAX_IMAGE_FETCH_BYTES) {
+      throw new Error(`Image exceeds the ${MAX_IMAGE_FETCH_BYTES / 1024 / 1024}MB limit.`);
+    }
     const bytes = new Uint8Array(await response.arrayBuffer());
+    if (bytes.length > MAX_IMAGE_FETCH_BYTES) {
+      throw new Error(`Image exceeds the ${MAX_IMAGE_FETCH_BYTES / 1024 / 1024}MB limit.`);
+    }
     const imageData = `data:${contentType};base64,${bytesToBase64(bytes)}`;
     return { ok: true, imageData, contentType };
   } catch (error) {

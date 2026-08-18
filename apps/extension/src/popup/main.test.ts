@@ -1,4 +1,4 @@
-﻿import test from "node:test";
+import test from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
 import { mountPopupPage, type PopupDeps } from "./main.js";
@@ -136,7 +136,7 @@ test("popup widget switches persist and send real page commands", async () => {
   floating.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
   progress.checked = false;
   progress.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
-  await Promise.resolve();
+  await new Promise((resolve) => setTimeout(resolve, 0));
 
   assert.equal(storage.current.floatingButtonEnabled, false);
   assert.equal(storage.current.progressWidgetEnabled, false);
@@ -183,7 +183,7 @@ test("popup persists overlay appearance controls for the extension renderer", as
   font.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
   ellipseY.value = "40";
   ellipseY.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
-  await Promise.resolve();
+  await new Promise((resolve) => setTimeout(resolve, 170));
 
   assert.equal(storage.current.overlayAppearance.maskShape, "rounded");
   assert.equal(storage.current.overlayAppearance.fontScale, 1.2);

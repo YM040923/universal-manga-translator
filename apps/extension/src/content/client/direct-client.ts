@@ -40,6 +40,7 @@ export class DirectClient implements TranslatorClient {
   private readonly manualOverrides: ExtensionManualOverrideStore;
   private readonly ocrClient: GenericNetworkOcrClient;
   private readonly chapterMemory: ChapterTranslationMemory;
+  private cancelController: AbortController | null = null;
 
   constructor(private readonly settings: DirectClientSettings) {
     this.fetchImpl = settings.__testFetch ?? createExtensionProxyFetch();
@@ -118,6 +119,10 @@ export class DirectClient implements TranslatorClient {
   }
 
   async cancelJobSession(jobSessionId: string): Promise<ApiResponse<CancelJobSessionResponse>> {
+    // Abort in-flight OCR/LLM calls so cancelled work is not billed; a fresh
+    // controller lets later submissions proceed normally.
+    this.cancelController?.abort();
+    this.cancelController = null;
     return { ok: true, jobSessionId, status: "cancelled", cancellable: false };
   }
 
@@ -161,6 +166,7 @@ export class DirectClient implements TranslatorClient {
         translator: this.createTranslator(),
         ocrCache: this.ocrCache,
       });
+      this.cancelController ??= new AbortController();
       const result = await pipeline.process({
         imageBytes,
         imageHash,
@@ -173,7 +179,11 @@ export class DirectClient implements TranslatorClient {
         chapterContext,
         previousTranslations,
         termCandidates,
+        signal: this.cancelController.signal,
       });
+      if (this.cancelController.signal.aborted) {
+        return { ok: true, surfaceId: task.surfaceId, status: "cancelled" };
+      }
       const regions = result.regions.map((region) => toOverlayRegion(region));
       const rawSurfaceResult: SurfaceResult = {
         surfaceId: task.surfaceId,
@@ -188,6 +198,9 @@ export class DirectClient implements TranslatorClient {
       this.chapterMemory.remember(imageHash, surfaceResult);
       return { ok: true, surfaceId: task.surfaceId, status: surfaceResult.status, result: surfaceResult };
     } catch (error) {
+      if (this.cancelController?.signal.aborted) {
+        return { ok: true, surfaceId: task.surfaceId, status: "cancelled" };
+      }
       return { ok: false, error: error instanceof Error ? error.message : String(error) };
     }
   }

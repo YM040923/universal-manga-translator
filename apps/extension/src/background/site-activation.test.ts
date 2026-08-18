@@ -14,7 +14,7 @@ test("handleActivateSiteMessage enables the primary domain and injects content s
 
   assert.deepEqual(response, { ok: true });
   assert.equal(storage.current.enabledSites["asurascans.com"], true);
-  assert.deepEqual(injected, [{ tabId: 7, files: ["content.js"] }]);
+  assert.deepEqual(injected, [{ tabId: 7, files: ["content.js"], allFrames: true }]);
 });
 
 test("maybeInjectContentScriptForTab injects only enabled http tabs", async () => {
@@ -25,7 +25,7 @@ test("maybeInjectContentScriptForTab injects only enabled http tabs", async () =
   await maybeInjectContentScriptForTab(6, "https://other.example/a", { storage, executeScript: async (details: { tabId: number; files: string[] }) => { injected.push(details); } });
   await maybeInjectContentScriptForTab(7, "chrome://extensions", { storage, executeScript: async (details: { tabId: number; files: string[] }) => { injected.push(details); } });
 
-  assert.deepEqual(injected, [{ tabId: 5, files: ["content.js"] }]);
+  assert.deepEqual(injected, [{ tabId: 5, files: ["content.js"], allFrames: true }]);
 });
 
 test("injectContentScriptsIntoEnabledTabs restores enabled manga tabs after extension reload", async () => {
@@ -44,8 +44,8 @@ test("injectContentScriptsIntoEnabledTabs restores enabled manga tabs after exte
   });
 
   assert.deepEqual(injected, [
-    { tabId: 1, files: ["content.js"] },
-    { tabId: 2, files: ["content.js"] },
+    { tabId: 1, files: ["content.js"], allFrames: true },
+    { tabId: 2, files: ["content.js"], allFrames: true },
   ]);
 });
 

@@ -4,7 +4,9 @@ Universal Manga Translator 的主产品形态是纯 Chrome 插件。插件需要
 
 ## API Key 存在哪里
 
-纯插件模式下，OCR API Key 和翻译 API Key 保存在浏览器扩展的 `storage` 中。项目作者不会接收、托管或中转你的 key。
+纯插件模式下，OCR API Key 和翻译 API Key 保存在浏览器扩展的 `chrome.storage.local` 中——只存在于本机浏览器配置文件，**不会**同步到 Google 账号、不会上传到云端、不会跨设备复制。项目作者不会接收、托管或中转你的 key。
+
+普通偏好（目标语言、遮罩外观、站点开关等）保存在 `chrome.storage.sync` 中，会随你的 Google 账号在多设备间同步；其中不包含任何 API Key。
 
 不要把带有个人 API Key 的浏览器配置文件、扩展数据目录或截图发给别人。提交 issue 时请不要粘贴完整 API Key，只保留前后几位用于区分即可，例如：
 

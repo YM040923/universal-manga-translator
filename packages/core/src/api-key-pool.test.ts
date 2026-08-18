@@ -39,3 +39,25 @@ test("ApiKeyPool returns null when every key is blocked", () => {
 
   assert.equal(pool.next(), null);
 });
+
+test("ApiKeyPool cools down rate-limited keys instead of blocking them forever", async () => {
+  const pool = new ApiKeyPool(["k1"]);
+  const first = pool.next()!;
+  pool.reportFailure(first, new Error("rate limit"), 15);
+
+  assert.equal(pool.next(), null);
+
+  await new Promise((resolve) => setTimeout(resolve, 25));
+  assert.equal(pool.next()?.value, "k1");
+  assert.equal(pool.status().keys[0]?.state, "ready");
+});
+
+test("ApiKeyPool success clears a cooldown immediately", () => {
+  const pool = new ApiKeyPool(["k1"]);
+  const first = pool.next()!;
+  pool.reportFailure(first, new Error("rate limit"), 60_000);
+
+  assert.equal(pool.next(), null);
+  pool.reportSuccess(first);
+  assert.equal(pool.next()?.value, "k1");
+});

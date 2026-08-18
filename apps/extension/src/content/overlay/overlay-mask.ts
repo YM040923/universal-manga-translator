@@ -1,7 +1,7 @@
 import { DEFAULT_SETTINGS, type OverlayAppearance } from "../../settings/settings.js";
 
 export function maskPaddingForBox(width: number, height: number, scale = 1): number {
-  return Math.max(1, Math.min(24, Math.round(Math.min(width, height) * 0.035 * scale)));
+  return Math.max(4, Math.min(24, Math.round(Math.min(width, height) * 0.045 * scale)));
 }
 
 export function maskStyleForRegion(kind: string, width = 0, height = 0, appearance: OverlayAppearance = DEFAULT_SETTINGS.overlayAppearance): { background: string; borderRadius: string; clipPath: string; textShadow: string } {
@@ -19,18 +19,31 @@ export function maskStyleForRegion(kind: string, width = 0, height = 0, appearan
   const aspect = width / Math.max(1, height);
   if (shape === "rounded") return { background: "rgb(255,255,255)", borderRadius: "18px", clipPath: "inset(0 round 18px)", textShadow: "none" };
   if (shape === "ellipse") return { background: "rgb(255,255,255)", borderRadius: "999px", clipPath: ellipseClip, textShadow: "none" };
-  if (kind === "dialogue" && aspect >= 2.35 && width >= 360) {
+  if (kind === "dialogue") {
+    // Wide text bands keep a shallow rounded band; other bubbles use a
+    // size-aware rounded rectangle, which matches manhwa/webtoon bubble
+    // shapes better than a forced ellipse. Users can pick "ellipse" in
+    // appearance settings for Japanese-style oval bubbles.
+    if (aspect >= 2.35 && width >= 360) {
+      return {
+        background: "rgb(255,255,255)",
+        borderRadius: "18px",
+        clipPath: "inset(0 round 18px)",
+        textShadow: "none",
+      };
+    }
+    const radius = Math.min(22, Math.max(10, Math.round(Math.min(width, height) * 0.1)));
     return {
       background: "rgb(255,255,255)",
-      borderRadius: "18px",
-      clipPath: "inset(0 round 18px)",
+      borderRadius: `${radius}px`,
+      clipPath: `inset(0 round ${radius}px)`,
       textShadow: "none",
     };
   }
   return {
     background: "rgb(255,255,255)",
-    borderRadius: "999px",
-    clipPath: kind === "dialogue" ? ellipseClip : "inset(0 round 14px)",
+    borderRadius: "14px",
+    clipPath: "inset(0 round 14px)",
     textShadow: "none",
   };
 }

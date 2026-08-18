@@ -10,6 +10,8 @@ export interface TextTranslationOptions {
   glossary?: Record<string, string>;
   chapterContext?: string;
   termCandidates?: string[];
+  /** External cancellation signal (e.g. user cancel); aborts in-flight requests. */
+  signal?: AbortSignal;
 }
 
 export interface TextTranslationResult {
@@ -28,8 +30,18 @@ export interface OpenAICompatibleTextTranslatorOptions {
   model: string;
   attempts?: number;
   retryDelayMs?: number;
+  timeoutMs?: number;
+  temperature?: number;
+  /** Maximum items per chat request. Larger batches degrade translation quality on long pages. */
+  maxItemsPerRequest?: number;
+  /** Send response_format json_object. Default true; falls back to plain JSON parsing when the provider rejects it. */
+  jsonMode?: boolean;
   fetch?: typeof fetch;
 }
+
+const DEFAULT_MAX_ITEMS_PER_REQUEST = 20;
+const DEFAULT_TEMPERATURE = 0.4;
+const DEFAULT_TIMEOUT_MS = 90000;
 
 export class OpenAICompatibleTextTranslator {
   readonly profile: string;
@@ -51,34 +63,86 @@ export class OpenAICompatibleTextTranslator {
 
   async translate(items: TextTranslationItem[], targetLanguage: string, sourceLanguage: string, options: TextTranslationOptions = {}): Promise<TextTranslationResult[]> {
     if (!items.length) return [];
+    const maxItems = Math.max(1, Math.min(40, this.options.maxItemsPerRequest ?? DEFAULT_MAX_ITEMS_PER_REQUEST));
+    const results: TextTranslationResult[] = [];
+    for (let start = 0; start < items.length; start += maxItems) {
+      const chunk = items.slice(start, start + maxItems);
+      results.push(...await this.translateChunk(chunk, targetLanguage, sourceLanguage, options));
+    }
+    return results;
+  }
+
+  private async translateChunk(items: TextTranslationItem[], targetLanguage: string, sourceLanguage: string, options: TextTranslationOptions): Promise<TextTranslationResult[]> {
+    const jsonModes = this.options.jsonMode === false ? [false] : [true, false];
+    let lastError: unknown;
+    for (const useJsonMode of jsonModes) {
+      try {
+        return await this.translateChunkWithRetries(items, targetLanguage, sourceLanguage, options, useJsonMode);
+      } catch (error) {
+        lastError = error;
+        if (!isJsonFormatRejection(error)) break;
+      }
+    }
+    throw lastError instanceof Error ? lastError : new Error(String(lastError));
+  }
+
+  private async translateChunkWithRetries(items: TextTranslationItem[], targetLanguage: string, sourceLanguage: string, options: TextTranslationOptions, useJsonMode: boolean): Promise<TextTranslationResult[]> {
     const attempts = Math.max(1, Math.min(5, this.options.attempts ?? 3));
+    const timeoutMs = Math.max(10000, this.options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
     let lastError: unknown;
     for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
       try {
         const fetchImpl = this.options.fetch ?? globalThis.fetch;
+        const signal = options.signal ? AbortSignal.any([options.signal, controller.signal]) : controller.signal;
         const response = await fetchImpl(`${this.options.baseUrl.replace(/\/$/, "")}/chat/completions`, {
           method: "POST",
           headers: { authorization: `Bearer ${this.options.apiKey}`, "content-type": "application/json" },
+          signal,
           body: JSON.stringify({
             model: this.options.model,
-            temperature: 0.1,
+            temperature: this.options.temperature ?? DEFAULT_TEMPERATURE,
+            ...(useJsonMode ? { response_format: { type: "json_object" } } : {}),
             messages: [{
               role: "user",
               content: buildTranslationPrompt(items, targetLanguage, sourceLanguage, options),
             }],
           }),
         });
-        if (!response.ok) throw new Error(`OpenAI-compatible text translator failed: ${response.status}`);
+        if (!response.ok) {
+          const errorText = await response.text().catch(() => "");
+          const error = new Error(`OpenAI-compatible text translator failed: ${response.status}`);
+          if (useJsonMode && response.status === 400 && /response_format|json_object|json\s*format|format\s*error/i.test(errorText)) {
+            throw new JsonFormatRejectionError(error);
+          }
+          throw error;
+        }
         const payload = await readJsonResponse(response, "OpenAI-compatible text translator");
         return parseTranslationResults(payload.choices?.[0]?.message?.content ?? "", items);
       } catch (error) {
-        lastError = error;
-        if (attempt >= attempts || !isRetriableTranslatorError(error)) break;
+        const externalAborted = options.signal?.aborted === true;
+        const timedOut = error instanceof Error && error.name === "AbortError" && !externalAborted;
+        lastError = timedOut ? new Error(`OpenAI-compatible text translator timed out after ${timeoutMs}ms`) : error;
+        if (lastError instanceof JsonFormatRejectionError || externalAborted || attempt >= attempts || !isRetriableTranslatorError(timedOut ? lastError : error)) break;
         await delay((this.options.retryDelayMs ?? 800) * attempt);
+      } finally {
+        clearTimeout(timer);
       }
     }
     throw lastError instanceof Error ? lastError : new Error(String(lastError));
   }
+}
+
+class JsonFormatRejectionError extends Error {
+  constructor(cause: Error) {
+    super(cause.message);
+    this.name = "JsonFormatRejectionError";
+  }
+}
+
+function isJsonFormatRejection(error: unknown): boolean {
+  return error instanceof JsonFormatRejectionError;
 }
 
 async function readJsonResponse(response: Response, label: string): Promise<{ data?: Array<{ id?: unknown }>; choices?: Array<{ message?: { content?: string } }> }> {
@@ -98,56 +162,66 @@ async function readJsonResponse(response: Response, label: string): Promise<{ da
 export function buildTranslationPrompt(items: TextTranslationItem[], targetLanguage: string, sourceLanguage: string, options: TextTranslationOptions = {}): string {
   const retryGuidance = options.retranslate
     ? [
-      "This is a retranslation request: the previous result may be poor, misplaced, unnatural, or inconsistent.",
-      "Improve the localization quality while staying faithful to the OCR text and manga context.",
+      "This is a RETRANSLATION request: the previous version was poor, unnatural, or inconsistent. Keep the meaning, but rewrite the Chinese so it reads like native localization.",
     ]
     : [];
   const glossaryGuidance = options.glossary && Object.keys(options.glossary).length
     ? [
-      `User glossary (mandatory, source term -> required translation): ${JSON.stringify(options.glossary)}`,
-      "Do not rename, reinterpret, literal-translate, or vary User glossary terms. If a source term appears, use exactly its required translation consistently.",
+      `USER GLOSSARY (hard constraint, source term -> required translation): ${JSON.stringify(options.glossary)}`,
+      "Whenever a glossary source term appears, output exactly its required translation. Never rename, reinterpret, or vary it.",
     ]
     : [];
   const previousGuidance = options.previousTranslations?.length
-    ? [`Previous translations for improvement/reference: ${JSON.stringify(options.previousTranslations)}`]
+    ? [
+      `Previous translations of the same page (reference only, improve wording while keeping names and tone consistent): ${JSON.stringify(options.previousTranslations)}`,
+    ]
     : [];
   const chapterGuidance = options.chapterContext?.trim()
     ? [
-      `Chapter context: ${options.chapterContext.trim()}`,
-      "Use this chapter context only to keep names, relationships, tone, and pronouns consistent. Do not invent facts not supported by the OCR text.",
+      `Chapter context (use ONLY for name/relationship/tone consistency; do not invent plot facts): ${options.chapterContext.trim()}`,
     ]
     : [];
   const termCandidateGuidance = options.termCandidates?.length
     ? [
-      `Auto-detected term candidates (likely names/titles/places/skills; keep each one semantically consistent across this request): ${JSON.stringify(options.termCandidates)}`,
-      "If a candidate is a real proper name or title in context, choose a natural stable Chinese rendering and keep it consistent. If uncertain, keep the source term unchanged rather than guessing a literal meaning.",
+      `Likely proper names on this page (keep each consistent; transliterate confidently, otherwise keep the source form): ${JSON.stringify(options.termCandidates)}`,
     ]
     : [];
-  return [
-    "You are a professional manga localization translator and Chinese line editor for comic speech bubbles.",
-    `Translate the following OCR text from ${sourceLanguage || "auto"} to ${targetLanguage}.`,
-    "First understand the whole page context, speaker intent, emotional tone, and the relationship between adjacent bubbles; then translate each item.",
-    "Write natural Chinese dialogue suitable for manga speech bubbles: concise, emotional, conversational, and readable in small bubbles.",
-    "For dialogue, write fluent spoken Chinese/口语 with character emotion; for narration, use polished Chinese prose; for shouts and action text, keep it short and forceful.",
-    "Avoid literal word-by-word translation, English sentence order, stiff machine-translated wording, and contradictions with nearby bubbles.",
-    "Avoid translationese, unnatural Europeanized Chinese, redundant subjects, and overly formal wording unless the speaker's tone requires it.",
-    "The final Chinese should read like a human comic localization, not machine-translated text.",
-    "Use surrounding items and each item's context field as the same manga page context, but keep each item id unchanged.",
-    "Infer omitted subjects/pronouns from context when necessary, but do not invent new plot facts.",
-    "Keep each item id unchanged. Return strict JSON only with this shape:",
-    "{\"items\":[{\"id\":string,\"translatedText\":string}]}",
-    "Preserve punctuation-only text such as ellipses or question marks. Do not add explanations.",
-    "Handle proper names carefully: all-caps English names, character names, places, sects, titles, skills, and nicknames are often proper names.",
-    "Do not translate character names literally as common words. Transliterate stable names into natural Chinese when confident; otherwise keep the original English name unchanged.",
-    "Do not output awkward half-translated names like Chinese text plus leftover all-caps English.",
-    "Keep recurring proper names consistent within this batch.",
+  const lines: string[] = [
+    `You are a professional manga localizer. Translate the OCR text below into natural, colloquial ${targetLanguage}, exactly as a native ${targetLanguage} reader would say it in a comic.`,
+    "",
+    "RULES (follow all):",
+    "- Dialogue must be short, emotional, spoken-language style. Narration is polished prose. Shouts/action text is short and punchy.",
+    "- NEVER translate word-by-word or keep the source sentence structure. If it sounds like machine translation, rewrite it until it does not.",
+    "- Chinese output must avoid translationese: no unnecessary 被-passives, no stacked 的, no filler words like 进行/位于/对于/作为/通过/关于, no Europeanized phrasing, no redundant subjects.",
+    "- Proper names: use glossary terms exactly. Keep every name consistent across all items. Never output half-translated names (e.g. Chinese text mixed with leftover English like \"龙王Dragon\").",
+    "- Each item's context field (order, kind, previous/next text) is layout info: use it only for tone, continuity, and speaker intent. Never invent plot facts.",
+    "- Preserve punctuation-only items (…, ?!, etc.) unchanged. Do not add explanations, notes, or quotation marks.",
+    "- Keep every item id unchanged. Return STRICT JSON only, no commentary, in exactly this shape:",
+    "{\"items\":[{\"id\":\"<item id>\",\"translatedText\":\"<translation>\"}]}",
+  ];
+  if (isChineseTarget(targetLanguage)) {
+    lines.push(
+      "",
+      "EXAMPLE (match this register and style):",
+      "Input: {\"items\":[{\"id\":\"a1\",\"text\":\"I will protect everyone no matter what!\"},{\"id\":\"a2\",\"text\":\"Father... I am sorry. I could not save him.\"}]}",
+      "Output: {\"items\":[{\"id\":\"a1\",\"translatedText\":\"不管发生什么，我都会保护好大家！\"},{\"id\":\"a2\",\"translatedText\":\"父亲……对不起，我没能救下他。\"}]}",
+    );
+  }
+  lines.push(
+    "",
     ...chapterGuidance,
     ...glossaryGuidance,
     ...termCandidateGuidance,
     ...previousGuidance,
     ...retryGuidance,
+    "",
     JSON.stringify({ items }),
-  ].join("\n");
+  );
+  return lines.join("\n");
+}
+
+function isChineseTarget(targetLanguage: string): boolean {
+  return /^zh/i.test(targetLanguage.trim());
 }
 
 export function parseTranslationResults(content: string, fallbackItems: TextTranslationItem[]): TextTranslationResult[] {

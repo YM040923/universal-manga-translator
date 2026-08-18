@@ -1,4 +1,4 @@
-﻿import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -39,7 +39,7 @@ export function readDoctorState(root = resolve(fileURLToPath(new URL("..", impor
   return {
     env,
     extensionBuilt: existsSync(resolve(root, "apps/extension/dist/manifest.json")) && existsSync(resolve(root, "apps/extension/dist/content.js")),
-    serverDataDirExists: existsSync(resolve(root, "apps/server/data")) || true,
+    serverDataDirExists: existsSync(resolve(root, "apps/server/data")) || existsSync(resolve(root, "apps/server")),
   };
 }
 

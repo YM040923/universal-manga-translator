@@ -1,4 +1,4 @@
-﻿import type { ServerEvent } from "@umt/shared";
+import type { ServerEvent } from "@umt/shared";
 
 type Listener = (event: ServerEvent) => void;
 
@@ -11,6 +11,14 @@ export class EventBus {
   }
 
   publish(event: ServerEvent): void {
-    for (const listener of this.listeners) listener(event);
+    // One broken listener (e.g. a closing websocket) must not break the whole
+    // event chain and turn a valid submission into a 500.
+    for (const listener of [...this.listeners]) {
+      try {
+        listener(event);
+      } catch {
+        // ignore per-listener failures
+      }
+    }
   }
 }

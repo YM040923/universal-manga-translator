@@ -61,6 +61,7 @@ export class OcrTranslatePipeline {
     const ocrRegions = (await this.readOcrRegions(input)).map((region) => classifyRegionKind(region, input.width, input.height));
     const textBlocks = groupOcrRegionsIntoTextBlocks(ocrRegions);
     const translationOptions: TextTranslationOptions = { retranslate: input.retranslate === true };
+    if (input.signal) translationOptions.signal = input.signal;
     if (input.glossary && Object.keys(input.glossary).length) translationOptions.glossary = input.glossary;
     if (input.chapterContext?.trim()) translationOptions.chapterContext = input.chapterContext.trim();
     if (input.previousTranslations?.length) translationOptions.previousTranslations = input.previousTranslations;
@@ -143,13 +144,21 @@ function extractTermCandidates(regions: GenericOcrRegion[]): string[] {
   const counts = new Map<string, number>();
   for (const region of regions) {
     const text = region.sourceText.replace(/[’']/g, "'").replace(/[^A-Za-z0-9'\-\s]/g, " ");
-    for (const candidate of candidateTermsFromText(text)) counts.set(candidate, (counts.get(candidate) ?? 0) + 1);
+    for (const candidate of candidateTermsFromText(text)) {
+      counts.set(candidate, (counts.get(candidate) ?? 0) + countTermOccurrences(text, candidate));
+    }
   }
   return [...counts.entries()]
-    .filter(([term, count]) => count > 1 || term.includes(" ") || /^[A-Z]{2,}$/.test(term) || isSingleNameCandidate(term))
+    .filter(([term, count]) => count > 1 || term.includes(" ") || /^[A-Z]{2,}$/.test(term))
     .sort((a, b) => b[1] - a[1] || b[0].length - a[0].length || a[0].localeCompare(b[0]))
     .map(([term]) => term)
-    .slice(0, 24);
+    .slice(0, 12);
+}
+
+function countTermOccurrences(text: string, term: string): number {
+  const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const matches = text.match(new RegExp(`\\b${escaped.replace(/[’']/g, "['’]")}\\b`, "gi"));
+  return matches?.length ?? 0;
 }
 
 function mergeUniqueTerms(terms: string[]): string[] {
@@ -160,7 +169,7 @@ function mergeUniqueTerms(terms: string[]): string[] {
     if (!term || seen.has(term.toLowerCase())) continue;
     seen.add(term.toLowerCase());
     result.push(term);
-    if (result.length >= 24) break;
+    if (result.length >= 12) break;
   }
   return result;
 }
@@ -214,10 +223,6 @@ function isUsefulTermCandidate(term: string): boolean {
   if (parts.length === 1 && COMMON_CAPITALIZED_WORDS.has(term)) return false;
   if (parts.every((part) => COMMON_CAPITALIZED_WORDS.has(part))) return false;
   return /[A-Za-z]/.test(term);
-}
-
-function isSingleNameCandidate(term: string): boolean {
-  return /^[A-Z][a-z][A-Za-z'\-]{2,}$/.test(term) && !COMMON_CAPITALIZED_WORDS.has(term);
 }
 
 export function buildOcrCacheKey(profile: string, input: { imageHash: string; width: number; height: number; sourceLanguage: string }): string {

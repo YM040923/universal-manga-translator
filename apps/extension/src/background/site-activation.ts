@@ -3,7 +3,7 @@ import { enableSiteForUrl, isSiteEnabled, loadSettings, saveSettings, type Setti
 
 export interface ContentScriptInjectionDeps {
   storage?: SettingsStorageArea;
-  executeScript: (details: { tabId: number; files: string[] }) => Promise<void> | void;
+  executeScript: (details: { tabId: number; files: string[]; allFrames?: boolean }) => Promise<void> | void;
 }
 
 export interface InjectableTab {
@@ -48,7 +48,11 @@ export async function injectContentScriptsIntoEnabledTabs(deps: TabQueryDeps): P
 }
 
 export function registerSiteActivationHandlers(runtime: typeof chrome.runtime = chrome.runtime, tabs: typeof chrome.tabs = chrome.tabs, scripting: typeof chrome.scripting = chrome.scripting): void {
-  const deps: ContentScriptInjectionDeps = { executeScript: async (details) => { await scripting.executeScript({ target: { tabId: details.tabId }, files: details.files }); } };
+  const deps: ContentScriptInjectionDeps = {
+    executeScript: async (details) => {
+      await scripting.executeScript({ target: { tabId: details.tabId, allFrames: details.allFrames ?? false }, files: details.files });
+    },
+  };
   runtime.onMessage.addListener((message: unknown, _sender, sendResponse) => {
     if (!isUmtActivateSiteRequest(message)) return false;
     void handleActivateSiteMessage(message, deps).then(sendResponse);
@@ -71,5 +75,7 @@ export function registerSiteActivationHandlers(runtime: typeof chrome.runtime = 
 }
 
 async function injectContentScript(tabId: number, deps: ContentScriptInjectionDeps): Promise<void> {
-  await deps.executeScript({ tabId, files: ["content.js"] });
+  // allFrames: many manga readers render chapters inside an iframe; the
+  // content script gates itself per frame (site enabled + reader-like page).
+  await deps.executeScript({ tabId, files: ["content.js"], allFrames: true });
 }

@@ -1,4 +1,4 @@
-﻿import { clampRectToBounds, mapNaturalBoxToRenderedBox } from "@umt/shared/geometry";
+import { clampRectToBounds, mapNaturalBoxToRenderedBox } from "@umt/shared/geometry";
 import type { ManualOverridePayload } from "@umt/shared/protocol";
 import type { OverlayRegion, Size, SurfaceResult } from "@umt/shared/types";
 import { DEFAULT_SETTINGS, normalizeOverlayAppearance, type OverlayAppearance } from "../../settings/settings.js";
@@ -87,6 +87,13 @@ export class OverlayRenderer {
 
   refreshAll(): void {
     for (const { element, naturalSize, result } of this.rendered.values()) this.renderSurface(element, naturalSize, result);
+  }
+
+  /** Re-renders only manual-selection surfaces so their anchors track scrolling and layout shifts. */
+  refreshManualSelections(): void {
+    for (const [surfaceId, { element, naturalSize, result }] of this.rendered) {
+      if (isManualSelectionSurface(surfaceId)) this.renderSurface(element, naturalSize, result);
+    }
   }
 
   setAppearance(appearance: Partial<OverlayAppearance>): void {

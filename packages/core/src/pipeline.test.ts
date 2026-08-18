@@ -145,7 +145,7 @@ test("OcrTranslatePipeline coalesces concurrent OCR misses for the same image", 
     },
   };
   const translator: CoreTextTranslator = {
-    translate: async (items) => items.map((item) => ({ id: item.id, translatedText: "ÄãºÃ" })),
+    translate: async (items) => items.map((item) => ({ id: item.id, translatedText: "ä½ å¥½" })),
   };
   const first = new OcrTranslatePipeline({ profile: "network-ocr:image+openai-compatible:gpt", ocr, translator, ocrCache: cache });
   const second = new OcrTranslatePipeline({ profile: "network-ocr:image+openai-compatible:gpt", ocr, translator, ocrCache: cache });
@@ -170,7 +170,7 @@ test("OcrTranslatePipeline forwards chapter context and previous translations", 
     translator: {
       translate: async (items, _target, _source, options) => {
         optionsSeen = options;
-        return items.map((item) => ({ id: item.id, translatedText: "ÄãºÃ" }));
+        return items.map((item) => ({ id: item.id, translatedText: "ä½ å¥½" }));
       },
     },
   });
@@ -183,11 +183,11 @@ test("OcrTranslatePipeline forwards chapter context and previous translations", 
     targetLanguage: "zh-CN",
     sourceLanguage: "auto",
     chapterContext: "Earlier: protagonist is angry.",
-    previousTranslations: [{ id: "old", translatedText: "Ö®Ç°ÒëÎÄ" }],
+    previousTranslations: [{ id: "old", translatedText: "ä¹‹å‰çš„è¯‘æ–‡" }],
   });
 
   assert.equal(optionsSeen?.chapterContext, "Earlier: protagonist is angry.");
-  assert.deepEqual(optionsSeen?.previousTranslations, [{ id: "old", translatedText: "Ö®Ç°ÒëÎÄ" }]);
+  assert.deepEqual(optionsSeen?.previousTranslations, [{ id: "old", translatedText: "ä¹‹å‰çš„è¯‘æ–‡" }]);
 });
 
 test("buildOcrCacheKey ignores text style and glossary cache versions", () => {

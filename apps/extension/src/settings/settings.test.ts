@@ -269,6 +269,40 @@ test("saveSettings persists debug overlay setting", async () => {
   assert.equal(saved.debugOverlayEnabled, true);
 });
 
+test("saveSettings keeps API keys and glossary out of synced storage", async () => {
+  const makeStore = (initial: Record<string, unknown> = {}) => {
+    const data: Record<string, unknown> = { ...initial };
+    return {
+      saved: undefined as unknown,
+      async get() { return { ...data }; },
+      async set(value: Record<string, unknown>) { Object.assign(data, value); this.saved = { ...data }; },
+    };
+  };
+  const syncStorage = makeStore();
+  const localStorage = makeStore();
+  await saveSettings({
+    targetLanguage: "en",
+    directOcr: { ...DEFAULT_SETTINGS.directOcr, apiKeys: ["sk-ocr-secret"] },
+    directTranslator: { ...DEFAULT_SETTINGS.directTranslator, apiKey: "sk-translate-secret" },
+    glossaryText: "Clark = 克拉克",
+  }, syncStorage, localStorage);
+
+  const synced = syncStorage.saved as ExtensionSettings;
+  assert.equal(synced.targetLanguage, "en");
+  assert.equal((synced as unknown as Record<string, unknown>).directOcr, undefined);
+  assert.equal((synced as unknown as Record<string, unknown>).directTranslator, undefined);
+  assert.equal((synced as unknown as Record<string, unknown>).glossaryText, undefined);
+
+  const local = localStorage.saved as ExtensionSettings;
+  assert.deepEqual(local.directOcr.apiKeys, ["sk-ocr-secret"]);
+  assert.equal(local.directTranslator.apiKey, "sk-translate-secret");
+  assert.equal(local.glossaryText, "Clark = 克拉克");
+
+  const merged = await loadSettings(makeStore({ targetLanguage: "en" }), localStorage);
+  assert.deepEqual(merged.directOcr.apiKeys, ["sk-ocr-secret"]);
+  assert.equal(merged.directTranslator.apiKey, "sk-translate-secret");
+});
+
 
 test("new sites do not auto translate by default to avoid localhost permission prompts", async () => {
   const settings = await loadSettings(fakeStorage({}));
@@ -282,6 +316,18 @@ test("primaryDomainFromUrl normalizes subdomains to a main site key", () => {
   assert.equal(primaryDomainFromUrl("https://www.asurascans.com/comics/a"), "asurascans.com");
   assert.equal(primaryDomainFromUrl("https://reader.manga.example.co.uk/chapter/1"), "example.co.uk");
   assert.equal(primaryDomainFromUrl("chrome://extensions"), null);
+});
+
+test("primaryDomainFromUrl keeps IP and localhost hosts intact", () => {
+  assert.equal(primaryDomainFromUrl("http://192.168.1.5/manga"), "192.168.1.5");
+  assert.equal(primaryDomainFromUrl("http://10.0.0.1:8080/comic"), "10.0.0.1");
+  assert.equal(primaryDomainFromUrl("http://localhost:9000/comic"), "localhost");
+});
+
+test("normalizeSettings keeps enabled IP sites", () => {
+  const settings = normalizeSettings({ enabledSites: { "192.168.1.5": true, "localhost": true } });
+  assert.equal(settings.enabledSites["192.168.1.5"], true);
+  assert.equal(settings.enabledSites["localhost"], true);
 });
 
 test("sites are disabled until explicitly enabled by primary domain", () => {

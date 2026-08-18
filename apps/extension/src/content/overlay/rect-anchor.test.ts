@@ -1,7 +1,7 @@
-﻿import test from "node:test";
+import test from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
-import { createDocumentRectOverlayAnchor, createRectOverlayAnchor } from "./rect-anchor.js";
+import { createDocumentRectOverlayAnchor, createElementTrackingOverlayAnchor, createRectOverlayAnchor } from "./rect-anchor.js";
 
 test("createRectOverlayAnchor exposes a stable viewport rect for screenshot overlays", () => {
   const dom = new JSDOM("<body></body>");
@@ -51,4 +51,43 @@ test("createDocumentRectOverlayAnchor restores cached manual selection document 
 
   assert.equal(rect.top, 180);
   assert.equal(rect.bottom, 260);
+});
+
+function stubElementRect(element: HTMLElement, rect: { x: number; y: number; width: number; height: number }): void {
+  element.getBoundingClientRect = () => ({
+    x: rect.x,
+    y: rect.y,
+    width: rect.width,
+    height: rect.height,
+    top: rect.y,
+    left: rect.x,
+    right: rect.x + rect.width,
+    bottom: rect.y + rect.height,
+    toJSON: () => ({}),
+  }) as DOMRect;
+}
+
+test("createElementTrackingOverlayAnchor derives position from the element plus its own scroll offsets", () => {
+  const dom = new JSDOM("<body><div id='reader'><img id='page' /></div></body>");
+  globalThis.document = dom.window.document;
+  globalThis.window = dom.window as unknown as Window & typeof globalThis;
+  const reader = document.getElementById("reader")!;
+  stubElementRect(reader, { x: 0, y: 40, width: 500, height: 800 });
+
+  const anchor = createElementTrackingOverlayAnchor(reader, { x: 60, y: 120, width: 300, height: 200 });
+  const rect = anchor.getBoundingClientRect();
+  assert.equal(rect.x, 60);
+  assert.equal(rect.y, 160);
+
+  // The reader container scrolls internally: its content shifts up while window.scrollY stays 0.
+  Object.defineProperty(reader, "scrollTop", { value: 250, configurable: true });
+  const afterScroll = anchor.getBoundingClientRect();
+  assert.equal(afterScroll.x, 60);
+  assert.equal(afterScroll.y, -90);
+  assert.equal(afterScroll.bottom, 110);
+
+  // The reader itself moves in the viewport (window scroll or layout shift): anchor follows.
+  stubElementRect(reader, { x: 0, y: -200, width: 500, height: 800 });
+  const afterMove = anchor.getBoundingClientRect();
+  assert.equal(afterMove.y, -330);
 });

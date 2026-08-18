@@ -5,6 +5,9 @@ Set-Location $root
 
 Write-Host "Building Universal Manga Translator extension..."
 pnpm --filter "@umt/extension" build
+if ($LASTEXITCODE -ne 0) {
+  throw "Extension build failed (pnpm exit code $LASTEXITCODE)"
+}
 
 $dist = Join-Path $root "apps\extension\dist"
 if (-not (Test-Path (Join-Path $dist "manifest.json"))) {

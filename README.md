@@ -10,6 +10,15 @@ Universal Manga Translator 是一个网页漫画翻译工具。**主产品形态
 
 翻译模型不需要识图能力；图片文字识别和坐标由 OCR API 完成。
 
+功能要点：
+
+- **站点级门控**：插件只在你在 popup 中显式启用的主域名上运行。
+- **阅读页识别**：只在类似漫画章节阅读页的页面上显示功能 UI，目录页/首页/搜索页静默。
+- **iframe 阅读器**：内嵌框架（含跨域 reader 框架）内的漫画图片同样会被检测和翻译。
+- **抓图兜底**：图片 CDN 拒绝直连（反热链、需要 cookie）时，视口内的图片会自动改用截图裁剪进行 OCR，不会整页失败。
+- **气泡遮罩**：对话气泡默认使用贴合常见漫画/条漫气泡的圆角矩形遮罩（可在设置中选择椭圆样式）。
+- **翻译质量**：分批请求 + 示例引导 + 反翻译腔约束，人名/术语表强约束，同一章内人名稳定一致。
+
 ## 快速开始：纯插件版
 
 更完整的普通用户安装流程见 [`docs/quickstart.md`](docs/quickstart.md)。常见错误见 [`docs/troubleshooting.md`](docs/troubleshooting.md)。
@@ -45,7 +54,7 @@ $actual = (Get-FileHash .\extension-release.zip -Algorithm SHA256).Hash.ToLowerI
 if ($actual -ne $expected) { throw "extension-release.zip 校验失败" }
 ```
 
-> 安全提醒：纯插件版会把 API Key 保存在浏览器扩展存储中。不要在不信任的浏览器配置文件里使用真实 key；不要把带有个人 key 的浏览器扩展数据分享给别人。
+> 安全提醒：纯插件版会把 API Key 保存在浏览器扩展的 `chrome.storage.local` 中（只存在本机浏览器配置文件，**不会**随 Google 账号同步到云端或其他设备）。不要在不信任的浏览器配置文件里使用真实 key；不要把带有个人 key 的浏览器扩展数据分享给别人。
 
 ### 开发者本地构建插件
 

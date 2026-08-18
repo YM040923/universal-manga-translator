@@ -7,6 +7,8 @@ export interface GenericOcrImageInput {
   imageBytes: Uint8Array;
   fileName?: string;
   mimeType?: string;
+  /** External cancellation signal (e.g. user cancel); aborts in-flight requests. */
+  signal?: AbortSignal;
 }
 
 export interface GenericOcrRegion {
@@ -84,13 +86,14 @@ export class GenericNetworkOcrClient {
           if (lease) this.keyPool.reportSuccess(lease);
           return regions;
         } catch (error) {
-          if (lease && isKeyExhaustionError(error)) this.keyPool.reportFailure(lease, error);
+          if (lease && isKeyExhaustionError(error)) this.keyPool.reportFailure(lease, error, cooldownForKeyError(error));
           throw error;
         }
       } catch (error) {
         lastError = error;
+        const externallyAborted = input.signal?.aborted === true;
         const shouldTryAnotherKey = isKeyExhaustionError(error) && this.keyPool.status().available > 0;
-        if (attempt >= maxAttempts || (!shouldTryAnotherKey && (attempt >= attempts || !isRetriableOcrError(error)))) break;
+        if (externallyAborted || attempt >= maxAttempts || (!shouldTryAnotherKey && (attempt >= attempts || !isRetriableOcrError(error)))) break;
         await delay((this.options.retryDelayMs ?? 900) * attempt);
       }
     }
@@ -118,7 +121,8 @@ export class GenericNetworkOcrClient {
       const apiKey = apiKeyOverride ?? this.options.apiKey;
       if (apiKey?.trim()) headers.set("authorization", `Bearer ${apiKey.trim()}`);
       const fetchImpl = this.options.fetch ?? globalThis.fetch;
-      const response = await fetchImpl(this.options.endpoint, { method: "POST", headers, body: form, signal: controller.signal });
+      const signal = input.signal ? AbortSignal.any([input.signal, controller.signal]) : controller.signal;
+      const response = await fetchImpl(this.options.endpoint, { method: "POST", headers, body: form, signal });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(formatGenericOcrError(response.status, payload));
       if (isErrorPayload(payload)) throw new Error(formatGenericOcrError(response.status, payload));
@@ -284,6 +288,12 @@ function isKeyExhaustionError(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
   const kind = classifyGenericOcrError(error).kind;
   return kind === "quota" || kind === "auth" || kind === "rate_limit";
+}
+
+/** Transient rate-limit errors cool down for a minute; quota/auth block until reset. */
+function cooldownForKeyError(error: unknown): number {
+  if (error instanceof Error && classifyGenericOcrError(error).kind === "rate_limit") return 60_000;
+  return Number.POSITIVE_INFINITY;
 }
 
 function isRetriableOcrError(error: unknown): boolean {

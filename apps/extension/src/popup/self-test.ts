@@ -6,8 +6,16 @@ type DirectHttpFormFields = NonNullable<NonNullable<UmtDirectHttpRequest["init"]
 
 export async function runSelfTest(settings: ExtensionSettings, deps: PopupDeps, tab?: PopupTab | null, siteEnabled = false): Promise<string> {
   if (settings.runMode === "backend") {
-    try { return await (deps.checkBackend ?? defaultCheckBackend)(settings.backendUrl) ? "后端连通正常" : "后端离线或无法访问"; }
-    catch (error) { return `后端自检失败：${formatError(error)}`; }
+    try {
+      const online = await (deps.checkBackend ?? defaultCheckBackend)(settings.backendUrl);
+      if (!online) return "后端离线或无法访问";
+      const status = await (deps.fetchBackendStatus ?? defaultFetchBackendStatus)(settings.backendUrl);
+      if (!status?.ok) return "后端响应异常";
+      const parts: string[] = ["后端连通正常"];
+      if (!status.ocr?.apiUrl && !status.ocr?.apiKeyConfigured) parts.push("OCR 未配置");
+      if (!status.openAICompatible?.baseUrl && !status.openAICompatible?.apiKeyConfigured) parts.push("翻译 API 未配置");
+      return parts.join("；");
+    } catch (error) { return `后端自检失败：${formatError(error)}`; }
   }
   const results: string[] = [];
   if (!settings.directOcr.apiUrl || !settings.directOcr.apiKeys.length) results.push("OCR 未配置");
@@ -15,6 +23,20 @@ export async function runSelfTest(settings: ExtensionSettings, deps: PopupDeps, 
   if (!settings.directTranslator.baseUrl || !settings.directTranslator.apiKey || !settings.directTranslator.model) results.push("翻译 API 未配置");
   else results.push(await testTranslator(settings, deps));
   return results.join("；");
+}
+
+async function defaultFetchBackendStatus(backendUrl: string): Promise<{ ok: boolean; ocr?: { apiUrl?: string; apiKeyConfigured?: boolean }; openAICompatible?: { baseUrl?: string; apiKeyConfigured?: boolean } } | null> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 3000);
+  try {
+    const response = await fetch(`${backendUrl.replace(/\/$/, "")}/v1/config/status`, { cache: "no-store", signal: controller.signal });
+    if (!response.ok) return null;
+    return await response.json() as { ok: boolean; ocr?: { apiUrl?: string; apiKeyConfigured?: boolean }; openAICompatible?: { baseUrl?: string; apiKeyConfigured?: boolean } };
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 async function testDirectOcr(settings: ExtensionSettings, deps: PopupDeps, tab?: PopupTab | null, siteEnabled = false): Promise<string> {

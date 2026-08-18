@@ -30,6 +30,7 @@ export class GenericNetworkOcrProvider implements OcrProvider {
       imageBytes: new Uint8Array(input.imageBuffer),
       fileName: "surface.jpg",
       mimeType: "image/jpeg",
+      ...(input.signal ? { signal: input.signal } : {}),
     });
   }
 }

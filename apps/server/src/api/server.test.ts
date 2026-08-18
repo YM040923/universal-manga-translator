@@ -1,4 +1,4 @@
-﻿import test from "node:test";
+import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -468,8 +468,37 @@ test("retranslate bypasses cache and cancel returns accepted status", async () =
   assert.equal(third.json().status, "completed");
   assert.equal(third.json().result.regions[0].translatedText, "translated 2");
   assert.equal(cancelled.statusCode, 200);
-  assert.deepEqual(cancelled.json(), { ok: true, surfaceId: "retranslated-surface", status: "accepted", cancellable: false });
+  assert.deepEqual(cancelled.json(), { ok: true, surfaceId: "retranslated-surface", status: "accepted", cancellable: true });
   await app.close();
+});
+
+test("a cancelled surface returns cancelled instead of completing", async () => {
+  let releaseProvider: (() => void) | undefined;
+  const gate = new Promise<void>((resolve) => { releaseProvider = resolve; });
+  const app = await buildServer({
+    provider: "cancel-surface",
+    targetLanguage: "zh-CN",
+    visionProvider: {
+      profile: "cancel-surface",
+      process: async () => {
+        await gate;
+        return [{ id: "r1", box: { x: 0, y: 0, width: 10, height: 10 }, sourceText: "hi", translatedText: "你好", confidence: 1, orientation: "horizontal", kind: "dialogue" }];
+      },
+    },
+  });
+  try {
+    const submit = app.inject({ method: "POST", url: "/v1/surfaces/submit", payload: { task: { ...task, surfaceId: "cancel-me" } } });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const cancel = await app.inject({ method: "POST", url: "/v1/surfaces/cancel", payload: { surfaceId: "cancel-me" } });
+    releaseProvider?.();
+    const result = await submit;
+    assert.equal(cancel.statusCode, 200);
+    assert.equal(result.json().ok, false);
+    assert.equal(result.json().result.status, "cancelled");
+  } finally {
+    releaseProvider?.();
+    await app.close();
+  }
 });
 test("submit maps provider boxes from normalized provider image back to original image pixels", async () => {
   const sharp = await import("sharp");
@@ -686,6 +715,59 @@ test("self test endpoint verifies provider submit flow", async () => {
   assert.equal(response.json().sample.regionCount, 1);
   assert.deepEqual(response.json().steps.map((step: any) => step.name), ["backend", "provider", "sample-submit", "regions"]);
   await app.close();
+});
+
+test("rejects non-loopback Host headers (DNS rebinding defense)", async () => {
+  const app = await buildServer(testServerOptions());
+
+  const evil = await app.inject({ method: "GET", url: "/health", headers: { host: "evil.example:47831" } });
+  assert.equal(evil.statusCode, 403);
+
+  const loopback = await app.inject({ method: "GET", url: "/health", headers: { host: "127.0.0.1:47831" } });
+  assert.equal(loopback.statusCode, 200);
+  await app.close();
+});
+
+test("does not grant CORS access to remote web origins", async () => {
+  const app = await buildServer(testServerOptions());
+
+  const response = await app.inject({ method: "GET", url: "/v1/config/status", headers: { origin: "https://evil.example" } });
+  assert.equal(response.statusCode, 200);
+  const allowOrigin = response.headers["access-control-allow-origin"];
+  assert.notEqual(String(allowOrigin), "https://evil.example");
+  await app.close();
+});
+
+test("concurrent identical submissions run the provider once", async () => {
+  let providerCalls = 0;
+  let releaseProvider: (() => void) | undefined;
+  const gate = new Promise<void>((resolve) => { releaseProvider = resolve; });
+  const app = await buildServer({
+    provider: "dedup",
+    targetLanguage: "zh-CN",
+    visionProvider: {
+      profile: "dedup",
+      process: async () => {
+        providerCalls += 1;
+        await gate;
+        return [{ id: "r1", box: { x: 10, y: 10, width: 100, height: 50 }, sourceText: "Hello", translatedText: "你好", confidence: 1, orientation: "horizontal", kind: "dialogue" }];
+      },
+    },
+  });
+  try {
+    const first = app.inject({ method: "POST", url: "/v1/surfaces/submit", payload: { task } });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const second = app.inject({ method: "POST", url: "/v1/surfaces/submit", payload: { task: { ...task, surfaceId: "surface-2" } } });
+    releaseProvider?.();
+    const [firstResult, secondResult] = await Promise.all([first, second]);
+    assert.equal(providerCalls, 1);
+    assert.equal(firstResult.json().status, "completed");
+    assert.equal(secondResult.json().status, "cached");
+    assert.equal(secondResult.json().result.surfaceId, "surface-2");
+  } finally {
+    releaseProvider?.();
+    await app.close();
+  }
 });
 
 

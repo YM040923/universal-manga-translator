@@ -125,7 +125,7 @@ test("anchors overlays inside a transformed scroll container so site-specific sc
   assert.equal(wrapper.style.top, "83px");
 });
 
-test("uses rounded pill mask instead of square corners for speech bubbles", () => {
+test("uses rounded mask instead of square corners for speech bubbles", () => {
   const { img } = setupDomWithImage({ x: 0, y: 0, width: 500, height: 500 });
   const renderer = new OverlayRenderer();
   const result = fakeResult("pill-mask");
@@ -134,7 +134,8 @@ test("uses rounded pill mask instead of square corners for speech bubbles", () =
   renderer.render(img, { width: 500, height: 500 }, result);
 
   const wrapper = document.querySelector<HTMLElement>("[data-umt-region-id='r1']")!;
-  assert.equal(wrapper.style.borderRadius, "999px");
+  assert.equal(wrapper.style.borderRadius, "10px");
+  assert.equal(wrapper.style.clipPath, "inset(0 round 10px)");
 })
 
 test("render restores overlay visibility after the page was cleared", () => {
@@ -469,7 +470,7 @@ test("shrinks multi-line Chinese text enough for a shallow speech bubble without
   assert.equal(size <= 31, true);
 });
 
-test("clips dialogue masks to an ellipse so wide boxes do not paint square corners outside bubbles", () => {
+test("dialogue masks use a size-aware rounded rectangle instead of a forced ellipse", () => {
   const { img } = setupDomWithImage({ x: 0, y: 0, width: 900, height: 900 });
   const renderer = new OverlayRenderer();
   const result = fakeResult("ellipse-dialogue-mask");
@@ -483,7 +484,8 @@ test("clips dialogue masks to an ellipse so wide boxes do not paint square corne
   renderer.render(img, { width: 900, height: 900 }, result);
 
   const wrapper = document.querySelector<HTMLElement>("[data-umt-region-id='r1']")!;
-  assert.equal(wrapper.style.clipPath.includes("ellipse"), true);
+  assert.equal(wrapper.style.clipPath.includes("ellipse"), false);
+  assert.equal(wrapper.style.clipPath, "inset(0 round 22px)");
 });
 
 test("wide dialogue masks use a text-band shape instead of a giant ellipse", () => {
@@ -727,7 +729,7 @@ test("overlay appearance can be updated and re-render existing bubbles without r
   assert.equal(wrapper.style.opacity, "0.5");
 });
 
-test("ellipse appearance controls forced and automatic dialogue ellipse aspect ratio", () => {
+test("ellipse appearance controls forced ellipse aspect ratio while auto uses rounded rectangles", () => {
   const { img } = setupDomWithImage({ x: 0, y: 0, width: 800, height: 800 });
   const renderer = new OverlayRenderer();
   const result = fakeResult("ellipse-aspect-controls");
@@ -745,7 +747,8 @@ test("ellipse appearance controls forced and automatic dialogue ellipse aspect r
   assert.equal(wrapper.style.clipPath, "ellipse(42% 36% at 50% 50%)");
 
   renderer.setAppearance({ maskShape: "auto", fontScale: 1, maskScale: 1, ellipseX: 44, ellipseY: 38, opacity: 1 });
-  assert.equal(wrapper.style.clipPath, "ellipse(44% 38% at 50% 50%)");
+  assert.equal(wrapper.style.clipPath.includes("ellipse"), false);
+  assert.equal(wrapper.style.clipPath, "inset(0 round 21px)");
 });
 
 test("font scale directly changes rendered font size on an existing bubble", () => {
