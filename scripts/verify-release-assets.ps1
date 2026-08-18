@@ -132,7 +132,15 @@ if ($zipManifestVersion -ne $buildInfo.extensionVersion) {
   throw "Release zip manifest version mismatch: expected $($buildInfo.extensionVersion), got $zipManifestVersion"
 }
 
-$builtAtUtc = [string]$buildInfo.builtAtUtc
+# PowerShell 7's ConvertFrom-Json parses ISO date strings into DateTime, so
+# stringify dates back to their UTC ISO form before validating the format.
+$builtAtRaw = $buildInfo.builtAtUtc
+if ($builtAtRaw -is [datetime] -or $builtAtRaw -is [datetimeoffset]) {
+  $builtAtUtc = ([datetimeoffset]$builtAtRaw).ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'", [Globalization.CultureInfo]::InvariantCulture)
+}
+else {
+  $builtAtUtc = [string]$builtAtRaw
+}
 if ($builtAtUtc -notmatch "^\d{4}-\d{2}-\d{2}T.*Z$") {
   throw "Release build metadata builtAtUtc must be an ISO UTC timestamp: $builtAtUtc"
 }
