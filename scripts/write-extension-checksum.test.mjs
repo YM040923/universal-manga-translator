@@ -6,6 +6,18 @@ import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 
+// GitHub Actions runs Windows PowerShell in Constrained Language Mode where
+// Get-FileHash/Add-Type are unavailable; PowerShell 7 (pwsh) runs full language.
+// Dev machines may lack pwsh, so fall back to Windows PowerShell.
+function resolveShell() {
+  for (const name of ["pwsh", "powershell"]) {
+    const probe = spawnSync(name, ["-NoProfile", "-Command", "$PSVersionTable.PSVersion.Major"], { encoding: "utf8" });
+    if (probe.status === 0) return name;
+  }
+  return "powershell";
+}
+const shell = resolveShell();
+
 const root = path.resolve(import.meta.dirname, "..");
 const script = path.join(root, "scripts", "write-extension-checksum.ps1");
 
@@ -17,7 +29,7 @@ test("write-extension-checksum writes lowercase sha256 for the release zip basen
     const content = "test release zip bytes";
     writeFileSync(zipPath, content);
 
-    const result = spawnSync("powershell", [
+    const result = spawnSync(shell, [
       "-NoProfile",
       "-ExecutionPolicy",
       "Bypass",

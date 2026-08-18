@@ -5,6 +5,18 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
+// GitHub Actions runs Windows PowerShell in Constrained Language Mode where
+// Get-FileHash/Add-Type are unavailable; PowerShell 7 (pwsh) runs full language.
+// Dev machines may lack pwsh, so fall back to Windows PowerShell.
+function resolveShell() {
+  for (const name of ["pwsh", "powershell"]) {
+    const probe = spawnSync(name, ["-NoProfile", "-Command", "$PSVersionTable.PSVersion.Major"], { encoding: "utf8" });
+    if (probe.status === 0) return name;
+  }
+  return "powershell";
+}
+const shell = resolveShell();
+
 const root = path.resolve(import.meta.dirname, "..");
 const verifier = path.join(root, "scripts", "verify-extension-package.ps1");
 
@@ -105,7 +117,7 @@ function zipDirectory(source, zipPath) {
     `$items = Get-ChildItem -LiteralPath '${psSource}' -Force`,
     `Compress-Archive -Path $items.FullName -DestinationPath '${psZipPath}' -Force`,
   ].join("; ");
-  const result = spawnSync("powershell", [
+  const result = spawnSync(shell, [
     "-NoProfile",
     "-ExecutionPolicy",
     "Bypass",
@@ -117,7 +129,7 @@ function zipDirectory(source, zipPath) {
 }
 
 function runVerifier(zipPath) {
-  return spawnSync("powershell", [
+  return spawnSync(shell, [
     "-NoProfile",
     "-ExecutionPolicy",
     "Bypass",
