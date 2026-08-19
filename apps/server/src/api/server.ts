@@ -152,7 +152,7 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
   const manualOverrideStore = options.manualOverrideStore;
   const diagnostics = options.diagnosticsWriter ?? new NullDiagnosticsWriter();
   const cancelledSessions = new Set<string>();
-  const cancelledSurfaces = new Set<string>();
+  const cancelledSurfaces = new Map<string, number>(); // surfaceId -> cancelledAt
   const sessionAbortControllers = new Map<string, AbortController>();
   const inFlightSubmissions = new Map<string, Promise<SurfaceResult>>();
   const submissionSlot = createSubmissionSlotControl(options.maxConcurrentSubmissions ?? 4);
@@ -290,6 +290,17 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
     return { ok: true, deleted };
   });
 
+  const isSurfaceCancelled = (surfaceId: string): boolean => cancelledSurfaces.has(surfaceId);
+
+  // Bound the cancelled-surface map: entries older than an hour are stale
+  // (no in-flight job for them anymore) and only waste memory.
+  const pruneCancelledSurfaces = (): void => {
+    const cutoff = Date.now() - 60 * 60 * 1000;
+    for (const [surfaceId, cancelledAt] of cancelledSurfaces) {
+      if (cancelledAt < cutoff) cancelledSurfaces.delete(surfaceId);
+    }
+  };
+
   const processSurface = async (task: SurfaceTask, force = false, jobSessionId?: string) => {
     const started = Date.now();
     const isCancelled = () => Boolean(jobSessionId && cancelledSessions.has(jobSessionId));
@@ -310,11 +321,11 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
     if (jobSessionId) sessionAbortControllers.set(jobSessionId, sessionController);
     eventBus.publish({ type: "job.queued", surfaceId: task.surfaceId, ...sessionEventFields });
     try {
-      if (isCancelled() || cancelledSurfaces.has(task.surfaceId)) return returnCancelled();
+      if (isCancelled() || isSurfaceCancelled(task.surfaceId)) return returnCancelled();
       const imageReadStarted = Date.now();
       const { buffer: imageBuffer, source: inputSource } = await readTaskImage(task, { signal: sessionController.signal });
       const imageReadMs = Date.now() - imageReadStarted;
-      if (isCancelled() || cancelledSurfaces.has(task.surfaceId)) return returnCancelled();
+      if (isCancelled() || isSurfaceCancelled(task.surfaceId)) return returnCancelled();
       const imageHash = sha256Hex(imageBuffer);
       const cacheKey = buildCacheKey({ imageHash, targetLanguage: task.targetLanguage, providerProfile: provider.profile, layoutVersion: LAYOUT_VERSION });
       const cached = surfaceCache?.get(cacheKey) ?? memoryCacheGet(cacheKey);
@@ -337,7 +348,7 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
         if (inFlight) {
           try {
             const raw = await inFlight;
-            if (isCancelled() || cancelledSurfaces.has(task.surfaceId)) return returnCancelled();
+            if (isCancelled() || isSurfaceCancelled(task.surfaceId)) return returnCancelled();
             const coalesced: SurfaceResult = { ...raw, surfaceId: task.surfaceId, status: "cached" };
             const result = applyStoredOverrides(coalesced, task.targetLanguage, manualOverrideStore);
             diagnostics.record({ surfaceId: task.surfaceId, status: "cached", providerProfile: provider.profile, inputSource, originalSize: task.naturalSize, providerSize: task.naturalSize, rawRegionCount: result.regions.length, finalRegionCount: result.regions.length, elapsedMs: Date.now() - started, note: "coalesced with in-flight submission" });
@@ -352,7 +363,7 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
       const run = (async (): Promise<SurfaceResult> => {
         await acquireSubmissionSlot();
         try {
-          if (isCancelled() || cancelledSurfaces.has(task.surfaceId)) throw new CancelledRunError();
+          if (isCancelled() || isSurfaceCancelled(task.surfaceId)) throw new CancelledRunError();
           const imageMetadataStarted = Date.now();
           const actualImageSize = await readImageSizeFromBuffer(imageBuffer, task.naturalSize);
           const imageMetadataMs = Date.now() - imageMetadataStarted;
@@ -365,7 +376,7 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
             forceRetranslate: force,
             signal: sessionController.signal,
           });
-          if (isCancelled() || cancelledSurfaces.has(task.surfaceId)) throw new CancelledRunError();
+          if (isCancelled() || isSurfaceCancelled(task.surfaceId)) throw new CancelledRunError();
           const providerRegions = providerOutput.regions;
           const regions = clampProviderRegionsToImage(providerRegions, task.naturalSize);
           const layoutStarted = Date.now();
@@ -453,7 +464,10 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
 
   app.post<{ Body: { surfaceId: string } }>("/v1/surfaces/cancel", async (request) => {
     const surfaceId = String(request.body?.surfaceId ?? "");
-    if (surfaceId) cancelledSurfaces.add(surfaceId);
+    if (surfaceId) {
+      pruneCancelledSurfaces();
+      cancelledSurfaces.set(surfaceId, Date.now());
+    }
     return { ok: true, surfaceId, status: "accepted", cancellable: true };
   });
 

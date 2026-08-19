@@ -113,6 +113,7 @@ export class OverlayRenderer {
     const isManualSelection = isManualSelectionSurface(result.surfaceId);
     const currentManualBoxes: RenderedRect[] = [];
     const renderRegions = mergeRenderableRegions(result.regions);
+    const latinDominant = isLatinDominantResult(result.regions);
     for (const region of renderRegions) {
       const clampedNaturalBox = clampRectToBounds(region.box, naturalSize);
       if (!clampedNaturalBox) continue;
@@ -156,7 +157,7 @@ export class OverlayRenderer {
         region.style.writingMode,
         region.kind,
       ].join("|");
-      const maskStyle = maskStyleForRegion(region.kind, box.width, box.height, this.appearance, region.sourceText);
+      const maskStyle = maskStyleForRegion(region.kind, box.width, box.height, this.appearance, region.sourceText, latinDominant);
       const nodeStyle = [
         "position:absolute",
         `left:${roundCssPx(box.x)}px`,
@@ -295,6 +296,21 @@ export class OverlayRenderer {
 
 function isManualSelectionSurface(surfaceId: string): boolean {
   return surfaceId.startsWith("manual:");
+}
+
+/** True when the majority of letters on this surface are Latin (matches the classifier's page-level rule). */
+function isLatinDominantResult(regions: OverlayRegion[]): boolean {
+  let latin = 0;
+  let total = 0;
+  for (const region of regions) {
+    for (const char of region.sourceText) {
+      if (/\p{L}/u.test(char)) {
+        total += 1;
+        if (/[A-Za-z]/u.test(char)) latin += 1;
+      }
+    }
+  }
+  return total === 0 || latin / total >= 0.5;
 }
 
 function glyphSafeInsetForText(text: string, width: number, height: number, fittedFontSize: number): number {

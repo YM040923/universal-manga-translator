@@ -69,6 +69,15 @@ export class DebugOverlayRenderer {
         "background:rgba(168,85,247,.08)",
         "box-sizing:border-box",
       ].join(";");
+      // Show OCR source vs translation directly so misreads are visible at a
+      // glance (white = OCR source, yellow = translation).
+      const source = document.createElement("div");
+      source.textContent = region.sourceText;
+      source.style.cssText = "color:#fff;background:rgba(0,0,0,.6);padding:1px 3px;font-size:10px;line-height:1.3;word-break:break-all;";
+      const translated = document.createElement("div");
+      translated.textContent = region.translatedText;
+      translated.style.cssText = "color:#fde047;background:rgba(0,0,0,.6);padding:1px 3px;font-size:10px;line-height:1.3;word-break:break-all;";
+      node.append(source, translated);
       this.root.append(node);
     }
   }

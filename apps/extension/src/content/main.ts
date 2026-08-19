@@ -30,6 +30,25 @@ import { createJobSessionId, debounce, formatShortError, isUmtOwnedMutation, req
 import { getEffectiveSiteSettings, isSiteEnabled, loadSettings, saveSettings, setSiteSettings, setTranslationOverlayVisible, type ExtensionSettings } from "../settings/settings";
 
 const bootstrapWindow = window as Window & { __umtContentBootstrapState?: "starting" | "running" | undefined };
+
+/**
+ * Filters DOM mutations down to image-relevant ones so the reader re-scan does
+ * not spin on animations/ad scripts: only newly added <img> subtrees and
+ * attribute changes on <img> elements count.
+ */
+function hasReaderRelevantMutation(mutations: MutationRecord[]): boolean {
+  for (const mutation of mutations) {
+    if (mutation.type === "childList") {
+      for (const node of mutation.addedNodes) {
+        if (node instanceof Element && (node.tagName === "IMG" || node.querySelector?.("img") !== null)) return true;
+      }
+    } else if (mutation.type === "attributes" && mutation.target instanceof Element && mutation.target.tagName === "IMG") {
+      return true;
+    }
+  }
+  return false;
+}
+
 if (bootstrapWindow.__umtContentBootstrapState !== "starting" && bootstrapWindow.__umtContentBootstrapState !== "running") {
   bootstrapWindow.__umtContentBootstrapState = "starting";
   void bootstrap().then((started) => { bootstrapWindow.__umtContentBootstrapState = started ? "running" : undefined; }).catch((error) => {
@@ -526,6 +545,11 @@ async function bootstrap(): Promise<boolean> {
 
   const observer = new MutationObserver((mutations) => {
     if (mutations.every(isUmtOwnedMutation)) return;
+    // Only re-scan when something image-related actually changed: dynamic image
+    // injection (childList with img) or lazy-loading attribute changes on an
+    // <img>. Style changes on other elements (animations, ads) must not spin
+    // the reader scan on every frame.
+    if (!hasReaderRelevantMutation(mutations)) return;
     rescan("mutation");
   });
   observer.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ["src", "srcset", "data-src", "data-original", "style"] });

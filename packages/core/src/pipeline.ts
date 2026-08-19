@@ -60,8 +60,10 @@ export class OcrTranslatePipeline {
   }
 
   async process(input: CorePipelineInput): Promise<CorePipelineResult> {
-    const ocrRegions = (await this.readOcrRegions(input)).map((region) => classifyRegionKind(region, input.width, input.height));
-    const textBlocks = groupOcrRegionsIntoTextBlocks(ocrRegions);
+    const ocrRegions = await this.readOcrRegions(input);
+    const latinDominant = isLatinDominantPage(ocrRegions);
+    const classified = ocrRegions.map((region) => classifyRegionKind(region, input.width, input.height, latinDominant));
+    const textBlocks = groupOcrRegionsIntoTextBlocks(classified);
     const translationOptions: TextTranslationOptions = { retranslate: input.retranslate === true };
     if (input.signal) translationOptions.signal = input.signal;
     if (input.style) translationOptions.style = input.style;
@@ -282,13 +284,14 @@ function shouldJoinGroup(group: GenericOcrRegion[], next: GenericOcrRegion): boo
   const merged = unionRect([...group.map((region) => region.box), next.box]);
   const averageLineLength = Math.max(1, averageHeight);
   // Only merge vertically when the two boxes genuinely look like one large
-  // bubble: keep the thresholds tight so adjacent distinct bubbles are NOT
-  // fused into one giant overlay.
+  // bubble: tight thresholds plus a horizontal-overlap requirement so
+  // vertically adjacent DISTINCT bubbles are NOT fused into one giant overlay.
   const looksLikeSameLargeBubble =
     next.kind === "dialogue"
     && verticalGap >= -averageHeight * 0.35
     && verticalGap <= Math.max(48, averageHeight * 1.15)
     && centerDistance <= Math.max(merged.width * 0.36, averageHeight * 2.2)
+    && overlap >= Math.min(union.width, next.box.width) * 0.12
     && merged.height <= Math.max(260, averageLineLength * 4.6)
     && merged.width <= Math.max(640, averageHeight * 8);
   if (looksLikeSameLargeBubble) return true;
@@ -297,29 +300,45 @@ function shouldJoinGroup(group: GenericOcrRegion[], next: GenericOcrRegion): boo
   return centerDistance <= maxReasonableDistance || overlap >= Math.min(union.width, next.box.width) * 0.3;
 }
 
-function classifyRegionKind(region: GenericOcrRegion, imageWidth: number, imageHeight: number): GenericOcrRegion {
+function classifyRegionKind(region: GenericOcrRegion, imageWidth: number, imageHeight: number, latinDominant: boolean): GenericOcrRegion {
   if (region.kind !== "dialogue") return region;
-  if (looksLikeNonLatinSoundEffect(region.sourceText)) return { ...region, kind: "sfx" };
+  if (looksLikeNonLatinSoundEffect(region.sourceText, latinDominant)) return { ...region, kind: "sfx" };
   return looksLikeActionLettering(region, imageWidth, imageHeight) ? { ...region, kind: "sfx" } : region;
 }
 
 /**
- * Regions whose text is Korean hangul or punctuation-only are almost never
- * dialogue bubbles (in English-localized manhwa, hangul appears only in
- * borderless sound effects). Kana/CJK body text is kept as dialogue; unknown
- * non-Latin short strings (OCR mojibake of hangul SFX) are treated as SFX.
- * They must not be covered with an opaque bubble.
+ * On pages dominated by Latin text (e.g. English-localized manhwa), Korean
+ * hangul, punctuation-only, and short unknown non-Latin strings are almost
+ * always borderless sound effects and must not be covered by an opaque
+ * bubble. On non-Latin-dominant pages (raw JP/KR/CN manga), non-Latin text is
+ * body copy and stays dialogue.
  */
-function looksLikeNonLatinSoundEffect(text: string): boolean {
+function looksLikeNonLatinSoundEffect(text: string, latinDominant: boolean): boolean {
   const trimmed = text.trim();
   if (!trimmed) return true;
-  if (/[\uAC00-\uD7AF\u1100-\u11FF\u3130-\u318F]/.test(trimmed)) return true; // hangul
   const letters = Array.from(trimmed).filter((char) => /\p{L}/u.test(char));
   if (!letters.length) return true; // punctuation / symbols only
   const latin = letters.filter((char) => /[A-Za-z]/u.test(char)).length;
   if (latin > 0) return false; // contains latin → regular text
-  if (/[\u3040-\u30FF\u3400-\u9FFF\uF900-\uFAFF]/.test(trimmed)) return false; // kana/CJK body text
-  return Array.from(trimmed.replace(/\s+/g, "")).length <= 6; // unknown non-latin short string
+  if (!latinDominant) return false; // raw-language page → body text
+  const short = Array.from(trimmed.replace(/\s+/g, "")).length <= 10;
+  const hangul = /[\uAC00-\uD7AF\u1100-\u11FF\u3130-\u318F]/.test(trimmed);
+  return short || hangul;
+}
+
+/** True when the majority of letters on the page are Latin. */
+function isLatinDominantPage(regions: GenericOcrRegion[]): boolean {
+  let latin = 0;
+  let total = 0;
+  for (const region of regions) {
+    for (const char of region.sourceText) {
+      if (/\p{L}/u.test(char)) {
+        total += 1;
+        if (/[A-Za-z]/u.test(char)) latin += 1;
+      }
+    }
+  }
+  return total === 0 || latin / total >= 0.5;
 }
 
 function looksLikeActionLettering(region: GenericOcrRegion, imageWidth: number, imageHeight: number): boolean {

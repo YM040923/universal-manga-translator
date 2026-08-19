@@ -1,4 +1,4 @@
-﻿const T = {
+const T = {
   title: "Universal Manga Translator 桌面控制台",
   subtitle: "后端在后台运行；关闭本窗口不会自动停止后端。这里专门管理后端配置，插件弹窗只管网页翻译行为。",
   service: "服务控制",
@@ -96,7 +96,19 @@ function csv(values) { return Array.isArray(values) ? values.join(',') : ''; }
 function parseListField(id) { return el(id).value.split(/[\\n,;]+/).map((item) => item.trim()).filter(Boolean); }
 function parseJsonField(id) { const text = el(id).value.trim(); if (!text) return undefined; try { return JSON.parse(text); } catch { throw new Error('固定字段 JSON 格式不正确'); } }
 async function loadConfig() { const status = await backendJson('/v1/config/status'); setField('baseUrl', status.openAICompatible?.baseUrl); const openAiKey = el('openAiKey'); openAiKey.value = ''; setModelOptions([status.openAICompatible?.model || 'gpt-4.1-mini'], status.openAICompatible?.model || ''); el('targetLanguage').value = status.targetLanguage || 'zh-CN'; setField('ocrUrl', status.ocr?.apiUrl || status.ocr?.endpoint); el('ocrInput').value = status.ocr?.inputMode || status.ocr?.input || 'image_base64'; setField('ocrImageField', status.ocr?.imageField || (el('ocrInput').value === 'file' ? 'file' : 'image_base64')); setField('ocrStaticFields', status.ocr?.staticFields ? JSON.stringify(status.ocr.staticFields, null, 2) : ''); setField('ocrRegionsPaths', csv(status.ocr?.regionsPaths)); setField('ocrTextPaths', csv(status.ocr?.textPaths)); setField('ocrBoxPaths', csv(status.ocr?.boxPaths)); setField('ocrConfidencePaths', csv(status.ocr?.confidencePaths)); el('ocrKeys').value = ''; const pool = status.ocr?.keyPool; lastBackendDetails = { provider: status.provider, targetLanguage: status.targetLanguage, ocrConfigured: status.ocr?.apiKeyConfigured, translatorConfigured: status.openAICompatible?.apiKeyConfigured, keyPoolAvailable: pool?.available, keyPoolCount: pool?.count }; show({ ...lastStatus, ...lastBackendDetails }); el('log').textContent = TXT.configLoaded; }
-function setModelOptions(models, current) { el('model').innerHTML = [...new Set(models.filter(Boolean))].map((model) => '<option value="' + model + '" ' + (model === current ? 'selected' : '') + '>' + model + '</option>').join(''); }
+function setModelOptions(models, current) {
+  // Build options via DOM APIs so provider-supplied model names can never
+  // inject markup into the desktop shell.
+  const select = el('model');
+  select.textContent = '';
+  for (const model of new Set(models.filter(Boolean))) {
+    const option = document.createElement('option');
+    option.value = model;
+    option.textContent = model;
+    if (model === current) option.selected = true;
+    select.append(option);
+  }
+}
 async function runBackendAction(label, fn) { await run(label, async () => { const result = await fn(); return result && result.running !== undefined ? result : await api.status(); }); }
 
 el('refresh').onclick = () => run(TXT.refresh, async () => { const status = await api.status(); if (status.running) setTimeout(() => loadConfig().catch((error) => { el('log').textContent = stripIpcError(error); }), 0); return status; });

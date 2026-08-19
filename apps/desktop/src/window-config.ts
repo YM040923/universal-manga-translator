@@ -1,4 +1,4 @@
-﻿export interface DesktopWindowOptions {
+export interface DesktopWindowOptions {
   width: number;
   height: number;
   minWidth: number;
@@ -26,7 +26,7 @@ export function createWindowOptions(preloadPath: string): DesktopWindowOptions {
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
-      sandbox: false,
+      sandbox: true,
       preload: preloadPath,
     },
   };

@@ -1,4 +1,4 @@
-﻿import assert from "node:assert/strict";
+import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createWindowOptions } from "./window-config.js";
 
@@ -9,7 +9,7 @@ test("desktop window is a real software shell with secure preload bridge", () =>
   assert.ok(options.height >= 760);
   assert.equal(options.webPreferences.nodeIntegration, false);
   assert.equal(options.webPreferences.contextIsolation, true);
-  assert.equal(options.webPreferences.sandbox, false);
+  assert.equal(options.webPreferences.sandbox, true);
   assert.match(options.webPreferences.preload, /preload\.cjs$/);
 });
 
