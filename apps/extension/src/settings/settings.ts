@@ -13,6 +13,7 @@ export type ImageRange = "viewport" | "fullPage";
 export type SiteScope = "origin" | "similarPath";
 export type OverlayMaskShape = "auto" | "ellipse" | "rounded" | "transparent";
 export type RunMode = "direct" | "backend";
+export type TranslationStyle = "general" | "martial";
 
 export interface OverlayAppearance {
   maskShape: OverlayMaskShape;
@@ -64,6 +65,8 @@ export interface ExtensionSettings {
   translationModel: string;
   providerProfile: string;
   openAICompatibleBaseUrl: string;
+  /** "martial" applies wuxia/murim localization rules (for English-localized Korean murim manhwa). */
+  translationStyle: TranslationStyle;
   requestTimeoutMs: number;
   maxConcurrentSubmissions: number;
   maxFullPageSurfaces: number;
@@ -118,6 +121,7 @@ export const DEFAULT_SETTINGS: ExtensionSettings = {
   translationModel: "gpt-4.1-mini",
   providerProfile: "network-ocr-openai-compatible",
   openAICompatibleBaseUrl: "",
+  translationStyle: "general",
   requestTimeoutMs: 60000,
   maxConcurrentSubmissions: 2,
   maxFullPageSurfaces: 80,
@@ -172,6 +176,7 @@ export function normalizeSettings(input: LegacyExtensionSettings = {}): Extensio
     translationModel: normalizeNonEmptyString(input.translationModel, DEFAULT_SETTINGS.translationModel),
     providerProfile: normalizeNonEmptyString(input.providerProfile, DEFAULT_SETTINGS.providerProfile),
     openAICompatibleBaseUrl: normalizeOptionalHttpUrl(input.openAICompatibleBaseUrl),
+    translationStyle: input.translationStyle === "martial" ? "martial" : "general",
     requestTimeoutMs: normalizeInteger(input.requestTimeoutMs, 5000, 180000, DEFAULT_SETTINGS.requestTimeoutMs),
     maxConcurrentSubmissions: normalizeInteger(input.maxConcurrentSubmissions, 1, 8, DEFAULT_SETTINGS.maxConcurrentSubmissions),
     maxFullPageSurfaces: normalizeInteger(input.maxFullPageSurfaces, 1, 300, DEFAULT_SETTINGS.maxFullPageSurfaces),

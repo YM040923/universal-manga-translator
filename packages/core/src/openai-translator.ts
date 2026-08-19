@@ -12,6 +12,8 @@ export interface TextTranslationOptions {
   termCandidates?: string[];
   /** External cancellation signal (e.g. user cancel); aborts in-flight requests. */
   signal?: AbortSignal;
+  /** Translation style preset. "martial" applies wuxia/murim localization rules. */
+  style?: "general" | "martial";
 }
 
 export interface TextTranslationResult {
@@ -34,12 +36,15 @@ export interface OpenAICompatibleTextTranslatorOptions {
   temperature?: number;
   /** Maximum items per chat request. Larger batches degrade translation quality on long pages. */
   maxItemsPerRequest?: number;
+  /** Hard cap on completion tokens so long pages are never truncated mid-JSON. */
+  maxTokens?: number;
   /** Send response_format json_object. Default true; falls back to plain JSON parsing when the provider rejects it. */
   jsonMode?: boolean;
   fetch?: typeof fetch;
 }
 
-const DEFAULT_MAX_ITEMS_PER_REQUEST = 20;
+const DEFAULT_MAX_ITEMS_PER_REQUEST = 12;
+const DEFAULT_MAX_TOKENS = 2048;
 const DEFAULT_TEMPERATURE = 0.4;
 const DEFAULT_TIMEOUT_MS = 90000;
 
@@ -103,6 +108,7 @@ export class OpenAICompatibleTextTranslator {
           body: JSON.stringify({
             model: this.options.model,
             temperature: this.options.temperature ?? DEFAULT_TEMPERATURE,
+            max_tokens: this.options.maxTokens ?? DEFAULT_MAX_TOKENS,
             ...(useJsonMode ? { response_format: { type: "json_object" } } : {}),
             messages: [{
               role: "user",
@@ -186,18 +192,31 @@ export function buildTranslationPrompt(items: TextTranslationItem[], targetLangu
       `Likely proper names on this page (keep each consistent; transliterate confidently, otherwise keep the source form): ${JSON.stringify(options.termCandidates)}`,
     ]
     : [];
+  const styleGuidance = options.style === "martial"
+    ? [
+      "MARTIAL ARTS (wuxia/murim) MODE:",
+      "- Martial-arts terminology follows established Chinese wuxia conventions: sects, martial arts, cultivation realms, titles and epithets get concise natural Chinese renderings (e.g. \"Heavenly Demon\" -> 天魔, \"Murim\" -> 武林, \"Northern Heavenly Sect\" -> 北天派). Prefer a standard wuxia-style name over a literal translation.",
+      "- Keep names short and consistent across all items; never leave English names inline.",
+      "- Fight dialogue and taunts must be terse and punchy. Narration uses compact classical-flavored prose, not modern essay style.",
+    ]
+    : [
+      "If the source contains proper nouns (names, places, titles, skills), render them as short consistent Chinese names; never leave English names inline.",
+    ];
   const lines: string[] = [
     `You are a professional manga localizer. Translate the OCR text below into natural, colloquial ${targetLanguage}, exactly as a native ${targetLanguage} reader would say it in a comic.`,
     "",
     "RULES (follow all):",
     "- Dialogue must be short, emotional, spoken-language style. Narration is polished prose. Shouts/action text is short and punchy.",
     "- NEVER translate word-by-word or keep the source sentence structure. If it sounds like machine translation, rewrite it until it does not.",
+    "- For Chinese output, reorder to natural Chinese word order: put time/place/setting before the action, modifiers before nouns, split long English sentences into short Chinese clauses. Never keep English sentence order.",
+    "- Keep every sentence SHORT: if a source sentence is long, break it into several short Chinese sentences. In bubbles, shorter is always better.",
     "- Chinese output must avoid translationese: no unnecessary 被-passives, no stacked 的, no filler words like 进行/位于/对于/作为/通过/关于, no Europeanized phrasing, no redundant subjects.",
     "- Proper names: use glossary terms exactly. Keep every name consistent across all items. Never output half-translated names (e.g. Chinese text mixed with leftover English like \"龙王Dragon\").",
     "- Each item's context field (order, kind, previous/next text) is layout info: use it only for tone, continuity, and speaker intent. Never invent plot facts.",
     "- Preserve punctuation-only items (…, ?!, etc.) unchanged. Do not add explanations, notes, or quotation marks.",
     "- Keep every item id unchanged. Return STRICT JSON only, no commentary, in exactly this shape:",
     "{\"items\":[{\"id\":\"<item id>\",\"translatedText\":\"<translation>\"}]}",
+    ...styleGuidance,
   ];
   if (isChineseTarget(targetLanguage)) {
     lines.push(
@@ -227,16 +246,20 @@ function isChineseTarget(targetLanguage: string): boolean {
 export function parseTranslationResults(content: string, fallbackItems: TextTranslationItem[]): TextTranslationResult[] {
   const candidate = extractJsonCandidate(content);
   if (!candidate) return fallbackItems.map((item) => ({ id: item.id, translatedText: item.text }));
+  let parsedItems: Array<{ id?: unknown; translatedText?: unknown }> = [];
   try {
     const parsed = JSON.parse(candidate) as { items?: Array<{ id?: unknown; translatedText?: unknown }> } | Array<{ id?: unknown; translatedText?: unknown }>;
-    const items = Array.isArray(parsed) ? parsed : Array.isArray(parsed.items) ? parsed.items : [];
-    const results = items
-      .map((item) => typeof item.id === "string" && typeof item.translatedText === "string" ? { id: item.id, translatedText: item.translatedText } : null)
-      .filter((item): item is TextTranslationResult => Boolean(item));
-    return results.length ? results : fallbackItems.map((item) => ({ id: item.id, translatedText: item.text }));
+    parsedItems = Array.isArray(parsed) ? parsed : Array.isArray(parsed.items) ? parsed.items : [];
   } catch {
     return fallbackItems.map((item) => ({ id: item.id, translatedText: item.text }));
   }
+  const byId = new Map<string, string>();
+  for (const item of parsedItems) {
+    if (typeof item.id === "string" && typeof item.translatedText === "string") byId.set(item.id, item.translatedText);
+  }
+  // Every input item must come back: translated when the model returned it,
+  // otherwise the source text so nothing silently disappears from the page.
+  return fallbackItems.map((item) => ({ id: item.id, translatedText: byId.get(item.id) ?? item.text }));
 }
 
 function extractJsonCandidate(content: string): string {

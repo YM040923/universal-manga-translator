@@ -559,7 +559,7 @@ test("renders sfx/action lettering without a huge opaque speech-bubble mask", ()
 
   const wrapper = document.querySelector<HTMLElement>("[data-umt-region-id='r1']")!;
   const chip = wrapper.querySelector<HTMLElement>("[data-umt-text-chip='true']")!;
-  assert.equal(wrapper.style.background, "rgba(255, 255, 255, 0.28)");
+  assert.equal(wrapper.style.background, "transparent");
   assert.equal(wrapper.style.clipPath, "none");
   assert.equal(chip.style.textShadow.includes("rgba(255,255,255,0.95)"), true);
 });

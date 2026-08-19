@@ -16,6 +16,8 @@ export interface CorePipelineInput extends GenericOcrImageInput {
   chapterContext?: string;
   previousTranslations?: Array<{ id: string; translatedText: string }>;
   termCandidates?: string[];
+  /** Translation style preset; "martial" applies wuxia/murim localization rules. */
+  style?: "general" | "martial";
 }
 
 export interface CoreOcrProvider {
@@ -62,6 +64,7 @@ export class OcrTranslatePipeline {
     const textBlocks = groupOcrRegionsIntoTextBlocks(ocrRegions);
     const translationOptions: TextTranslationOptions = { retranslate: input.retranslate === true };
     if (input.signal) translationOptions.signal = input.signal;
+    if (input.style) translationOptions.style = input.style;
     if (input.glossary && Object.keys(input.glossary).length) translationOptions.glossary = input.glossary;
     if (input.chapterContext?.trim()) translationOptions.chapterContext = input.chapterContext.trim();
     if (input.previousTranslations?.length) translationOptions.previousTranslations = input.previousTranslations;
@@ -286,7 +289,21 @@ function shouldJoinGroup(group: GenericOcrRegion[], next: GenericOcrRegion): boo
 
 function classifyRegionKind(region: GenericOcrRegion, imageWidth: number, imageHeight: number): GenericOcrRegion {
   if (region.kind !== "dialogue") return region;
+  if (looksLikeNonLatinSoundEffect(region.sourceText)) return { ...region, kind: "sfx" };
   return looksLikeActionLettering(region, imageWidth, imageHeight) ? { ...region, kind: "sfx" } : region;
+}
+
+/**
+ * Regions whose text is Korean hangul or punctuation-only are almost never
+ * dialogue bubbles (in English-localized manhwa, hangul appears only in
+ * borderless sound effects). They must not be covered with an opaque bubble.
+ */
+function looksLikeNonLatinSoundEffect(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed) return true;
+  if (/[\uAC00-\uD7AF\u1100-\u11FF\u3130-\u318F]/.test(trimmed)) return true; // hangul
+  const letters = Array.from(trimmed).filter((char) => /\p{L}/u.test(char));
+  return letters.length === 0; // punctuation / symbols only
 }
 
 function looksLikeActionLettering(region: GenericOcrRegion, imageWidth: number, imageHeight: number): boolean {

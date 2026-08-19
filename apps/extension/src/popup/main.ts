@@ -342,6 +342,10 @@ function apiSettingsMarkup(settings: ExtensionSettings, selfTestSummary: string)
         <label><span>连续失败后停止</span><input data-field="direct-ocr-stop-after-failures" type="number" min="1" max="10" value="${settings.directOcr.stopAfterConsecutiveFailures}"></label>
       </div>
     </details>
+    <details class="advanced-config" open><summary>翻译风格</summary>
+      <small>武侠/武林漫使用武侠本地化规则（专名按中文武侠惯例、短句有力）；其他漫画保持通用。</small>
+      <label><span>翻译风格</span><select data-field="translation-style"><option value="general" ${settings.translationStyle === "general" ? "selected" : ""}>通用</option><option value="martial" ${settings.translationStyle === "martial" ? "selected" : ""}>武侠</option></select></label>
+    </details>
     <details class="advanced-config" open><summary>人名 / 术语表</summary>
       <small>每行一个：英文名 = 固定译名。用于保证同一章的人名、地名、招式名稳定。</small>
       <label><span>Glossary</span><textarea data-field="glossary-text" rows="4" placeholder="Clark = 克拉克&#10;Murim = 武林">${escapeHtml(settings.glossaryText)}</textarea></label>

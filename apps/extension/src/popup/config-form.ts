@@ -25,6 +25,7 @@ export function readDirectConfigFromDom(root: HTMLElement, settings: ExtensionSe
       apiKey: value("direct-translator-api-key"),
       model: value("direct-translator-model"),
     },
+    translationStyle: value("translation-style") === "martial" ? "martial" : "general",
     glossaryText: value("glossary-text"),
   });
 }

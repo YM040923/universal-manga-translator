@@ -221,3 +221,27 @@ test("OcrTranslatePipeline auto-detects repeated proper-name term candidates", a
   assert.ok(seenOptions?.termCandidates?.includes("Heavenly Demon"));
   assert.ok(seenOptions?.termCandidates?.includes("Moon Blade"));
 });
+
+test("OcrTranslatePipeline marks hangul and punctuation-only regions as sfx so they are not bubble-covered", async () => {
+  let seenKinds: string[] = [];
+  const pipeline = new OcrTranslatePipeline({
+    profile: "network-ocr:image+openai-compatible:gpt",
+    ocr: { recognize: async () => [
+      region("r1", "쿵쾅!", 10, 20, 80, 30),
+      region("r2", "...", 10, 70, 40, 20),
+      region("r3", "I will not lose!", 10, 120, 200, 40),
+    ] },
+    translator: {
+      translate: async (items) => {
+        seenKinds = items.map((item) => (item.context ?? "").match(/kind: (\w+)/)?.[1] ?? "");
+        return items.map((item) => ({ id: item.id, translatedText: item.text }));
+      },
+    },
+  });
+
+  await pipeline.process({ imageBytes: new Uint8Array([1]), imageHash: "sfx", width: 300, height: 300, targetLanguage: "zh-CN", sourceLanguage: "auto" });
+
+  assert.ok(seenKinds[0]?.includes("sfx"), `r1 should be sfx, got ${seenKinds[0]}`);
+  assert.ok(seenKinds[1]?.includes("sfx"), `r2 should be sfx, got ${seenKinds[1]}`);
+  assert.ok(seenKinds[2]?.includes("dialogue"), `r3 should be dialogue, got ${seenKinds[2]}`);
+});

@@ -9,9 +9,11 @@ export function maskStyleForRegion(kind: string, width = 0, height = 0, appearan
   const ellipseClip = `ellipse(${ellipseX}% ${ellipseY}% at 50% 50%)`;
   if (shape === "transparent") return { background: "transparent", borderRadius: "0", clipPath: "none", textShadow: "0 1px 2px rgba(255,255,255,0.95),0 -1px 2px rgba(255,255,255,0.95),1px 0 2px rgba(255,255,255,0.95),-1px 0 2px rgba(255,255,255,0.95)" };
   if (kind === "sfx") {
+    // Sound effects (action lettering, hangul SFX) must not be hidden behind an
+    // opaque bubble: keep the artwork visible with a readable text shadow only.
     return {
-      background: "rgba(255,255,255,0.28)",
-      borderRadius: "14px",
+      background: "transparent",
+      borderRadius: "0",
       clipPath: "none",
       textShadow: "0 1px 2px rgba(255,255,255,0.95),0 -1px 2px rgba(255,255,255,0.95),1px 0 2px rgba(255,255,255,0.95),-1px 0 2px rgba(255,255,255,0.95)",
     };

@@ -179,6 +179,7 @@ export class DirectClient implements TranslatorClient {
         chapterContext,
         previousTranslations,
         termCandidates,
+        style: this.settings.translationStyle,
         signal: this.cancelController.signal,
       });
       if (this.cancelController.signal.aborted) {

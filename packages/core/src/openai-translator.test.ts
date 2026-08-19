@@ -12,6 +12,19 @@ test("parseTranslationResults falls back to source text when model response is u
   assert.deepEqual(results, [{ id: "r1", translatedText: "Hello" }]);
 });
 
+test("parseTranslationResults fills missing items with source text instead of dropping them", () => {
+  const results = parseTranslationResults('{"items":[{"id":"r1","translatedText":"你好"}]}', [
+    { id: "r1", text: "Hello" },
+    { id: "r2", text: "World" },
+    { id: "r3", text: "Again" },
+  ]);
+  assert.deepEqual(results, [
+    { id: "r1", translatedText: "你好" },
+    { id: "r2", translatedText: "World" },
+    { id: "r3", translatedText: "Again" },
+  ]);
+});
+
 test("OpenAICompatibleTextTranslator sends text-only chat completion request", async () => {
   let body: any;
   const translator = new OpenAICompatibleTextTranslator({
@@ -342,4 +355,26 @@ test("OpenAICompatibleTextTranslator uses a balanced default temperature", async
 
   await translator.translate([{ id: "r1", text: "Hello" }], "zh-CN", "auto");
   assert.equal(body.temperature, 0.4);
+  assert.equal(body.max_tokens, 2048);
+});
+
+test("martial style adds wuxia localization guidance to the prompt", async () => {
+  let prompt = "";
+  const translator = new OpenAICompatibleTextTranslator({
+    baseUrl: "https://api.example.test/v1",
+    apiKey: "key",
+    model: "gpt-test",
+    fetch: async (_url, init) => {
+      const body = JSON.parse(String(init?.body));
+      prompt = body.messages[0].content;
+      return new Response(JSON.stringify({ choices: [{ message: { content: '{"items":[{"id":"r1","translatedText":"天魔"}]}' } }] }), { status: 200, headers: { "content-type": "application/json" } });
+    },
+  });
+
+  await translator.translate([{ id: "r1", text: "Heavenly Demon" }], "zh-CN", "auto", { style: "martial" });
+
+  assert.match(prompt, /MARTIAL ARTS/);
+  assert.match(prompt, /Heavenly Demon.*天魔/);
+  assert.match(prompt, /wuxia/);
+  assert.match(prompt, /reorder to natural Chinese word order/i);
 });
