@@ -70,9 +70,22 @@ export class OpenAICompatibleTextTranslator {
     if (!items.length) return [];
     const maxItems = Math.max(1, Math.min(40, this.options.maxItemsPerRequest ?? DEFAULT_MAX_ITEMS_PER_REQUEST));
     const results: TextTranslationResult[] = [];
+    const translatedSoFar: TextTranslationResult[] = [];
+    const sourceById = new Map(items.map((item) => [item.id, item.text]));
     for (let start = 0; start < items.length; start += maxItems) {
       const chunk = items.slice(start, start + maxItems);
-      results.push(...await this.translateChunk(chunk, targetLanguage, sourceLanguage, options));
+      const chunkOptions: TextTranslationOptions = { ...options };
+      // Give later batches the tail of already-translated earlier batches so
+      // the model keeps names, tone, and word order consistent across the page.
+      const pageTail = translatedSoFar
+        .filter((item) => item.translatedText && item.translatedText !== sourceById.get(item.id))
+        .slice(-6);
+      if (pageTail.length) {
+        chunkOptions.previousTranslations = [...(options.previousTranslations ?? []), ...pageTail].slice(-12);
+      }
+      const chunkResults = await this.translateChunk(chunk, targetLanguage, sourceLanguage, chunkOptions);
+      results.push(...chunkResults);
+      translatedSoFar.push(...chunkResults);
     }
     return results;
   }

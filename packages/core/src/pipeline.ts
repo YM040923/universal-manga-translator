@@ -260,11 +260,18 @@ function shouldJoinGroup(group: GenericOcrRegion[], next: GenericOcrRegion): boo
   if (next.orientation === "vertical") return false;
   const union = unionRect(group.map((region) => region.box));
   const averageHeight = (previous.box.height + next.box.height) / 2;
-  if (verticalOverlap(union, next.box) >= Math.min(union.height, next.box.height) * 0.55) {
+  if (verticalOverlap(union, next.box) >= Math.min(union.height, next.box.height) * 0.6) {
     const horizontalGap = Math.max(0, next.box.x - (union.x + union.width));
-    const maxSameLineGap = Math.max(80, averageHeight * 3.5);
-    if (next.kind === "narration" && horizontalGap <= maxSameLineGap) return true;
-    if (next.kind === "dialogue" && horizontalGap <= Math.max(60, averageHeight * 2.4)) return true;
+    if (next.kind === "narration") {
+      // Caption boxes: horizontally split fragments of one line are common.
+      const maxSameLineGap = Math.max(60, averageHeight * 2.6);
+      if (horizontalGap <= maxSameLineGap) return true;
+    } else if (next.kind === "dialogue") {
+      // Speech bubbles: adjacent bubbles must never fuse into one giant
+      // overlay; only merge tiny gaps that look like OCR splits of one line.
+      const maxSameLineGap = Math.max(16, averageHeight * 0.55);
+      if (horizontalGap <= maxSameLineGap) return true;
+    }
   }
   const previousBottom = previous.box.y + previous.box.height;
   const verticalGap = next.box.y - previousBottom;
@@ -274,17 +281,20 @@ function shouldJoinGroup(group: GenericOcrRegion[], next: GenericOcrRegion): boo
   const overlap = horizontalOverlap(union, next.box);
   const merged = unionRect([...group.map((region) => region.box), next.box]);
   const averageLineLength = Math.max(1, averageHeight);
+  // Only merge vertically when the two boxes genuinely look like one large
+  // bubble: keep the thresholds tight so adjacent distinct bubbles are NOT
+  // fused into one giant overlay.
   const looksLikeSameLargeBubble =
     next.kind === "dialogue"
-    && verticalGap >= -averageHeight * 0.45
-    && verticalGap <= Math.max(72, averageHeight * 1.75)
-    && centerDistance <= Math.max(merged.width * 0.48, averageHeight * 3.2)
-    && merged.height <= Math.max(360, averageLineLength * 6.2)
-    && merged.width <= Math.max(900, averageHeight * 12);
+    && verticalGap >= -averageHeight * 0.35
+    && verticalGap <= Math.max(48, averageHeight * 1.15)
+    && centerDistance <= Math.max(merged.width * 0.36, averageHeight * 2.2)
+    && merged.height <= Math.max(260, averageLineLength * 4.6)
+    && merged.width <= Math.max(640, averageHeight * 8);
   if (looksLikeSameLargeBubble) return true;
-  if (verticalGap < -averageHeight * 0.35 || verticalGap > Math.max(28, averageHeight * 0.9)) return false;
-  const maxReasonableDistance = Math.max(union.width, next.box.width) * 0.45;
-  return centerDistance <= maxReasonableDistance || overlap >= Math.min(union.width, next.box.width) * 0.25;
+  if (verticalGap < -averageHeight * 0.25 || verticalGap > Math.max(22, averageHeight * 0.7)) return false;
+  const maxReasonableDistance = Math.max(union.width, next.box.width) * 0.38;
+  return centerDistance <= maxReasonableDistance || overlap >= Math.min(union.width, next.box.width) * 0.3;
 }
 
 function classifyRegionKind(region: GenericOcrRegion, imageWidth: number, imageHeight: number): GenericOcrRegion {
@@ -296,14 +306,20 @@ function classifyRegionKind(region: GenericOcrRegion, imageWidth: number, imageH
 /**
  * Regions whose text is Korean hangul or punctuation-only are almost never
  * dialogue bubbles (in English-localized manhwa, hangul appears only in
- * borderless sound effects). They must not be covered with an opaque bubble.
+ * borderless sound effects). Kana/CJK body text is kept as dialogue; unknown
+ * non-Latin short strings (OCR mojibake of hangul SFX) are treated as SFX.
+ * They must not be covered with an opaque bubble.
  */
 function looksLikeNonLatinSoundEffect(text: string): boolean {
   const trimmed = text.trim();
   if (!trimmed) return true;
   if (/[\uAC00-\uD7AF\u1100-\u11FF\u3130-\u318F]/.test(trimmed)) return true; // hangul
   const letters = Array.from(trimmed).filter((char) => /\p{L}/u.test(char));
-  return letters.length === 0; // punctuation / symbols only
+  if (!letters.length) return true; // punctuation / symbols only
+  const latin = letters.filter((char) => /[A-Za-z]/u.test(char)).length;
+  if (latin > 0) return false; // contains latin → regular text
+  if (/[\u3040-\u30FF\u3400-\u9FFF\uF900-\uFAFF]/.test(trimmed)) return false; // kana/CJK body text
+  return Array.from(trimmed.replace(/\s+/g, "")).length <= 6; // unknown non-latin short string
 }
 
 function looksLikeActionLettering(region: GenericOcrRegion, imageWidth: number, imageHeight: number): boolean {

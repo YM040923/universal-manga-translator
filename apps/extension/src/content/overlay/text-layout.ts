@@ -14,7 +14,7 @@ export function createStableTextLayout(text: string, width: number, height: numb
   const shapedWidth = kind === "dialogue"
     ? width * (aspect >= 2.35 ? 0.94 : aspect >= 1.7 ? 0.86 : 0.78)
     : width * 0.9;
-  const maxCharsPerLine = Math.max(3, Math.floor((shapedWidth * 0.92) / Math.max(1, fontSize)));
+  const maxCharsPerLine = Math.max(3, Math.floor((shapedWidth * 0.8) / Math.max(1, fontSize)));
   const desiredLines = desiredLineCount(normalized, maxCharsPerLine, width, height, kind);
   return { text: balanceCjkLines(normalized, desiredLines, maxCharsPerLine), fontSize };
 }
@@ -23,7 +23,7 @@ function looksLikeCjkText(text: string): boolean {
   const chars = Array.from(text).filter((char) => !/\s/u.test(char));
   if (!chars.length) return false;
   const cjk = chars.filter((char) => /[\u1100-\u11ff\u2e80-\u9fff\uf900-\ufaff\uff00-\uffef]/u.test(char));
-  return cjk.length / chars.length >= 0.3;
+  return cjk.length / chars.length >= 0.15;
 }
 
 function desiredLineCount(text: string, maxCharsPerLine: number, width: number, height: number, kind: string): number {
@@ -100,14 +100,14 @@ function fittedFontSizeForBox(text: string, width: number, height: number, prefe
   const contentCap = chars.length <= 18 && width >= 220 && height >= 110 ? Math.max(preferredCap, shortTextBoost) : Math.min(preferredCap, lengthCap);
   const upper = Math.max(12, Math.min(46, contentCap, shallowCap, ellipseCap));
   for (let size = upper; size >= 12; size -= 1) {
-    const metrics = estimateWrappedTextMetrics(normalized, size, kind === "dialogue" ? width * 0.72 : width, explicitLines);
-    if (metrics.height <= height * 0.94 && metrics.longestLineWidth <= width * 1.0) return size;
+    const metrics = estimateWrappedTextMetrics(normalized, size, kind === "dialogue" ? width * 0.66 : width, explicitLines);
+    if (metrics.height <= height * 0.9 && metrics.longestLineWidth <= width * 0.98) return size;
   }
   return 12;
 }
 
 function estimateWrappedTextMetrics(text: string, fontSize: number, width: number, explicitLines: number): { height: number; longestLineWidth: number } {
-  const lineHeight = fontSize * 1.18;
+  const lineHeight = fontSize * 1.25;
   let lineCount = 0;
   let longestLineWidth = 0;
   for (const paragraph of (text || " ").split("\n")) {

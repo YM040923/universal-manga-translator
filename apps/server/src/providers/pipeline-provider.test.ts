@@ -131,7 +131,7 @@ test("OcrThenTranslateProvider merges horizontally separated narration lines in 
   assert.equal(regions.length, 1);
 });
 
-test("OcrThenTranslateProvider merges same speech bubble lines even when OCR splits side fragments", async () => {
+test("OcrThenTranslateProvider merges same bubble columns but keeps side-by-side bubbles separate", async () => {
   const provider = new OcrThenTranslateProvider({
     profile: "ocr-then-translate:test",
     ocr: {
@@ -146,16 +146,20 @@ test("OcrThenTranslateProvider merges same speech bubble lines even when OCR spl
     },
     translator: {
       async translate(items: Array<{ id: string; text: string }>) {
-        assert.equal(items.length, 1);
-        assert.equal(items[0]!.text, "APPEARED IN\nFLOWER STREET\nBRING\nA GROUP!!");
-        return [{ id: items[0]!.id, translatedText: "出现在花街，带了一群人！！" }];
+        // c and d are two side-by-side bubbles; merging them would create a
+        // giant overlay across both bubbles (the reported bug), so each stays
+        // separate while the vertically stacked right column merges.
+        assert.equal(items.length, 3);
+        const texts = items.map((item) => item.text).sort();
+        assert.deepEqual(texts, ["A GROUP!!", "APPEARED IN\nFLOWER STREET", "BRING"]);
+        return items.map((item, index) => ({ id: item.id, translatedText: `译${index}` }));
       },
     },
   });
 
   const regions = await provider.process(input);
 
-  assert.equal(regions.length, 1);
+  assert.equal(regions.length, 3);
 });
 
 

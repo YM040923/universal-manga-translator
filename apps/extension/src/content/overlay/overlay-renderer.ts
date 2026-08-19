@@ -156,7 +156,7 @@ export class OverlayRenderer {
         region.style.writingMode,
         region.kind,
       ].join("|");
-      const maskStyle = maskStyleForRegion(region.kind, box.width, box.height, this.appearance);
+      const maskStyle = maskStyleForRegion(region.kind, box.width, box.height, this.appearance, region.sourceText);
       const nodeStyle = [
         "position:absolute",
         `left:${roundCssPx(box.x)}px`,
