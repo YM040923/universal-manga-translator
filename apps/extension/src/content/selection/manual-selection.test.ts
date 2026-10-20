@@ -39,3 +39,18 @@ test("ManualSelectionController ignores tiny selections", () => {
   assert.equal(called, false);
 });
 
+test("starting a second selection replaces the previous full-screen mask", () => {
+  const dom = new JSDOM("<!doctype html><html><body></body></html>", { url: "https://manga.example" });
+  globalThis.document = dom.window.document;
+  globalThis.window = dom.window as unknown as Window & typeof globalThis;
+  globalThis.HTMLElement = dom.window.HTMLElement;
+  globalThis.MouseEvent = dom.window.MouseEvent;
+  const first = new ManualSelectionController({ onSelect: () => {} });
+  const second = new ManualSelectionController({ onSelect: () => {} });
+
+  first.start();
+  second.start();
+
+  assert.equal(document.querySelectorAll("[data-umt-selection-layer]").length, 1);
+});
+

@@ -41,14 +41,14 @@ D:\Apps\UniversalMangaTranslator\extension
 5. 点击“加载已解压的扩展程序”，选择刚才解压后的目录。
 6. 打开漫画章节页，点击浏览器右上角插件图标。
 7. 第一次进入某网站时，先点“启用此网站”；插件只会在你启用过的主域名运行。
-8. 打开 API 设置页，填写：
+8. 点击 popup 右上角的“设置”，在设置页的“服务与模型”里填写：
    - OCR API URL
    - OCR API Key / 多个 OCR API Keys
    - OpenAI-compatible Base URL
    - 翻译 API Key
    - 翻译模型
    - 可选：人名 / 术语表
-9. 点击“自检”。自检通过后，回到漫画页点“翻译本页”或开启“自动翻译本网站”。
+9. 分别点击“测试 OCR”和“测试 AI”。两项都通过后，回到漫画页点“翻译本页”或开启“自动翻译本网站”。
 
 可选校验命令：
 
@@ -121,7 +121,7 @@ Target Language=zh-CN
 
 ### 人名 / 术语表
 
-如果某部漫画有固定人名、地名、组织名、招式名，可以在插件 API 设置里填写术语表。格式是一行一个：
+如果某部漫画有固定人名、地名、组织名、招式名，可以在设置页的“服务与模型 → 人名与术语表”里填写。格式是一行一个：
 
 ```text
 Clark = 克拉克
@@ -241,7 +241,9 @@ scripts         检查、构建、发布和 QA 脚本
 
 ## 隐私、权限与反馈
 
-插件权限、API Key 存储和请求去向见 [`docs/privacy-and-permissions.md`](docs/privacy-and-permissions.md)。提交问题时请使用 `.github/ISSUE_TEMPLATE/` 中的模板，并且不要粘贴完整 API Key。
+插件权限、API Key 存储和请求去向见 [`docs/privacy-and-permissions.md`](docs/privacy-and-permissions.md)。发现安全问题请按 [`SECURITY.md`](SECURITY.md) 私密报告，提交普通问题时请使用 `.github/ISSUE_TEMPLATE/` 中的模板，并且不要粘贴完整 API Key。
+
+版本变更记录见 [`CHANGELOG.md`](CHANGELOG.md)；这个仓库有过整段回滚，说明里会标注哪些版本实际交付、哪些只是开发过程中的版本号。
 
 ## 产品路线
 

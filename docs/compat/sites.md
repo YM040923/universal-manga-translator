@@ -29,10 +29,10 @@ Results:
 
 ## Real URL Probe
 
-Command used:
+Command used (scan output is a local artifact: it records the exact URLs you opened, so it stays out of git):
 
 ```powershell
-pnpm scan:sites https://xkcd.com/1/ https://www.webtoons.com/en/fantasy/tower-of-god/list?title_no=95 https://mangaplus.shueisha.co.jp/titles/100020 --out=docs/compat/real-scan.json
+pnpm scan:sites https://xkcd.com/1/ https://www.webtoons.com/en/fantasy/tower-of-god/list?title_no=95 https://mangaplus.shueisha.co.jp/titles/100020 --out=docs/compat/real-scan.local.json
 ```
 
 Results as of 2026-07-01:

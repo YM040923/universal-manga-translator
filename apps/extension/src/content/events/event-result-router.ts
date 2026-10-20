@@ -1,6 +1,6 @@
 import type { ServerEvent } from "@umt/shared/protocol";
 import type { Size, SurfaceResult } from "@umt/shared/types";
-import { isRenderableSurfaceResult } from "../translation-result.js";
+import { renderableSurfaceResult } from "../translation-result.js";
 
 interface TrackedSurface {
   element: HTMLElement;
@@ -32,11 +32,12 @@ export class EventResultRouter {
 
   handle(event: ServerEvent): boolean {
     if (event.type !== "job.completed" && event.type !== "job.cached") return false;
-    if (this.sessionId && event.jobSessionId && event.jobSessionId !== this.sessionId) return false;
-    if (!isRenderableSurfaceResult(event.result)) return false;
+    if ((event.jobSessionId ?? "") !== this.sessionId) return false;
+    const result = renderableSurfaceResult(event.result);
+    if (!result) return false;
     const target = this.tracked.get(event.surfaceId);
     if (!target) return false;
-    this.options.render(target.element, target.naturalSize, event.result);
+    this.options.render(target.element, target.naturalSize, result);
     return true;
   }
 }

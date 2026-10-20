@@ -1,6 +1,14 @@
 import type { CancelledResult, FailedResult, JobStatus, SurfaceResult, SurfaceTask } from "./types.js";
 
-export interface SubmitSurfaceRequest { task: SurfaceTask; jobSessionId?: string; }
+export interface SubmitSurfaceRequest {
+  task: SurfaceTask;
+  jobSessionId?: string;
+  /** Reader-specific term replacements. The backend caches per glossary so editing one stops reusing old results. */
+  glossary?: Record<string, string>;
+  /** Earlier bubbles in this chapter, sent so names and tone stay consistent across pages. */
+  chapterContext?: string;
+  termCandidates?: string[];
+}
 export interface SubmitSurfaceResponse { ok: true; surfaceId: string; status: JobStatus; result?: SurfaceResult; }
 export interface ErrorResponse { ok: false; error: string; }
 export type ApiResponse<T> = T | ErrorResponse;
@@ -42,8 +50,9 @@ export interface ConfigStatusResponse {
       available: number;
       keys: Array<{
         label: string;
-        state: "ready" | "blocked";
+        state: "ready" | "cooldown" | "disabled";
         failures: number;
+        retryAfterMs?: number;
         lastError?: string;
       }>;
     };

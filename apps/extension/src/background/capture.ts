@@ -1,4 +1,4 @@
-﻿import { isUmtBackendHttpRequest, isUmtCaptureVisibleTabRequest, isUmtDirectHttpRequest, isUmtFetchImageDataRequest, type UmtBackendHttpRequest, type UmtBackendHttpResponse, type UmtCaptureVisibleTabRequest, type UmtCaptureVisibleTabResponse, type UmtDirectHttpFormField, type UmtDirectHttpRequest, type UmtDirectHttpResponse, type UmtFetchImageDataRequest, type UmtFetchImageDataResponse } from "../content/messages.js";
+﻿import { isUmtBackendHttpRequest, isUmtCaptureVisibleTabRequest, isUmtDirectHttpCancelRequest, isUmtDirectHttpRequest, isUmtFetchImageDataRequest, type UmtBackendHttpRequest, type UmtBackendHttpResponse, type UmtCaptureVisibleTabRequest, type UmtCaptureVisibleTabResponse, type UmtDirectHttpFormField, type UmtDirectHttpRequest, type UmtDirectHttpResponse, type UmtFetchImageDataRequest, type UmtFetchImageDataResponse } from "../content/messages.js";
 
 export type CaptureVisibleTabFn = (windowId: number, options: chrome.tabs.CaptureVisibleTabOptions) => Promise<string>;
 export type FetchImageFn = (url: string, init?: RequestInit) => Promise<Response>;
@@ -44,6 +44,9 @@ export async function handleBackendHttpMessage(
   message: UmtBackendHttpRequest,
   fetchHttp: FetchImageFn = fetch,
 ): Promise<UmtBackendHttpResponse> {
+  const timeoutMs = normalizeBackendTimeoutMs(message.init?.timeoutMs);
+  const controller = timeoutMs ? new AbortController() : undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     const init: RequestInit = {
       method: message.init?.method ?? "GET",
@@ -51,18 +54,32 @@ export async function handleBackendHttpMessage(
     if (message.init?.headers) init.headers = message.init.headers;
     if (typeof message.init?.body === "string") init.body = message.init.body;
     if (message.init?.cache) init.cache = message.init.cache;
+    if (controller) {
+      init.signal = controller.signal;
+      timer = setTimeout(() => controller.abort(), timeoutMs);
+    }
     const response = await fetchHttp(message.url, init);
     const body = await response.json().catch(() => null) as unknown;
     if (!response.ok) return { ok: false, status: response.status, error: extractErrorMessage(body) || `Backend HTTP ${response.status}`, body };
     return { ok: true, status: response.status, body };
   } catch (error) {
+    if (controller?.signal.aborted) return { ok: false, error: `Backend request timed out after ${timeoutMs}ms` };
     return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  } finally {
+    if (timer) clearTimeout(timer);
   }
+}
+
+function normalizeBackendTimeoutMs(value: number | undefined): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 1000) return undefined;
+  return Math.trunc(value);
 }
 export async function handleDirectHttpMessage(
   message: UmtDirectHttpRequest,
   fetchHttp: FetchImageFn = fetch,
 ): Promise<UmtDirectHttpResponse> {
+  const controller = message.requestId ? new AbortController() : undefined;
+  if (message.requestId && controller) directHttpAborters.set(message.requestId, controller);
   try {
     const init: RequestInit = { method: message.init?.method ?? "GET" };
     const headers = new Headers(message.init?.headers ?? {});
@@ -77,6 +94,7 @@ export async function handleDirectHttpMessage(
     }
     if ([...headers.keys()].length) init.headers = Object.fromEntries(headers.entries());
     if (message.init?.cache) init.cache = message.init.cache;
+    if (controller) init.signal = controller.signal;
     const response = await fetchHttp(message.url, init);
     const bodyText = await response.text();
     const responseHeaders = Object.fromEntries(response.headers.entries());
@@ -84,7 +102,20 @@ export async function handleDirectHttpMessage(
     return { ok: true, status: response.status, statusText: response.statusText, headers: responseHeaders, bodyText };
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  } finally {
+    if (message.requestId) directHttpAborters.delete(message.requestId);
   }
+}
+
+const directHttpAborters = new Map<string, AbortController>();
+
+/** Aborts a proxied direct-API request that is still running. Returns false when it already finished. */
+export function cancelDirectHttpRequest(requestId: string): boolean {
+  const controller = directHttpAborters.get(requestId);
+  if (!controller) return false;
+  controller.abort();
+  directHttpAborters.delete(requestId);
+  return true;
 }
 
 export function registerCaptureVisibleTabHandler(runtime: typeof chrome.runtime = chrome.runtime, tabs: typeof chrome.tabs = chrome.tabs): void {
@@ -104,6 +135,10 @@ export function registerCaptureVisibleTabHandler(runtime: typeof chrome.runtime 
     if (isUmtDirectHttpRequest(message)) {
       void handleDirectHttpMessage(message).then(sendResponse);
       return true;
+    }
+    if (isUmtDirectHttpCancelRequest(message)) {
+      sendResponse({ ok: cancelDirectHttpRequest(message.requestId) });
+      return false;
     }
     return false;
   });

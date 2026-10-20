@@ -436,3 +436,37 @@ test("DirectClient excludes deleted manual overrides from retranslate guidance",
   assert.doesNotMatch(prompts[1] ?? "", /Previous translations/);
   assert.doesNotMatch(prompts[1] ?? "", /不要翻译这个/);
 });
+
+test("DirectClient aborts the provider request of a cancelled job session", async () => {
+  let sawAbortSignal = false;
+  const fetchImpl = (async (_url: string | URL | Request, init?: RequestInit) => {
+    const signal = init?.signal;
+    if (!signal) throw new Error("direct OCR request should carry an abort signal");
+    sawAbortSignal = true;
+    return new Promise<Response>((_resolve, reject) => {
+      const abort = () => reject(new DOMException("The operation was aborted.", "AbortError"));
+      if (signal.aborted) abort();
+      else signal.addEventListener("abort", abort, { once: true });
+    });
+  }) as unknown as typeof fetch;
+  const client = new DirectClient(settings(fetchImpl));
+
+  const pending = client.submit(task(), "job-cancel");
+  const cancelled = await client.cancelJobSession("job-cancel");
+
+  assert.equal(cancelled.ok, true);
+  assert.equal(cancelled.cancellable, true);
+  const response = await pending;
+  assert.equal(sawAbortSignal, true);
+  if (response.ok) throw new Error(`expected the cancelled job to fail, got ${response.status}`);
+  assert.equal(response.error, "cancelled");
+});
+
+test("DirectClient reports nothing as cancelled when the job session has no running work", async () => {
+  const client = new DirectClient(settings(async () => new Response("{}", { status: 200 })));
+
+  const cancelled = await client.cancelJobSession("job-idle");
+
+  assert.equal(cancelled.ok, true);
+  assert.equal(cancelled.cancellable, false);
+});

@@ -140,6 +140,57 @@ export async function waitForBackendReady(options: WaitForBackendReadyOptions): 
   throw new Error(`后端启动超时，请检查端口或配置${suffix}`);
 }
 
+export interface BackendJsonRequest {
+  url: string;
+  method?: string;
+  body?: string;
+}
+
+export interface BackendJsonResponse {
+  ok: boolean;
+  status: number;
+  body: unknown;
+  error?: string;
+}
+
+/**
+ * The shell window is a `data:` document, so a request from it carries the
+ * opaque `null` origin that the backend refuses. Issuing the call from this
+ * process keeps the desktop controller usable without teaching the backend to
+ * trust null origins, which every sandboxed iframe and data: page presents.
+ */
+export function isSameBackendOrigin(url: string, backendUrl: string): boolean {
+  try {
+    const target = new URL(url);
+    const local = new URL(backendUrl);
+    return target.protocol === local.protocol && target.host === local.host;
+  } catch {
+    return false;
+  }
+}
+
+export async function requestBackendJson(
+  request: BackendJsonRequest,
+  backendUrl: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<BackendJsonResponse> {
+  if (!isSameBackendOrigin(request.url, backendUrl)) {
+    return { ok: false, status: 0, body: {}, error: "只允许访问本地后端地址" };
+  }
+  const method = (request.method ?? "GET").toUpperCase();
+  try {
+    const response = await fetchImpl(request.url, {
+      method,
+      cache: "no-store",
+      ...(method === "GET" ? {} : { headers: { "content-type": "application/json" }, body: request.body ?? "{}" }),
+    });
+    const body = await response.json().catch(() => ({}));
+    return { ok: response.ok, status: response.status, body };
+  } catch (error) {
+    return { ok: false, status: 0, body: {}, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
 export async function defaultFetchHealth(backendUrl: string): Promise<BackendHealth> {
   try {
     const response = await fetch(`${backendUrl.replace(/\/$/, "")}/health`, { cache: "no-store" });

@@ -62,6 +62,15 @@ export class TranslationQueue {
     this.paused = false;
   }
 
+  /** Stops the running batch and parks every unfinished surface. The queue stays paused until the reader resumes it. */
+  cancelAll(): void {
+    this.generation += 1;
+    this.paused = true;
+    for (const surface of this.surfaces) {
+      if (!TERMINAL_STATUSES.has(this.getStatus(surface.surfaceId))) this.mark(surface.surfaceId, "cancelled");
+    }
+  }
+
   clear(_reason: string): void {
     this.generation += 1;
     this.autoRun = null;

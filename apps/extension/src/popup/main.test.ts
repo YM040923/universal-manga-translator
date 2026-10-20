@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
 import { mountPopupPage, mountSettingsPage, type PopupDeps } from "./main.js";
 import type { UmtDirectHttpRequest, UmtDirectHttpResponse } from "../content/messages.js";
-import { DEFAULT_SETTINGS, enableSiteForUrl, setSiteSettings, type ExtensionSettings, type SettingsStorageArea } from "../settings/settings.js";
+import { DEFAULT_SETTINGS, enableSiteForUrl, loadSettings, setSiteSettings, singleAreaStores, type ExtensionSettings, type SettingsStorageArea } from "../settings/settings.js";
 
 test("popup shows an enable button before a site is activated", async () => {
   const dom = setupDom();
@@ -30,6 +30,24 @@ test("popup enables current primary domain through the background", async () => 
   assert.deepEqual(activated, [{ tabId: 123, url: "https://www.asurascans.com/chapter/1" }]);
   assert.equal(storage.current.enabledSites["asurascans.com"], true);
   assert.equal((root.textContent ?? "").includes("\u5df2\u542f\u7528"), true);
+});
+
+test("popup revokes an enabled site through the deactivate button", async () => {
+  const dom = setupDom();
+  const seeded = enableSiteForUrl(enableSiteForUrl(DEFAULT_SETTINGS, "https://asurascans.com/a"), "https://mangadex.org/a");
+  const storage = fakeStorage(seeded);
+  const root = dom.window.document.querySelector<HTMLElement>("#app")!;
+
+  await mountPopupPage(root, deps({ storage, tabUrl: "https://www.asurascans.com/chapter/1" }));
+  const deactivate = root.querySelector<HTMLButtonElement>("[data-action='deactivate-site']");
+  assert.ok(deactivate);
+
+  deactivate!.click();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(storage.current.enabledSites["asurascans.com"], undefined);
+  assert.equal(storage.current.enabledSites["mangadex.org"], true);
+  assert.ok(root.querySelector<HTMLButtonElement>("[data-action='activate-site']"));
 });
 
 test("popup sends page commands only after site is enabled", async () => {
@@ -570,12 +588,16 @@ test("settings page saves direct OCR and translator API configuration", async ()
   await new Promise((resolve) => setTimeout(resolve, 0));
 
   assert.equal(storage.current.directOcr.apiUrl, "https://ocr.example/ocr");
-  assert.deepEqual(storage.current.directOcr.apiKeys, ["ocr-a", "ocr-b"]);
+  assert.deepEqual(storage.current.directOcr.apiKeys, []);
   assert.equal(storage.current.directOcr.inputMode, "file");
   assert.equal(storage.current.directOcr.imageField, "file");
   assert.equal(storage.current.directTranslator.baseUrl, "https://api.example/v1");
-  assert.equal(storage.current.directTranslator.apiKey, "sk-test-secret");
+  assert.equal(storage.current.directTranslator.apiKey, "");
   assert.equal(storage.current.directTranslator.model, "gpt-test");
+
+  const persisted = await loadSettings(singleAreaStores(storage));
+  assert.deepEqual(persisted.directOcr.apiKeys, ["ocr-a", "ocr-b"]);
+  assert.equal(persisted.directTranslator.apiKey, "sk-test-secret");
   assert.deepEqual(storage.current.directOcr.regionsPaths, ["data.regions", "words_result"]);
   assert.deepEqual(storage.current.directOcr.textPaths, ["text", "words"]);
   assert.deepEqual(storage.current.directOcr.boxPaths, ["bbox", "location"]);

@@ -1,5 +1,5 @@
+import type { ApiKeyPoolStatus } from "@umt/core";
 import type { SurfaceTask, TextRegion } from "@umt/shared";
-import type { ApiKeyPoolStatus } from "./api-key-pool.js";
 
 export interface ProviderInput {
   task: SurfaceTask;
@@ -8,6 +8,11 @@ export interface ProviderInput {
   width: number;
   height: number;
   forceRetranslate?: boolean;
+  glossary?: Record<string, string>;
+  /** Earlier pages of the same chapter, used by the translator for name and tone continuity. */
+  chapterContext?: string;
+  termCandidates?: string[];
+  signal?: AbortSignal;
 }
 
 export interface VisionProvider {
@@ -16,4 +21,3 @@ export interface VisionProvider {
   keyStatus?(): ApiKeyPoolStatus | undefined;
   process(input: ProviderInput): Promise<TextRegion[]>;
 }
-

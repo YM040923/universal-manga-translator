@@ -1,7 +1,7 @@
 ﻿import { app, BrowserWindow, ipcMain, Menu } from "electron";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createBackendManager, defaultBackendUrl } from "./backend-manager.js";
+import { createBackendManager, defaultBackendUrl, requestBackendJson, type BackendJsonRequest } from "./backend-manager.js";
 import { createDesktopShellHtml } from "./app-shell.js";
 import { createWindowOptions } from "./window-config.js";
 
@@ -24,6 +24,7 @@ ipcMain.handle("umt:stop", async () => {
   return backendManager.getStatus();
 });
 ipcMain.handle("umt:cleanup", async () => (await backendManager.cleanupExistingBackend()).status);
+ipcMain.handle("umt:backend-request", (_event, request: BackendJsonRequest) => requestBackendJson(request, backendUrl));
 
 app.whenReady().then(() => {
   Menu.setApplicationMenu(null);

@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { test } from "node:test";
+import { isSameBackendOrigin, requestBackendJson } from "./backend-manager.js";
 import { createBackendLaunchSpec, createBundledBackendLaunchSpec, createBackendManager, createBackendSpawnOptions, findBundledResourcesDir, findProjectRoot, findProjectRootFromCandidates, parseNetstatListeningPids, waitForBackendReady } from "./backend-manager.js";
 
 function makeFakeProjectRoot(): { root: string; nested: string } {
@@ -208,5 +209,26 @@ test("bundled launch spec materializes packaged runtime modules for Node resolut
   createBundledBackendLaunchSpec(resources, "node");
 
   assert.equal(existsSync(join(resources, "server", "node_modules", "fastify", "package.json")), true);
+});
+
+test("backend json bridge only talks to the configured local backend origin", async () => {
+  const calls: Array<{ url: string; init: Record<string, unknown> | undefined }> = [];
+  const fetchImpl = (async (url: string | URL, init?: unknown) => {
+    calls.push({ url: String(url), init: init as Record<string, unknown> | undefined });
+    return { ok: true, status: 200, json: async () => ({ ok: true, deleted: 3 }) };
+  }) as unknown as typeof fetch;
+
+  const rejected = await requestBackendJson({ url: "http://127.0.0.1:9999/v1/cache/clear", method: "POST", body: "{}" }, "http://127.0.0.1:47831", fetchImpl);
+  assert.equal(rejected.ok, false);
+  assert.equal(calls.length, 0, "off-origin URLs are never fetched");
+
+  const forwarded = await requestBackendJson({ url: "http://127.0.0.1:47831/v1/cache/clear", method: "POST", body: "{}" }, "http://127.0.0.1:47831", fetchImpl);
+
+  assert.equal(forwarded.ok, true);
+  assert.deepEqual(forwarded.body, { ok: true, deleted: 3 });
+  assert.equal(calls[0]?.init?.method, "POST");
+  assert.deepEqual(calls[0]?.init?.headers, { "content-type": "application/json" });
+  assert.equal(isSameBackendOrigin("http://127.0.0.1:47831/v1/config", "http://127.0.0.1:47831"), true);
+  assert.equal(isSameBackendOrigin("not a url", "http://127.0.0.1:47831"), false);
 });
 

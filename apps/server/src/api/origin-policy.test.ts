@@ -6,12 +6,15 @@ test("isAllowedRequestOrigin allows clients without an Origin header", () => {
   assert.equal(isAllowedRequestOrigin(undefined), true);
 });
 
-test("isAllowedRequestOrigin allows the extension and local desktop pages", () => {
+test("isAllowedRequestOrigin allows the extension and loopback dev pages", () => {
   assert.equal(isAllowedRequestOrigin("chrome-extension://abcdefghijklmnop"), true);
-  assert.equal(isAllowedRequestOrigin("null"), true);
-  assert.equal(isAllowedRequestOrigin("file:///C:/app/index.html"), true);
   assert.equal(isAllowedRequestOrigin("http://localhost:47831"), true);
   assert.equal(isAllowedRequestOrigin("http://127.0.0.1:5173"), true);
+});
+
+test("isAllowedRequestOrigin rejects opaque origins used by sandboxed frames and data pages", () => {
+  assert.equal(isAllowedRequestOrigin("null"), false);
+  assert.equal(isAllowedRequestOrigin("file:///C:/app/index.html"), false);
 });
 
 test("isAllowedRequestOrigin rejects remote web origins", () => {

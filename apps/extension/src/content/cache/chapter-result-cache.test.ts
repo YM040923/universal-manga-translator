@@ -35,14 +35,65 @@ test("ChapterResultCache ignores empty results and can clear a chapter", async (
   assert.deepEqual((await cache.read(context)).entries, {});
 });
 
-function fakeStorage(): ChapterResultCacheStorage {
+test("concurrent saves for one chapter keep every page", async () => {
+  const storage = fakeStorage();
+  const cache = new ChapterResultCache(storage);
+  const context = { pageUrl: "https://reader.example/ch/1", targetLanguage: "zh-CN", providerProfile: "generic-ocr" };
+
+  await Promise.all([
+    cache.save(context, "https://cdn.example/1.webp", fakeResult("s1")),
+    cache.save(context, "https://cdn.example/2.webp", fakeResult("s2")),
+    cache.save(context, "https://cdn.example/3.webp", fakeResult("s3")),
+  ]);
+
+  const doc = await cache.read(context);
+  assert.deepEqual(Object.keys(doc.entries).sort(), [
+    "https://cdn.example/1.webp",
+    "https://cdn.example/2.webp",
+    "https://cdn.example/3.webp",
+  ]);
+});
+
+test("ChapterResultCache evicts the oldest pages once the chapter is full", async () => {
+  const storage = fakeStorage();
+  const cache = new ChapterResultCache(storage);
+  const context = { pageUrl: "https://reader.example/ch/1", targetLanguage: "zh-CN", providerProfile: "generic-ocr" };
+
+  for (let page = 1; page <= 65; page += 1) {
+    await cache.save(context, `https://cdn.example/${page}.webp`, fakeResult(`s${page}`));
+  }
+
+  const doc = await cache.read(context);
+  assert.equal(Object.keys(doc.entries).length, 60);
+  assert.equal(doc.entries["https://cdn.example/5.webp"], undefined);
+  assert.ok(doc.entries["https://cdn.example/65.webp"]);
+});
+
+test("ChapterResultCache keeps queued writes flowing after a storage failure", async () => {
+  const storage = fakeStorage({ failFirstWrite: true });
+  const cache = new ChapterResultCache(storage);
+  const context = { pageUrl: "https://reader.example/ch/1", targetLanguage: "zh-CN", providerProfile: "generic-ocr" };
+
+  await assert.rejects(() => cache.save(context, "https://cdn.example/1.webp", fakeResult("s1")));
+  await cache.save(context, "https://cdn.example/2.webp", fakeResult("s2"));
+
+  const doc = await cache.read(context);
+  assert.deepEqual(Object.keys(doc.entries), ["https://cdn.example/2.webp"]);
+});
+
+function fakeStorage(options: { failFirstWrite?: boolean } = {}): ChapterResultCacheStorage {
   const data: Record<string, unknown> = {};
+  let writes = 0;
   return {
     async get(key?: string | string[] | Record<string, unknown> | null) {
       if (typeof key === "string") return { [key]: data[key] };
       return { ...data };
     },
-    async set(value: Record<string, unknown>) { Object.assign(data, value); },
+    async set(value: Record<string, unknown>) {
+      writes += 1;
+      if (options.failFirstWrite && writes === 1) throw new Error("QUOTA_BYTES exceeded");
+      Object.assign(data, value);
+    },
     async remove(keys: string | string[]) { for (const key of Array.isArray(keys) ? keys : [keys]) delete data[key]; },
   };
 }

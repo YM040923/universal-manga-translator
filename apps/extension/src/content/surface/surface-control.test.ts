@@ -85,3 +85,23 @@ test("SurfaceControl can update the displayed image index after rescans", () => 
   assert.equal(button.dataset.umtSurfaceIndex, "2");
   assert.equal(button.title.includes("第 2 张"), true);
 });
+
+test("SurfaceControl rebind follows the image node a reader swapped in", () => {
+  const staleImage = setupDom();
+  const freshImage = document.createElement("img");
+  freshImage.getBoundingClientRect = () => ({ x: 300, y: 700, left: 300, top: 700, right: 1100, bottom: 1700, width: 800, height: 1000, toJSON: () => ({}) });
+  const control = new SurfaceControl({ surfaceId: "s5", image: staleImage, index: 5, onAction: () => undefined });
+  control.mount();
+
+  control.rebind(freshImage);
+  control.refreshPosition();
+  staleImage.dispatchEvent(new globalThis.window.Event("mouseenter"));
+
+  const button = document.querySelector<HTMLButtonElement>("[data-umt-surface-button='s5']")!;
+  assert.equal(button.style.left, "318px");
+  assert.equal(button.style.top, "728px");
+  assert.equal(button.style.opacity, "0.18");
+
+  freshImage.dispatchEvent(new globalThis.window.Event("mouseenter"));
+  assert.equal(button.style.opacity, "0.78");
+});

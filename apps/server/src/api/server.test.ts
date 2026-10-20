@@ -210,7 +210,7 @@ test("config status exposes generic network OCR details without leaking API keys
       count: 2,
       available: 1,
       keys: [
-        { label: "key#1", state: "blocked", failures: 1, lastError: "quota exhausted" },
+        { label: "key#1", state: "disabled", failures: 1, lastError: "quota exhausted" },
         { label: "key#2", state: "ready", failures: 0 },
       ],
     },
@@ -233,7 +233,7 @@ test("config status exposes generic network OCR details without leaking API keys
     count: 2,
     available: 1,
     keys: [
-      { label: "key#1", state: "blocked", failures: 1, lastError: "quota exhausted" },
+      { label: "key#1", state: "disabled", failures: 1, lastError: "quota exhausted" },
       { label: "key#2", state: "ready", failures: 0 },
     ],
   });
@@ -346,7 +346,7 @@ test("clear diagnostics endpoint calls diagnostics clearer", async () => {
     diagnosticsClearer: () => { called = true; return 123; },
   });
 
-  const response = await app.inject({ method: "POST", url: "/v1/diagnostics/clear" });
+  const response = await app.inject({ method: "POST", url: "/v1/diagnostics/clear", payload: {} });
 
   assert.equal(response.statusCode, 200);
   assert.deepEqual(response.json(), { ok: true, deleted: 123 });
@@ -368,7 +368,7 @@ test("cache management API reports stats and clears cache", async () => {
     assert.equal(stats.json().ok, true);
     assert.equal(stats.json().stats.entries, 1);
 
-    const cleared = await app.inject({ method: "POST", url: "/v1/cache/clear" });
+    const cleared = await app.inject({ method: "POST", url: "/v1/cache/clear", payload: {} });
     assert.equal(cleared.statusCode, 200);
     assert.equal(cleared.json().ok, true);
     assert.equal(cleared.json().deleted, 1);
@@ -386,7 +386,7 @@ test("cache management API reports and clears OCR cache together with surface ca
   try {
     db = openDatabase(join(dir, "cache.sqlite"));
     const ocrCache = new OcrCache(db);
-    ocrCache.save("ocr-key", [{ id: "r1", box: { x: 1, y: 2, width: 30, height: 40 }, sourceText: "HELLO", confidence: 0.9, orientation: "horizontal", kind: "dialogue" }]);
+    ocrCache.set("ocr-key", [{ id: "r1", box: { x: 1, y: 2, width: 30, height: 40 }, sourceText: "HELLO", confidence: 0.9, orientation: "horizontal", kind: "dialogue" }]);
     app = await buildServer({ ...testServerOptions(), surfaceCache: new SurfaceCache(db), ocrCache });
     await app.inject({ method: "POST", url: "/v1/surfaces/submit", payload: { task } });
 
@@ -394,7 +394,7 @@ test("cache management API reports and clears OCR cache together with surface ca
     assert.equal(stats.json().stats.entries, 1);
     assert.equal(stats.json().ocrStats.entries, 1);
 
-    const cleared = await app.inject({ method: "POST", url: "/v1/cache/clear" });
+    const cleared = await app.inject({ method: "POST", url: "/v1/cache/clear", payload: {} });
     assert.equal(cleared.json().surfaceDeleted, 1);
     assert.equal(cleared.json().ocrDeleted, 1);
     assert.equal(cleared.json().deleted, 2);
@@ -469,6 +469,103 @@ test("retranslate bypasses cache and cancel returns accepted status", async () =
   assert.equal(third.json().result.regions[0].translatedText, "translated 2");
   assert.equal(cancelled.statusCode, 200);
   assert.deepEqual(cancelled.json(), { ok: true, surfaceId: "retranslated-surface", status: "accepted", cancellable: false });
+  await app.close();
+});
+
+test("surface cancel aborts the in-flight provider instead of only marking a flag", async () => {
+  let aborted = false;
+  let markEntered!: () => void;
+  let releaseProvider!: () => void;
+  const entered = new Promise<void>((resolve) => { markEntered = resolve; });
+  const gate = new Promise<void>((resolve) => { releaseProvider = resolve; });
+  const app = await buildServer({
+    provider: "mock",
+    targetLanguage: "zh-CN",
+    visionProvider: {
+      profile: "abortable",
+      process: async (input) => {
+        input.signal?.addEventListener("abort", () => { aborted = true; });
+        markEntered();
+        await gate;
+        return [{ id: "r1", box: { x: 0, y: 0, width: 10, height: 10 }, sourceText: "hi", translatedText: "你好", confidence: 1, orientation: "horizontal", kind: "dialogue" }];
+      },
+    },
+  });
+
+  const submitPromise = app.inject({ method: "POST", url: "/v1/surfaces/submit", payload: { task: { ...task, surfaceId: "abort-target" }, jobSessionId: "session-abort" } });
+  await entered;
+  const unknown = await app.inject({ method: "POST", url: "/v1/surfaces/cancel", payload: { surfaceId: "never-submitted" } });
+  const cancelled = await app.inject({ method: "POST", url: "/v1/surfaces/cancel", payload: { surfaceId: "abort-target" } });
+  releaseProvider();
+  const submitted = await submitPromise;
+
+  assert.deepEqual(unknown.json(), { ok: true, surfaceId: "never-submitted", status: "accepted", cancellable: false });
+  assert.equal(cancelled.json().cancellable, true);
+  assert.equal(aborted, true);
+  assert.equal(submitted.json().ok, false);
+  assert.equal(submitted.json().result.status, "cancelled");
+  await app.close();
+});
+
+test("submit passes a sanitized glossary to the provider and caches per glossary", async () => {
+  const seen: Array<Record<string, string> | undefined> = [];
+  const app = await buildServer({
+    provider: "mock",
+    targetLanguage: "zh-CN",
+    visionProvider: {
+      profile: "glossary-aware",
+      process: async (input) => {
+        seen.push(input.glossary);
+        return [{ id: "r1", box: { x: 0, y: 0, width: 10, height: 10 }, sourceText: "hi", translatedText: "你好", confidence: 1, orientation: "horizontal", kind: "dialogue" }];
+      },
+    },
+  });
+
+  const glossary = { "张三": "Zhang San", "坏  词\n注入": "ok" };
+  const first = await app.inject({ method: "POST", url: "/v1/surfaces/submit", payload: { task, glossary } });
+  const edited = await app.inject({ method: "POST", url: "/v1/surfaces/submit", payload: { task: { ...task, surfaceId: "other-glossary" }, glossary: { "张三": "Zhang Shan" } } });
+  const replay = await app.inject({ method: "POST", url: "/v1/surfaces/submit", payload: { task: { ...task, surfaceId: "replay" }, glossary } });
+  const plain = await app.inject({ method: "POST", url: "/v1/surfaces/submit", payload: { task: { ...task, surfaceId: "no-glossary" } } });
+
+  assert.equal(first.json().status, "completed");
+  assert.deepEqual(seen[0], { "张三": "Zhang San", "坏 词 注入": "ok" });
+  assert.equal(edited.json().status, "completed", "an edited term must not reuse the cached translation");
+  assert.equal(replay.json().status, "cached");
+  assert.equal(plain.json().status, "completed", "a request without a glossary must not reuse glossary results");
+  assert.equal(seen.length, 3);
+  await app.close();
+});
+
+test("submit forwards sanitized chapter hints without fragmenting the cache", async () => {
+  const seen: Array<Record<string, unknown>> = [];
+  const app = await buildServer({
+    provider: "mock",
+    targetLanguage: "zh-CN",
+    visionProvider: {
+      profile: "context-aware",
+      process: async (input) => {
+        seen.push({ chapterContext: input.chapterContext ?? null, termCandidates: input.termCandidates ?? null });
+        return [{ id: "r1", box: { x: 0, y: 0, width: 10, height: 10 }, sourceText: "hi", translatedText: "你好", confidence: 1, orientation: "horizontal", kind: "dialogue" }];
+      },
+    },
+  });
+
+  const first = await app.inject({
+    method: "POST",
+    url: "/v1/surfaces/submit",
+    payload: { task, chapterContext: "Recent bubbles:\n  张三 =>  Zhang San", termCandidates: ["Clark", "clark", "x".repeat(100)] },
+  });
+  const second = await app.inject({
+    method: "POST",
+    url: "/v1/surfaces/submit",
+    payload: { task: { ...task, surfaceId: "later-page" }, chapterContext: "Recent bubbles: 李四 => Li Si", termCandidates: ["Heavenly Demon"] },
+  });
+
+  assert.equal(first.json().status, "completed");
+  assert.equal(seen[0]?.chapterContext, "Recent bubbles: 张三 => Zhang San");
+  assert.deepEqual(seen[0]?.termCandidates, ["Clark", "x".repeat(64)]);
+  assert.equal(second.json().status, "cached", "chapter hints steer the prompt but must not fragment the cache");
+  assert.equal(seen.length, 1);
   await app.close();
 });
 test("submit maps provider boxes from normalized provider image back to original image pixels", async () => {
@@ -676,7 +773,7 @@ test("self test endpoint verifies provider submit flow", async () => {
     visionProvider: { profile: "mock", process: async () => [{ id: "r1", box: { x: 10, y: 10, width: 100, height: 50 }, sourceText: "Hello", translatedText: "你好", confidence: 1, orientation: "horizontal", kind: "dialogue" }] },
   });
 
-  const response = await app.inject({ method: "POST", url: "/v1/self-test" });
+  const response = await app.inject({ method: "POST", url: "/v1/self-test", payload: {} });
 
   assert.equal(response.statusCode, 200);
   assert.equal(response.json().ok, true);

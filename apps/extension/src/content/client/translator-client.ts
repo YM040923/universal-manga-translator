@@ -33,7 +33,7 @@ export interface TranslatorClient {
 }
 
 export interface EventStreamTranslatorClient extends TranslatorClient {
-  connectEvents(onEvent: (event: ServerEvent) => void): WebSocket;
+  connectEvents(onEvent: (event: ServerEvent) => void): Promise<WebSocket>;
 }
 
 export function supportsEventStream(client: TranslatorClient): client is EventStreamTranslatorClient {

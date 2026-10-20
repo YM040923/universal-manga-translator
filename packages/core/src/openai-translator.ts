@@ -10,6 +10,8 @@ export interface TextTranslationOptions {
   glossary?: Record<string, string>;
   chapterContext?: string;
   termCandidates?: string[];
+  /** Cancels the in-flight translation request. */
+  signal?: AbortSignal;
 }
 
 export interface TextTranslationResult {
@@ -118,6 +120,7 @@ export class OpenAICompatibleTextTranslator {
           method: "POST",
           headers: { authorization: `Bearer ${this.options.apiKey}`, "content-type": "application/json" },
           body: JSON.stringify(requestBody),
+          ...(options.signal ? { signal: options.signal } : {}),
         });
         if (!response.ok) {
           const body = await response.text();
@@ -154,6 +157,7 @@ export class OpenAICompatibleTextTranslator {
         return parseTranslationResults(content, items);
       } catch (error) {
         lastError = error;
+        if (options.signal?.aborted) break;
         if (attempt >= attempts || !isRetriableTranslatorError(error)) break;
         await delay((this.options.retryDelayMs ?? 800) * attempt);
       }

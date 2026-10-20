@@ -95,8 +95,58 @@ test("GenericNetworkOcrClient rotates keys on quota/auth/rate errors", async () 
   assert.equal(client.keyStatus().available, 1);
 });
 
+test("GenericNetworkOcrClient cools a rate-limited key down instead of retiring it", async () => {
+  const client = new GenericNetworkOcrClient({
+    endpoint: "https://ocr.example.test/ocr",
+    apiKeys: ["limited", "spare"],
+    attempts: 1,
+    retryDelayMs: 1,
+    regionsPathCandidates: ["words_result"],
+    textPathCandidates: ["words"],
+    boxPathCandidates: ["location"],
+    fetch: async (_url, init) => {
+      const authorization = new Headers(init?.headers).get("authorization") ?? "";
+      if (authorization === "Bearer limited") {
+        return new Response(JSON.stringify({ code: "RATE_LIMITED", message: "too many requests" }), { status: 429, headers: { "content-type": "application/json" } });
+      }
+      return new Response(JSON.stringify({ words_result: [{ words: "OK", location: { left: 1, top: 2, width: 60, height: 20 } }] }), { status: 200, headers: { "content-type": "application/json" } });
+    },
+  });
+
+  await client.recognize({ imageBytes: new TextEncoder().encode("image") });
+
+  const cooled = client.keyStatus().keys.find((item) => item.label === "key#1")!;
+  assert.equal(cooled.state, "cooldown");
+  assert.ok((cooled.retryAfterMs ?? 0) > 0);
+});
+
+test("GenericNetworkOcrClient retires a rejected key until the settings are saved again", async () => {
+  const client = new GenericNetworkOcrClient({
+    endpoint: "https://ocr.example.test/ocr",
+    apiKeys: ["revoked", "spare"],
+    attempts: 1,
+    retryDelayMs: 1,
+    regionsPathCandidates: ["words_result"],
+    textPathCandidates: ["words"],
+    boxPathCandidates: ["location"],
+    fetch: async (_url, init) => {
+      const authorization = new Headers(init?.headers).get("authorization") ?? "";
+      if (authorization === "Bearer revoked") {
+        return new Response(JSON.stringify({ code: "INVALID_API_KEY", message: "unauthorized" }), { status: 401, headers: { "content-type": "application/json" } });
+      }
+      return new Response(JSON.stringify({ words_result: [{ words: "OK", location: { left: 1, top: 2, width: 60, height: 20 } }] }), { status: 200, headers: { "content-type": "application/json" } });
+    },
+  });
+
+  await client.recognize({ imageBytes: new TextEncoder().encode("image") });
+
+  const retired = client.keyStatus().keys.find((item) => item.label === "key#1")!;
+  assert.equal(retired.state, "disabled");
+  assert.equal(retired.retryAfterMs, undefined);
+});
+
 test("classifyGenericOcrError labels common provider failures", () => {
-  assert.deepEqual(classifyGenericOcrError(new Error("Network OCR failed: 402 INSUFFICIENT_CREDITS ÕË»§»ý·Ö²»×ã")), { kind: "quota", retryable: false });
+  assert.deepEqual(classifyGenericOcrError(new Error("Network OCR failed: 402 INSUFFICIENT_CREDITS ï¿½Ë»ï¿½ï¿½ï¿½ï¿½Ö²ï¿½ï¿½ï¿½")), { kind: "quota", retryable: false });
   assert.deepEqual(classifyGenericOcrError(new Error("Network OCR failed: 401 INVALID_API_KEY")), { kind: "auth", retryable: false });
   assert.deepEqual(classifyGenericOcrError(new Error("Network OCR failed: 429 rate limit")), { kind: "rate_limit", retryable: true });
   assert.deepEqual(classifyGenericOcrError(new Error("fetch failed")), { kind: "network", retryable: true });

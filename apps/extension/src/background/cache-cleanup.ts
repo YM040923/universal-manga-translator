@@ -14,6 +14,11 @@ export const ROLLBACK_CACHE_CLEANUP_START_MS = 1785945600000;
 export const ROLLBACK_CACHE_CLEANUP_END_MS = 1786118400000;
 export const ROLLBACK_CACHE_CLEANUP_MARKER = "umt.rollback-cache-cleanup:2026-08-06-through-2026-08-07";
 
+/**
+ * `bubble-result-cache` and `content-fingerprint-cache` stopped being written at the
+ * pre-reference-fusion rollback, but readers who updated across those builds still hold
+ * poisoned rows under those keys, so the sweep has to keep naming them.
+ */
 const TRANSLATION_PREFIXES = [
   "umt.chapter-cache:",
   "umt.content-fingerprint-cache:",

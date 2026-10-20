@@ -101,6 +101,7 @@ test("root release:check runs the complete local release gate", () => {
   const script = pkg.scripts?.["release:check"] ?? "";
 
   for (const command of [
+    "pnpm verify:secrets",
     "pnpm typecheck",
     "pnpm test",
     "pnpm test:e2e",
@@ -109,6 +110,7 @@ test("root release:check runs the complete local release gate", () => {
   ]) {
     assert.match(script, new RegExp(command.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   }
+  assert.ok(script.indexOf("pnpm verify:secrets") === 0, "committed credentials should fail the gate before anything else runs");
   assert.ok(script.indexOf("pnpm typecheck") < script.indexOf("pnpm test"), "typecheck should run before tests");
   assert.ok(script.indexOf("pnpm test") < script.indexOf("pnpm test:e2e"), "unit tests should run before browser smoke tests");
   assert.ok(script.indexOf("pnpm test:e2e") < script.indexOf("pnpm package:extension"), "browser smoke tests should run before packaging");

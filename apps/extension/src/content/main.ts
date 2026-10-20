@@ -1,5 +1,6 @@
 ﻿import { BackendClient, SurfaceSubmitTracker } from "./client/backend-client";
 import { DirectClient } from "./client/direct-client";
+import { effectiveGlossary } from "./client/direct-config";
 import { supportsEventStream, type TranslatorClient } from "./client/translator-client";
 import { hasRelevantContentSettingChange } from "./settings-change";
 import { ChapterResultCache, type ChapterResultCacheContext } from "./cache/chapter-result-cache";
@@ -24,9 +25,9 @@ import { SurfaceControl } from "./surface/surface-control";
 import { toDetectedSurface } from "./surface/detected-surface";
 import { selectVisibleSurfaces } from "./surface/visible-surfaces";
 import { isLikelyReaderPage, SurfaceRegistry, type RegisteredSurface } from "./surface/surface-registry";
-import { isRenderableSurfaceResult } from "./translation-result";
-import { createJobSessionId, debounce, formatShortError, isUmtOwnedMutation, requestBackendHttp } from "./utils";
-import { getEffectiveSiteSettings, isSiteEnabled, loadSettings, saveSettings, setSiteSettings, setTranslationOverlayVisible, type ExtensionSettings } from "../settings/settings";
+import { renderableSurfaceResult } from "./translation-result";
+import { createJobSessionId, debounce, formatShortError, isUmtOwnedMutation, reclaimOrphanUmtNodes, requestBackendHttp } from "./utils";
+import { getEffectiveSiteSettings, isSiteEnabled, loadSettings, saveSettings, setSiteSettings, setTranslationOverlayVisible, SECRET_STORAGE_KEY, type ExtensionSettings } from "../settings/settings";
 
 const bootstrapWindow = window as Window & { __umtContentBootstrapState?: "starting" | "running" | undefined };
 if (bootstrapWindow.__umtContentBootstrapState !== "starting" && bootstrapWindow.__umtContentBootstrapState !== "running") {
@@ -40,6 +41,7 @@ if (bootstrapWindow.__umtContentBootstrapState !== "starting" && bootstrapWindow
 async function bootstrap(): Promise<boolean> {
   let settings = await loadSettings();
   if (!isSiteEnabled(settings, window.location.href)) return false;
+  reclaimOrphanUmtNodes();
   let client = createClient(settings);
   let renderer = createRenderer(settings, client);
   const debugRenderer = new DebugOverlayRenderer();
@@ -58,6 +60,7 @@ async function bootstrap(): Promise<boolean> {
   let registry: SurfaceRegistry = SurfaceRegistry.scan(document);
   let readerUiMounted = false;
   let controls = new Map<string, SurfaceControl>();
+  let activeSelection: ManualSelectionController | null = null;
   const surfaceFailureDetails = new Map<string, string>();
 
   let queue = createQueue();
@@ -66,7 +69,7 @@ async function bootstrap(): Promise<boolean> {
 
   function createClient(current: ExtensionSettings): TranslatorClient {
     return current.runMode === "backend"
-      ? new BackendClient(current.backendUrl, { timeoutMs: current.requestTimeoutMs, retryCount: current.retryCount, backendHttp: requestBackendHttp })
+      ? new BackendClient(current.backendUrl, { timeoutMs: current.requestTimeoutMs, retryCount: current.retryCount, glossary: effectiveGlossary(current), backendHttp: requestBackendHttp })
       : new DirectClient(current);
   }
 
@@ -96,7 +99,7 @@ async function bootstrap(): Promise<boolean> {
 
   function createQueue(): TranslationQueue {
     return new TranslationQueue({
-      concurrency: Math.max(1, Math.min(settings.maxConcurrentSubmissions, 2)),
+      concurrency: settings.maxConcurrentSubmissions,
       maxAutoItems: settings.directOcr.maxAutoOcrPages,
       stopAfterConsecutiveFailures: settings.directOcr.stopAfterConsecutiveFailures,
       worker: translateRegisteredSurface,
@@ -119,12 +122,16 @@ async function bootstrap(): Promise<boolean> {
   function ensureEventStream(): void {
     if (eventsConnected) return;
     if (!supportsEventStream(client)) return;
-    try {
-      eventSocket = client.connectEvents(handleServerEvent);
-      eventsConnected = true;
-    } catch (error) {
-      logger.error("event stream unavailable", error);
-    }
+    eventsConnected = true;
+    void client
+      .connectEvents(handleServerEvent)
+      .then((socket) => {
+        eventSocket = socket;
+      })
+      .catch((error: unknown) => {
+        eventsConnected = false;
+        logger.error("event stream unavailable", error);
+      });
   }
 
   function handleServerEvent(event: ServerEvent): void {
@@ -168,13 +175,23 @@ async function bootstrap(): Promise<boolean> {
   }
 
   function currentProviderProfile(): string {
-    if (typeof client.providerProfile === "function") return client.providerProfile();
-    return settings.providerProfile;
+    // Backend mode only learns the real profile once a submit echoes it back; until then
+    // the configured value keeps the chapter cache key stable instead of an empty string.
+    const reported = typeof client.providerProfile === "function" ? client.providerProfile() : "";
+    return reported || settings.providerProfile;
   }
 
   function scanAndMountControls(reason: string): RegisteredSurface[] {
     registry = SurfaceRegistry.scan(document);
     const surfaces = registry.surfaces.slice(0, settings.maxFullPageSurfaces);
+    // A revoked site stays mounted until the page reloads, so every re-scan path (popup
+    // commands, resize, observer callbacks) has to be refused here rather than trusting setup.
+    if (!isSiteEnabled(settings, window.location.href)) {
+      queue.setSurfaces([]);
+      updateProgress();
+      logger.info("site revoked", `${reason} | surfaces ignored`);
+      return [];
+    }
     if (!isLikelyReaderPage(document, surfaces)) {
       queue.setSurfaces([]);
       updateProgress();
@@ -202,6 +219,7 @@ async function bootstrap(): Promise<boolean> {
         control.mount();
         control.setStatus(queue.getStatus(surface.surfaceId));
       } else {
+        control.rebind(surface.element);
         control.updateIndex(surface.index);
         control.refreshPosition();
         control.setStatus(queue.getStatus(surface.surfaceId));
@@ -258,19 +276,25 @@ async function bootstrap(): Promise<boolean> {
     if (!force && !submitTracker.shouldSubmit(surface.surfaceId)) return queue.getStatus(surface.surfaceId);
     submitTracker.markSubmitted(surface.surfaceId);
     markSurface(surface.surfaceId, "fetching");
+    const session = jobSessionId;
     try {
-      const detected = toDetectedSurface(surface);
-      eventResultRouter.track(surface.surfaceId, surface.element, surface.naturalSize);
+      // The queue holds the surface as scanned when the batch started; a reader that
+      // swapped the <img> node since then must be cropped and painted against the live one.
+      const target = registry.surfaces.find((item) => item.surfaceId === surface.surfaceId) ?? surface;
+      const detected = toDetectedSurface(target);
+      eventResultRouter.track(target.surfaceId, target.element, target.naturalSize);
       const task = await createSurfaceTaskWithImageData(detected, "p2", settings.targetLanguage, { allowImageUrlFallback: settings.runMode !== "direct" });
-      logger.info("submit surface", `${surface.surfaceId} | #${surface.index} | ${task.imageData ? "imageData" : "imageUrl"}`);
-      markSurface(surface.surfaceId, "ocr");
+      logger.info("submit surface", `${target.surfaceId} | #${target.index} | ${task.imageData ? "imageData" : "imageUrl"}`);
+      markSurface(target.surfaceId, "ocr");
       const response = force ? await client.retranslate(task, jobSessionId) : await client.submit(task, jobSessionId);
-      if (response.ok && isRenderableSurfaceResult(response.result)) {
-        const result = await manualOverrides.applyToResult(response.result, settings.targetLanguage);
-        renderer.render(surface.element, surface.naturalSize, result);
+      if (session !== jobSessionId) return "cancelled";
+      const result = response.ok ? renderableSurfaceResult(response.result) : undefined;
+      if (result) {
+        const applied = await manualOverrides.applyToResult(result, settings.targetLanguage);
+        renderer.render(target.element, target.naturalSize, applied);
         renderer.setVisible(settings.translationOverlayVisible);
-        debugRenderer.markResult(surface.element, surface.naturalSize, result);
-        void chapterCache.save(cacheContext(), surface.imageUrl, result).catch((error) => logger.error("save chapter cache failed", error));
+        debugRenderer.markResult(target.element, target.naturalSize, applied);
+        void chapterCache.save(cacheContext(), target.imageUrl, applied).catch((error) => logger.error("save chapter cache failed", error));
         return result.status === "cached" ? "cached" : "completed";
       }
       if (response.ok && response.result?.status === "empty") return "empty";
@@ -299,6 +323,7 @@ async function bootstrap(): Promise<boolean> {
     scanAndMountControls(force ? "retranslate" : "translate");
     ensureEventStream();
     if (force) {
+      queue.resume();
       submitTracker.clear();
       for (const surface of registry.surfaces.slice(0, settings.maxFullPageSurfaces)) queue.mark(surface.surfaceId, "idle");
     }
@@ -311,7 +336,7 @@ async function bootstrap(): Promise<boolean> {
     if (!surfaces.length) return;
     ensureEventStream();
     let cursor = 0;
-    const concurrency = Math.max(1, Math.min(settings.maxConcurrentSubmissions, 2));
+    const concurrency = settings.maxConcurrentSubmissions;
     const runNext = async (): Promise<void> => {
       while (cursor < surfaces.length) {
         const surface = surfaces[cursor++];
@@ -353,10 +378,18 @@ async function bootstrap(): Promise<boolean> {
       return;
     }
     mountReaderUi();
+    activeSelection?.cancel();
     const controller = new ManualSelectionController({
-      onSelect: (rect) => void translateManualRect(rect),
-      onCancel: () => logger.info("manual selection cancelled"),
+      onSelect: (rect) => {
+        activeSelection = null;
+        void translateManualRect(rect);
+      },
+      onCancel: () => {
+        activeSelection = null;
+        logger.info("manual selection cancelled");
+      },
     });
+    activeSelection = controller;
     controller.start();
   }
 
@@ -374,13 +407,14 @@ async function bootstrap(): Promise<boolean> {
         element: document.body,
       });
       const response = await client.submit(createSurfaceTask(surface, "p0", settings.targetLanguage), jobSessionId);
-      if (response.ok && isRenderableSurfaceResult(response.result)) {
-        const result = await manualOverrides.applyToResult(response.result, settings.targetLanguage);
+      const result = response.ok ? renderableSurfaceResult(response.result) : undefined;
+      if (result) {
+        const applied = await manualOverrides.applyToResult(result, settings.targetLanguage);
         const documentRect = { x: rect.x + window.scrollX, y: rect.y + window.scrollY, width: rect.width, height: rect.height };
-        renderer.render(createDocumentRectOverlayAnchor(documentRect), surface.naturalSize, result);
+        renderer.render(createDocumentRectOverlayAnchor(documentRect), surface.naturalSize, applied);
         renderer.setVisible(settings.translationOverlayVisible);
-        void manualSelectionCache.save(manualSelectionCacheContext(), { id: surface.surfaceId, documentRect, naturalSize: surface.naturalSize, result }).catch((error) => logger.error("save manual selection cache failed", error));
-        logger.info("render manual region", `regions=${result.regions.length}`);
+        void manualSelectionCache.save(manualSelectionCacheContext(), { id: surface.surfaceId, documentRect, naturalSize: surface.naturalSize, result: applied }).catch((error) => logger.error("save manual selection cache failed", error));
+        logger.info("render manual region", `regions=${applied.regions.length}`);
       } else {
         logger.warn("manual region not renderable", response.ok ? response.status : response.error);
       }
@@ -402,16 +436,11 @@ async function bootstrap(): Promise<boolean> {
 
   async function cancelCurrentQueue(reason: string): Promise<void> {
     const previousSession = jobSessionId;
-    queue.pause();
-    for (const surface of registry.surfaces) {
-      const status = queue.getStatus(surface.surfaceId);
-      if (status === "queued" || status === "fetching" || status === "ocr" || status === "translating" || status === "rendering") markSurface(surface.surfaceId, "cancelled");
-    }
+    queue.cancelAll();
     jobSessionId = createJobSessionId();
     eventResultRouter.setSession(jobSessionId);
     submitTracker.clear();
     await client.cancelJobSession(previousSession).catch((error) => logger.error("cancel session failed", error));
-    queue.resume();
     updateProgress();
     logger.info("queue cancelled", reason);
   }
@@ -434,14 +463,41 @@ async function bootstrap(): Promise<boolean> {
     scanAndMountControls(reason);
   }
 
+  /**
+   * Revoking a site must stop work on the page that is already open, not only on the next
+   * navigation: translations keep streaming from a domain the reader just turned off.
+   */
+  async function teardownForRevokedSite(): Promise<void> {
+    observer.disconnect();
+    rescan.cancel();
+    activeSelection?.cancel();
+    activeSelection = null;
+    eventSocket?.close();
+    eventSocket = null;
+    eventsConnected = false;
+    await cancelCurrentQueue("site-revoked");
+    renderer.clearAll();
+    debugRenderer.clear();
+    for (const control of controls.values()) control.remove();
+    controls.clear();
+    floatingPanel.setEnabled(false);
+    progress.remove();
+    readerUiMounted = false;
+    logger.info("site revoked", "stopped queue and cleared overlays");
+  }
+
   async function reloadSettings(): Promise<void> {
     const previousBackendUrl = settings.backendUrl;
     const previousRunMode = settings.runMode;
     const previousDirectOcr = JSON.stringify(settings.directOcr);
     const previousDirectTranslator = JSON.stringify(settings.directTranslator);
+    const previousGlossaryHash = settings.glossaryHash;
     const previousTargetLanguage = settings.targetLanguage;
     settings = await loadSettings();
-    if (!isSiteEnabled(settings, window.location.href)) return;
+    if (!isSiteEnabled(settings, window.location.href)) {
+      await teardownForRevokedSite();
+      return;
+    }
     debugRenderer.setEnabled(settings.debugOverlayEnabled);
     renderer.setVisible(settings.translationOverlayVisible);
     floatingPanel?.setOverlayVisible(settings.translationOverlayVisible);
@@ -449,19 +505,28 @@ async function bootstrap(): Promise<boolean> {
     await setProgressWidgetEnabled(settings.progressWidgetEnabled);
     renderer.setAppearance(settings.overlayAppearance);
     const directChanged = previousDirectOcr !== JSON.stringify(settings.directOcr) || previousDirectTranslator !== JSON.stringify(settings.directTranslator);
-    if (settings.backendUrl !== previousBackendUrl || settings.runMode !== previousRunMode || directChanged) {
+    // Both clients snapshot their inputs: BackendClient carries the glossary into every
+    // submit and DirectClient holds the settings object, so a term edit needs a rebuild.
+    const glossaryChanged = settings.glossaryHash !== previousGlossaryHash;
+    const pipelineChanged = settings.targetLanguage !== previousTargetLanguage || settings.backendUrl !== previousBackendUrl || settings.runMode !== previousRunMode || directChanged || glossaryChanged;
+    if (settings.backendUrl !== previousBackendUrl || settings.runMode !== previousRunMode || directChanged || glossaryChanged) {
       eventSocket?.close();
       eventSocket = null;
       eventsConnected = false;
       client = createClient(settings);
     }
-    if (settings.targetLanguage !== previousTargetLanguage || settings.backendUrl !== previousBackendUrl || settings.runMode !== previousRunMode || directChanged) {
-      renderer = createRenderer(settings, client);
-      eventResultRouter = createEventResultRouter(renderer);
-      eventResultRouter.setSession(jobSessionId);
-    }
     queue = createQueue();
-    scanAndMountControls("settings");
+    if (!pipelineChanged) {
+      scanAndMountControls("settings");
+      if (shouldAutoTranslate()) void translatePage(false);
+      return;
+    }
+    renderer = createRenderer(settings, client);
+    eventResultRouter = createEventResultRouter(renderer);
+    // Overlays on the page, the cached chapter results and the submit tracker were all
+    // produced under the old language or glossary, so the page must be torn down and
+    // run again rather than left showing results the reader would read as fresh.
+    await resetPageState("settings");
     if (shouldAutoTranslate()) void translatePage(false);
   }
 
@@ -509,8 +574,10 @@ async function bootstrap(): Promise<boolean> {
   window.addEventListener("resize", () => refreshLayout());
 
   chrome.storage?.onChanged?.addListener((changes, areaName) => {
-    if (areaName !== "sync") return;
-    if (hasRelevantContentSettingChange(changes)) void reloadSettings();
+    const relevant = areaName === "sync"
+      ? hasRelevantContentSettingChange(changes)
+      : areaName === "local" && SECRET_STORAGE_KEY in changes;
+    if (relevant) void reloadSettings();
   });
 
   chrome.runtime?.onMessage?.addListener((message, _sender, sendResponse) => {
@@ -519,7 +586,7 @@ async function bootstrap(): Promise<boolean> {
       void sampleOcrSelfTest().then(sendResponse);
       return true;
     }
-    if (message.command === "translate") void translatePage(false);
+    if (message.command === "translate") { queue.resume(); void translatePage(false); }
     if (message.command === "refresh") void resetPageState("popup-refresh", false);
     if (message.command === "togglePause") {
       if (queue.snapshot().paused) { queue.resume(); void translatePage(false); }
@@ -547,6 +614,18 @@ async function bootstrap(): Promise<boolean> {
       if (typeof message.progressWidgetEnabled === "boolean") void setProgressWidgetEnabled(message.progressWidgetEnabled);
     }
     return false;
+  });
+
+  // A page that may come back from the bfcache keeps its script; a destroyed one must stop spending API credits.
+  window.addEventListener("pagehide", (event) => {
+    if (event.persisted) return;
+    observer.disconnect();
+    rescan.cancel();
+    activeSelection?.cancel();
+    activeSelection = null;
+    eventSocket?.close();
+    eventSocket = null;
+    void cancelCurrentQueue("page-hide");
   });
   return true;
 }

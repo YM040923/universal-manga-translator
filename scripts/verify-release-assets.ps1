@@ -6,6 +6,18 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+# Get-FileHash is unavailable in some automated Windows PowerShell sessions, so hash through .NET.
+function Get-UmtFileSha256 {
+  param([string]$Path)
+  $stream = [IO.File]::OpenRead($Path)
+  try {
+    $hasher = [System.Security.Cryptography.SHA256]::Create()
+    try {
+      [BitConverter]::ToString($hasher.ComputeHash($stream)).Replace("-", "").ToLowerInvariant()
+    } finally { $hasher.Dispose() }
+  } finally { $stream.Dispose() }
+}
+
 $root = Split-Path -Parent $PSScriptRoot
 if ([string]::IsNullOrWhiteSpace($ZipPath)) {
   $ZipPath = Join-Path $root "release\extension-release.zip"
@@ -46,7 +58,7 @@ if ($actualChecksumFileName -ne $expectedChecksumFileName) {
   throw "Release checksum filename mismatch: expected $expectedChecksumFileName, got $actualChecksumFileName"
 }
 
-$actual = (Get-FileHash -LiteralPath $ZipPath -Algorithm SHA256).Hash.ToLowerInvariant()
+$actual = Get-UmtFileSha256 -Path $ZipPath
 if ($actual -ne $expected) {
   throw "Release checksum mismatch: expected $expected, got $actual"
 }

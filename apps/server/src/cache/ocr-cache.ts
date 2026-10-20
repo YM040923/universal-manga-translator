@@ -1,4 +1,4 @@
-import type { OcrRegion } from "../providers/pipeline-provider.js";
+import type { CoreOcrCache, GenericOcrRegion } from "@umt/core";
 import type { UmtDatabase } from "./db.js";
 
 export interface OcrCacheStats {
@@ -11,20 +11,15 @@ export interface OcrCacheClearResult {
   deleted: number;
 }
 
-export interface OcrCacheStore {
-  get(cacheKey: string): OcrRegion[] | null;
-  save(cacheKey: string, regions: OcrRegion[]): void;
-}
-
-export class OcrCache implements OcrCacheStore {
+export class OcrCache implements CoreOcrCache {
   constructor(private readonly db: UmtDatabase) {}
 
-  get(cacheKey: string): OcrRegion[] | null {
+  get(cacheKey: string): GenericOcrRegion[] | null {
     const row = this.db.prepare("SELECT regions_json FROM ocr_results WHERE cache_key = ?").get(cacheKey) as { regions_json: string } | undefined;
-    return row ? (JSON.parse(row.regions_json) as OcrRegion[]) : null;
+    return row ? (JSON.parse(row.regions_json) as GenericOcrRegion[]) : null;
   }
 
-  save(cacheKey: string, regions: OcrRegion[]): void {
+  set(cacheKey: string, regions: GenericOcrRegion[]): void {
     this.db.prepare(`
       INSERT INTO ocr_results (cache_key, regions_json, updated_at)
       VALUES (?, ?, ?)

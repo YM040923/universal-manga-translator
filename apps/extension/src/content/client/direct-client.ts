@@ -34,12 +34,19 @@ interface DirectClientSettings extends ExtensionSettings {
   __testManualOverrideStorage?: ManualOverrideStorage;
 }
 
+interface InFlightJob {
+  surfaceId: string;
+  jobSessionId: string;
+  controller: AbortController;
+}
+
 export class DirectClient implements TranslatorClient {
   private readonly fetchImpl: FetchLike;
   private readonly ocrCache: DirectOcrCache;
   private readonly manualOverrides: ExtensionManualOverrideStore;
   private readonly ocrClient: GenericNetworkOcrClient;
   private readonly chapterMemory: ChapterTranslationMemory;
+  private readonly inFlight = new Set<InFlightJob>();
 
   constructor(private readonly settings: DirectClientSettings) {
     this.fetchImpl = settings.__testFetch ?? createExtensionProxyFetch();
@@ -105,20 +112,22 @@ export class DirectClient implements TranslatorClient {
     };
   }
 
-  async submit(task: SurfaceTask, _jobSessionId?: string): Promise<ApiResponse<SubmitSurfaceResponse>> {
-    return this.processTask(task, false);
+  async submit(task: SurfaceTask, jobSessionId?: string): Promise<ApiResponse<SubmitSurfaceResponse>> {
+    return this.processTask(task, false, jobSessionId);
   }
 
-  async retranslate(task: SurfaceTask, _jobSessionId?: string): Promise<ApiResponse<SubmitSurfaceResponse>> {
-    return this.processTask(task, true);
+  async retranslate(task: SurfaceTask, jobSessionId?: string): Promise<ApiResponse<SubmitSurfaceResponse>> {
+    return this.processTask(task, true, jobSessionId);
   }
 
   async cancelSurface(surfaceId: string): Promise<ApiResponse<CancelSurfaceResponse>> {
-    return { ok: true, surfaceId, status: "accepted", cancellable: false };
+    const aborted = this.abortJobs((job) => job.surfaceId === surfaceId);
+    return { ok: true, surfaceId, status: "accepted", cancellable: aborted > 0 };
   }
 
   async cancelJobSession(jobSessionId: string): Promise<ApiResponse<CancelJobSessionResponse>> {
-    return { ok: true, jobSessionId, status: "cancelled", cancellable: false };
+    const aborted = this.abortJobs((job) => job.jobSessionId === jobSessionId);
+    return { ok: true, jobSessionId, status: "cancelled", cancellable: aborted > 0 };
   }
 
   async cacheStats(): Promise<ApiResponse<CacheStatsResponse>> {
@@ -143,7 +152,9 @@ export class DirectClient implements TranslatorClient {
     return { ok: true, override };
   }
 
-  private async processTask(task: SurfaceTask, retranslate: boolean): Promise<ApiResponse<SubmitSurfaceResponse>> {
+  private async processTask(task: SurfaceTask, retranslate: boolean, jobSessionId?: string): Promise<ApiResponse<SubmitSurfaceResponse>> {
+    const job: InFlightJob = { surfaceId: task.surfaceId, jobSessionId: jobSessionId ?? "", controller: new AbortController() };
+    this.inFlight.add(job);
     try {
       if (!task.imageData) return { ok: false, error: "Direct plugin mode imageData is required. Enable extension image-data capture or use backend mode for imageUrl fallback." };
       if (!this.isConfigured()) return { ok: false, error: "Direct plugin mode is not configured. Please set OCR API URL/key and translator API URL/key/model." };
@@ -173,6 +184,7 @@ export class DirectClient implements TranslatorClient {
         chapterContext,
         previousTranslations,
         termCandidates,
+        signal: job.controller.signal,
       });
       const regions = result.regions.map((region) => toOverlayRegion(region));
       const rawSurfaceResult: SurfaceResult = {
@@ -188,8 +200,21 @@ export class DirectClient implements TranslatorClient {
       this.chapterMemory.remember(imageHash, surfaceResult);
       return { ok: true, surfaceId: task.surfaceId, status: surfaceResult.status, result: surfaceResult };
     } catch (error) {
+      if (job.controller.signal.aborted) return { ok: false, error: "cancelled" };
       return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    } finally {
+      this.inFlight.delete(job);
     }
+  }
+
+  private abortJobs(match: (job: InFlightJob) => boolean): number {
+    let aborted = 0;
+    for (const job of [...this.inFlight]) {
+      if (!match(job)) continue;
+      job.controller.abort();
+      aborted += 1;
+    }
+    return aborted;
   }
 
   private createOcrClient(): GenericNetworkOcrClient {

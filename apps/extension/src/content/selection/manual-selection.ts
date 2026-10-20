@@ -15,6 +15,9 @@ export class ManualSelectionController {
 
   start(): void {
     this.cancel();
+    // A layer left by another controller instance (or a previous content-script
+    // injection) would otherwise stack a second full-screen mask over this one.
+    for (const stale of [...document.querySelectorAll("[data-umt-selection-layer]")]) stale.remove();
     const layer = document.createElement("div");
     layer.dataset.umtSelectionLayer = "true";
     layer.style.cssText = "position:fixed;inset:0;z-index:2147483647;cursor:crosshair;background:rgba(15,23,42,.08);";

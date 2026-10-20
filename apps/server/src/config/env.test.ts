@@ -80,7 +80,7 @@ test("loadConfig migrates legacy UApi env names to the generic OCR path", () => 
 
 test("mergeConfigPatch updates generic OCR API settings and key pool", () => {
   const current = loadConfigFromEnvFile("missing.env", {
-    OPENAI_API_KEY: "existing-openai-key",
+    OPENAI_API_KEY: "example-openai-key",
     OCR_API_KEYS: "old-a,old-b",
   });
 
@@ -115,7 +115,7 @@ test("mergeConfigPatch updates runtime model fields without requiring secrets", 
   const current = loadConfigFromEnvFile("missing.env", {
     VISION_PROVIDER: "network-ocr-openai-compatible",
     OPENAI_BASE_URL: "https://old.example/v1",
-    OPENAI_API_KEY: "existing-openai-key",
+    OPENAI_API_KEY: "example-openai-key",
     OPENAI_MODEL: "gpt-5.4-mini",
   });
 
@@ -132,7 +132,7 @@ test("mergeConfigPatch updates runtime model fields without requiring secrets", 
   assert.equal(updated.targetLanguage, "zh-CN");
   assert.equal(updated.openaiBaseUrl, "https://api.example.com/v1");
   assert.equal(updated.openaiModel, "gpt-5.5");
-  assert.equal(updated.openaiApiKey, "existing-openai-key");
+  assert.equal(updated.openaiApiKey, "example-openai-key");
   assert.equal(updated.maxImageLongEdge, 1800);
   assert.equal(updated.jpegQuality, 0.82);
 });

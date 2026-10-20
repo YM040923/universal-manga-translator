@@ -16,6 +16,8 @@ export interface CorePipelineInput extends GenericOcrImageInput {
   chapterContext?: string;
   previousTranslations?: Array<{ id: string; translatedText: string }>;
   termCandidates?: string[];
+  /** Aborts both the OCR and the translation request for this page. */
+  signal?: AbortSignal;
 }
 
 export interface CoreOcrProvider {
@@ -61,6 +63,7 @@ export class OcrTranslatePipeline {
     const ocrRegions = (await this.readOcrRegions(input)).map((region) => classifyRegionKind(region, input.width, input.height));
     const textBlocks = groupOcrRegionsIntoTextBlocks(ocrRegions);
     const translationOptions: TextTranslationOptions = { retranslate: input.retranslate === true };
+    if (input.signal) translationOptions.signal = input.signal;
     if (input.glossary && Object.keys(input.glossary).length) translationOptions.glossary = input.glossary;
     if (input.chapterContext?.trim()) translationOptions.chapterContext = input.chapterContext.trim();
     if (input.previousTranslations?.length) translationOptions.previousTranslations = input.previousTranslations;

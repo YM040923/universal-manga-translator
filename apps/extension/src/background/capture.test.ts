@@ -5,8 +5,63 @@ import { Buffer } from "node:buffer";
 if (typeof globalThis.btoa === "undefined") {
   globalThis.btoa = (value: string) => Buffer.from(value, "binary").toString("base64");
 }
-import { handleBackendHttpMessage, handleCaptureVisibleTabMessage, handleDirectHttpMessage, handleFetchImageDataMessage } from "./capture.js";
-import { directHttpUrlPolicyError, isUmtBackendHttpRequest, isUmtCaptureVisibleTabRequest, isUmtDirectHttpRequest, isUmtFetchImageDataRequest } from "../content/messages.js";
+import { cancelDirectHttpRequest, handleBackendHttpMessage, handleCaptureVisibleTabMessage, handleDirectHttpMessage, handleFetchImageDataMessage } from "./capture.js";
+import { directHttpUrlPolicyError, isUmtBackendHttpRequest, isUmtCaptureVisibleTabRequest, isUmtDirectHttpCancelRequest, isUmtDirectHttpRequest, isUmtFetchImageDataRequest } from "../content/messages.js";
+
+test("handleBackendHttpMessage aborts a request that outlives its timeout", async () => {
+  const settled = await handleBackendHttpMessage(
+    {
+      source: "umt-content",
+      command: "backendHttp",
+      url: "http://127.0.0.1:47831/v1/surfaces/submit",
+      init: { method: "POST", timeoutMs: 1000 },
+    },
+    (_url: string, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => reject(new DOMException("The operation was aborted.", "AbortError")), { once: true });
+    }),
+  );
+
+  assert.equal(settled.ok, false);
+  assert.equal(settled.ok ? "" : settled.error, "Backend request timed out after 1000ms");
+});
+
+test("handleBackendHttpMessage ignores an implausibly small timeout instead of aborting instantly", async () => {
+  let sawSignal = false;
+  const response = await handleBackendHttpMessage(
+    { source: "umt-content", command: "backendHttp", url: "http://127.0.0.1:47831/health", init: { timeoutMs: 1 } },
+    (_url: string, init?: RequestInit) => {
+      sawSignal = Boolean(init?.signal);
+      return Promise.resolve(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+    },
+  );
+
+  assert.equal(response.ok, true);
+  assert.equal(sawSignal, false);
+});
+
+test("cancelDirectHttpRequest aborts a proxied request that is still running", async () => {
+  const pending = handleDirectHttpMessage(
+    { source: "umt-content", command: "directHttp", requestId: "req-1", url: "https://ocr.example/ocr", init: { method: "POST" } },
+    (_url: string, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => reject(new DOMException("The operation was aborted.", "AbortError")), { once: true });
+    }),
+  );
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(cancelDirectHttpRequest("req-1"), true);
+  const settled = await pending;
+
+  assert.equal(settled.ok, false);
+  assert.equal(settled.ok ? "" : settled.error, "The operation was aborted.");
+  assert.equal(cancelDirectHttpRequest("req-1"), false);
+});
+
+test("isUmtDirectHttpCancelRequest validates only well-formed cancel requests", () => {
+  assert.equal(isUmtDirectHttpCancelRequest({ source: "umt-content", command: "directHttpCancel", requestId: "req-1" }), true);
+  assert.equal(isUmtDirectHttpCancelRequest({ source: "umt-page", command: "directHttpCancel", requestId: "req-1" }), false);
+  assert.equal(isUmtDirectHttpCancelRequest({ source: "umt-content", command: "directHttpCancel" }), false);
+  assert.equal(isUmtDirectHttpCancelRequest({ source: "umt-content", command: "directHttpCancel", requestId: "" }), false);
+});
 
 test("isUmtCaptureVisibleTabRequest validates screenshot capture requests", () => {
   assert.equal(isUmtCaptureVisibleTabRequest({ source: "umt-content", command: "captureVisibleTab" }), true);

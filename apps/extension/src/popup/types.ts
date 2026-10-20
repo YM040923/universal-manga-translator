@@ -5,6 +5,7 @@ import type { SettingsStorageArea } from "../settings/settings.js";
 export interface PopupTab { id?: number; url?: string; }
 
 export interface PopupDeps {
+  /** Test seam: a single area backing both preferences and secrets. Production leaves this unset. */
   storage?: SettingsStorageArea;
   queryActiveTab?: () => Promise<PopupTab | null>;
   checkBackend?: (backendUrl: string) => Promise<boolean>;

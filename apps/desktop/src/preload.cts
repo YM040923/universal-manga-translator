@@ -5,4 +5,5 @@ contextBridge.exposeInMainWorld("umtDesktop", {
   start: () => ipcRenderer.invoke("umt:start"),
   stop: () => ipcRenderer.invoke("umt:stop"),
   cleanup: () => ipcRenderer.invoke("umt:cleanup"),
+  backendRequest: (request: { url: string; method?: string; body?: string }) => ipcRenderer.invoke("umt:backend-request", request),
 });

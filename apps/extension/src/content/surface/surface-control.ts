@@ -15,9 +15,11 @@ export interface SurfaceControlStatusOptions {
 export class SurfaceControl {
   readonly button: HTMLButtonElement;
   private readonly surfaceId: string;
-  private readonly image: HTMLElement;
+  private image: HTMLElement;
   private index: number;
   private readonly onAction: (surfaceId: string) => void;
+  private readonly onImageEnter = (): void => { this.button.style.opacity = "0.78"; };
+  private readonly onImageLeave = (): void => { this.button.style.opacity = "0.18"; };
 
   constructor(options: SurfaceControlOptions) {
     this.surfaceId = options.surfaceId;
@@ -45,13 +47,27 @@ export class SurfaceControl {
     ].join(";");
     this.button.addEventListener("mouseenter", () => { this.button.style.opacity = "0.96"; });
     this.button.addEventListener("mouseleave", () => { this.button.style.opacity = "0.18"; });
-    this.image.addEventListener("mouseenter", () => { this.button.style.opacity = "0.78"; });
-    this.image.addEventListener("mouseleave", () => { this.button.style.opacity = "0.18"; });
+    this.trackImageHover();
     this.button.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
       this.onAction(this.surfaceId);
     });
+  }
+
+  /** Readers swap the `<img>` node while the URL-derived surface id survives, which would
+   *  otherwise leave the button hovering and positioning against a detached element. */
+  rebind(image: HTMLElement): void {
+    if (image === this.image) return;
+    this.image.removeEventListener("mouseenter", this.onImageEnter);
+    this.image.removeEventListener("mouseleave", this.onImageLeave);
+    this.image = image;
+    this.trackImageHover();
+  }
+
+  private trackImageHover(): void {
+    this.image.addEventListener("mouseenter", this.onImageEnter);
+    this.image.addEventListener("mouseleave", this.onImageLeave);
   }
 
   mount(): void {

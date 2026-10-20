@@ -11,10 +11,13 @@ pnpm install
 常用检查：
 
 ```powershell
+pnpm verify:secrets
 pnpm typecheck
 pnpm test
 powershell -ExecutionPolicy Bypass -File .\scripts\package-extension.ps1
 ```
+
+`pnpm verify:secrets` 扫描 git 跟踪的文本文件，命中疑似密钥时让 CI 直接失败；报告里只会显示打码后的值。测试夹具里的假密钥请用能看出是占位符的写法（例如 `example-...`），确实需要放行某个明显伪造值时在该行加 `scan-secrets:ignore` 注释。发现安全问题请按 [SECURITY.md](SECURITY.md) 私密报告，版本变更记录写入 [CHANGELOG.md](CHANGELOG.md)。
 
 发布前本地总检查：
 

@@ -35,7 +35,7 @@
 
 ## 3. 配置 API
 
-打开 popup 里的“API 设置 / 自检”，填写：
+打开 popup 右上角的“设置”，在设置页的“服务与模型”里填写，填完用“测试 OCR”“测试 AI”确认接口可用：
 
 - OCR API URL，例如 `https://example.com/ocr` 或本地 `http://127.0.0.1:9000/ocr`
   - 远程 OCR 必须使用 `https://`。`http://` 只允许本机地址，例如 `http://127.0.0.1` 或 `http://localhost`。
@@ -53,7 +53,7 @@
 
 ## 4. 自检
 
-点击“自检”。理想结果类似：
+分别点击“测试 OCR”和“测试 AI”。理想结果类似：
 
 ```text
 OCR 解析正常：识别 1 行 · HELLO OCR；AI 调用正常：你好，OCR
@@ -65,7 +65,7 @@ OCR 解析正常：识别 1 行 · HELLO OCR；AI 调用正常：你好，OCR
 页面样本 OCR 正常：第 1 张，识别 7 个区域；AI 调用正常：你好，OCR
 ```
 
-如果失败，先看 popup 里的“配置状态”和自检结果。常见问题见 [troubleshooting.md](troubleshooting.md)。
+如果失败，先看设置页里两项自检返回的提示（会把 HTTP 状态码翻译成人话）。常见问题见 [troubleshooting.md](troubleshooting.md)。
 
 ## 5. 翻译
 

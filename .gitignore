@@ -31,3 +31,6 @@ apps/desktop/dist-server/
 apps/desktop/.tmp-deploy-server/
 packages/*/dist/
 apps/*/dist/
+
+# Real-site scans record the URLs you opened and their DOM evidence; keep them local.
+docs/compat/*real-scan*.json

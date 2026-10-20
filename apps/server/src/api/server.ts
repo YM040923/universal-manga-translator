@@ -1,11 +1,12 @@
 import cors from "@fastify/cors";
 import websocket from "@fastify/websocket";
 import Fastify, { type FastifyInstance } from "fastify";
-import type { CancelledResult, SaveManualOverrideRequest, SurfaceResult, SurfaceTask, TextRegion, UpdateConfigRequest } from "@umt/shared";
+import type { CancelJobSessionRequest, CancelSurfaceRequest, CancelledResult, SaveManualOverrideRequest, SubmitSurfaceRequest, SurfaceResult, SurfaceTask, TextRegion, UpdateConfigRequest } from "@umt/shared";
 import { clampRectToBounds } from "@umt/shared/geometry";
 import { buildCacheKey, sha256Hex } from "@umt/shared/hashing";
 import type { ManualOverrideStore } from "../cache/manual-overrides.js";
 import { applyManualOverrides } from "../cache/manual-overrides.js";
+import { sanitizeChapterContext, sanitizeTermCandidates } from "./chapter-context.js";
 import type { OcrCache } from "../cache/ocr-cache.js";
 import type { SurfaceCache } from "../cache/surface-cache.js";
 import { readTaskImage } from "../image/image-input.js";
@@ -13,10 +14,14 @@ import { normalizeForProvider } from "../image/normalize.js";
 import sharp from "sharp";
 import { LAYOUT_VERSION, layoutRegions } from "../layout/layout.js";
 import type { VisionProvider } from "../providers/provider.js";
-import type { ApiKeyPoolStatus } from "../providers/api-key-pool.js";
+import type { ApiKeyPoolStatus } from "@umt/core";
 import { NullDiagnosticsWriter, type DiagnosticsWriter } from "./diagnostics.js";
 import { EventBus } from "./events.js";
+import { glossaryVersion, sanitizeGlossary } from "./glossary.js";
+import { isAllowedRequestOrigin } from "./origin-policy.js";
+import { createEventSessionGate, createRequestGuard } from "./request-guard.js";
 import { createSelfTestTask, type SelfTestReport, type SelfTestStep } from "./self-test.js";
+import { ConfigValidationError } from "../config/env.js";
 
 export interface BuildServerOptions {
   provider: string;
@@ -128,9 +133,17 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
   const manualOverrideStore = options.manualOverrideStore;
   const diagnostics = options.diagnosticsWriter ?? new NullDiagnosticsWriter();
   const cancelledSessions = new Set<string>();
+  const cancelledSurfaces = new Set<string>();
+  const inFlightJobs = new Map<string, { jobSessionId?: string; abort: () => void }>();
 
-  await app.register(cors, { origin: true });
+  const eventSessions = createEventSessionGate();
+  await app.register(cors, {
+    origin: (origin, callback) => callback(null, origin && isAllowedRequestOrigin(origin) ? origin : false),
+  });
   await app.register(websocket);
+  app.addHook("onRequest", createRequestGuard(eventSessions));
+
+  app.post("/v1/session", async () => ({ ok: true, sessionId: eventSessions.create() }));
 
   app.get("/v1/events", { websocket: true }, (socket) => {
     const unsubscribe = eventBus.subscribe((event) => socket.send(JSON.stringify(event)));
@@ -185,7 +198,7 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
     currentModel: state.openAIModel ?? provider.profile,
   }));
 
-  app.post<{ Body: UpdateConfigRequest }>("/v1/config", async (request) => {
+  app.post<{ Body: UpdateConfigRequest }>("/v1/config", async (request, reply) => {
     if (!options.updateConfig) {
       return {
         ok: true,
@@ -194,7 +207,14 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
         note: "Backend config is loaded from .env at startup; restart the backend process for config changes to take effect.",
       };
     }
-    state = await options.updateConfig(request.body ?? {});
+    try {
+      state = await options.updateConfig(request.body ?? {});
+    } catch (error) {
+      if (error instanceof ConfigValidationError) {
+        return reply.code(400).send({ ok: false, error: error.message });
+      }
+      throw error;
+    }
     provider = state.visionProvider;
     return {
       ok: true,
@@ -240,9 +260,26 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
     return { ok: true, deleted };
   });
 
-  const processSurface = async (task: SurfaceTask, force = false, jobSessionId?: string) => {
+  const processSurface = async (
+    task: SurfaceTask,
+    force = false,
+    reader: {
+      jobSessionId?: string | undefined;
+      glossary?: Record<string, string> | undefined;
+      chapterContext?: string | undefined;
+      termCandidates?: string[] | undefined;
+    } = {},
+  ) => {
+    const jobSessionId = reader.jobSessionId;
+    const glossary = sanitizeGlossary(reader.glossary);
+    // Context hints steer the prompt but are deliberately left out of the cache key: they
+    // change with every page, so keying on them would stop the backend reusing any result.
+    const chapterContext = sanitizeChapterContext(reader.chapterContext);
+    const termCandidates = sanitizeTermCandidates(reader.termCandidates);
     const started = Date.now();
-    const isCancelled = () => Boolean(jobSessionId && cancelledSessions.has(jobSessionId));
+    const controller = new AbortController();
+    inFlightJobs.set(task.surfaceId, { ...(jobSessionId ? { jobSessionId } : {}), abort: () => controller.abort() });
+    const isCancelled = () => controller.signal.aborted || cancelledSurfaces.has(task.surfaceId) || Boolean(jobSessionId && cancelledSessions.has(jobSessionId));
     const cancelledResult = (): CancelledResult => ({
       surfaceId: task.surfaceId,
       status: "cancelled",
@@ -264,7 +301,8 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
       const imageReadMs = Date.now() - imageReadStarted;
       if (isCancelled()) return returnCancelled();
       const imageHash = sha256Hex(imageBuffer);
-      const cacheKey = buildCacheKey({ imageHash, targetLanguage: task.targetLanguage, providerProfile: provider.profile, layoutVersion: LAYOUT_VERSION });
+      const glossaryKeyPart = glossaryVersion(glossary);
+      const cacheKey = buildCacheKey({ imageHash, targetLanguage: task.targetLanguage, providerProfile: provider.profile, layoutVersion: LAYOUT_VERSION, ...(glossaryKeyPart ? { glossaryVersion: glossaryKeyPart } : {}) });
       const cached = surfaceCache?.get(cacheKey) ?? memoryCache.get(cacheKey);
       if (cached && isReusableCachedResult(cached) && !force) {
         if (isCancelled()) return returnCancelled();
@@ -284,6 +322,10 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
         maxLongEdge: state.maxImageLongEdge ?? 1600,
         jpegQuality: state.jpegQuality ?? 0.75,
         forceRetranslate: force,
+        ...(glossary ? { glossary } : {}),
+        ...(chapterContext ? { chapterContext } : {}),
+        ...(termCandidates ? { termCandidates } : {}),
+        signal: controller.signal,
       });
       if (isCancelled()) return returnCancelled();
       const providerRegions = providerOutput.regions;
@@ -312,10 +354,14 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
       eventBus.publish({ type: "job.completed", surfaceId: task.surfaceId, ...sessionEventFields, result });
       return { ok: true as const, surfaceId: task.surfaceId, status: result.status, result };
     } catch (error) {
+      if (isCancelled()) return returnCancelled();
       const failed = { surfaceId: task.surfaceId, status: "failed" as const, recoverable: true, error: error instanceof Error ? error.message : String(error) };
       diagnostics.record({ surfaceId: task.surfaceId, status: "failed", providerProfile: provider.profile, inputSource: task.imageData ? "imageData" : "imageUrl", originalSize: task.naturalSize, providerSize: task.naturalSize, rawRegionCount: 0, finalRegionCount: 0, elapsedMs: Date.now() - started, note: failed.error });
       eventBus.publish({ type: "job.failed", surfaceId: task.surfaceId, ...sessionEventFields, result: failed });
       return { ok: false as const, error: failed.error, result: failed };
+    } finally {
+      inFlightJobs.delete(task.surfaceId);
+      cancelledSurfaces.delete(task.surfaceId);
     }
   };
 
@@ -346,22 +392,34 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
     return report;
   });
 
-  app.post<{ Body: { task: SurfaceTask; jobSessionId?: string } }>("/v1/surfaces/submit", async (request) => {
-    return processSurface(request.body.task, false, request.body.jobSessionId);
+  app.post<{ Body: SubmitSurfaceRequest }>("/v1/surfaces/submit", async (request) => {
+    return processSurface(request.body.task, false, request.body);
   });
 
-  app.post<{ Body: { task: SurfaceTask; jobSessionId?: string } }>("/v1/surfaces/retranslate", async (request) => {
-    return processSurface(request.body.task, true, request.body.jobSessionId);
+  app.post<{ Body: SubmitSurfaceRequest }>("/v1/surfaces/retranslate", async (request) => {
+    return processSurface(request.body.task, true, request.body);
   });
 
-  app.post<{ Body: { surfaceId: string } }>("/v1/surfaces/cancel", async (request) => {
-    return { ok: true, surfaceId: request.body.surfaceId, status: "accepted", cancellable: false };
+  app.post<{ Body: CancelSurfaceRequest }>("/v1/surfaces/cancel", async (request) => {
+    const surfaceId = String(request.body?.surfaceId ?? "");
+    const job = inFlightJobs.get(surfaceId);
+    if (!job) return { ok: true, surfaceId, status: "accepted" as const, cancellable: false };
+    cancelledSurfaces.add(surfaceId);
+    job.abort();
+    return { ok: true, surfaceId, status: "accepted" as const, cancellable: true };
   });
 
-  app.post<{ Body: { jobSessionId: string } }>("/v1/jobs/cancel-session", async (request) => {
+  app.post<{ Body: CancelJobSessionRequest }>("/v1/jobs/cancel-session", async (request) => {
     const jobSessionId = String(request.body?.jobSessionId ?? "");
-    if (jobSessionId) cancelledSessions.add(jobSessionId);
-    return { ok: true, jobSessionId, status: "cancelled", cancellable: true };
+    if (!jobSessionId) return { ok: true, jobSessionId, status: "cancelled" as const, cancellable: false };
+    cancelledSessions.add(jobSessionId);
+    let cancellable = false;
+    for (const job of inFlightJobs.values()) {
+      if (job.jobSessionId !== jobSessionId) continue;
+      job.abort();
+      cancellable = true;
+    }
+    return { ok: true, jobSessionId, status: "cancelled" as const, cancellable };
   });
 
   return app;
@@ -390,13 +448,18 @@ async function readImageSizeFromBuffer(imageBuffer: Buffer, fallback: { width: n
   }
 }
 
-async function processImageForProvider(provider: VisionProvider, task: SurfaceTask, imageBuffer: Buffer, imageHash: string, actualImageSize: { width: number; height: number }, options: { maxLongEdge: number; jpegQuality: number; forceRetranslate?: boolean }): Promise<ProviderImageOutput> {
+async function processImageForProvider(provider: VisionProvider, task: SurfaceTask, imageBuffer: Buffer, imageHash: string, actualImageSize: { width: number; height: number }, options: { maxLongEdge: number; jpegQuality: number; forceRetranslate?: boolean; glossary?: Record<string, string>; chapterContext?: string; termCandidates?: string[]; signal: AbortSignal }): Promise<ProviderImageOutput> {
+  const readerHints = {
+    ...(options.glossary ? { glossary: options.glossary } : {}),
+    ...(options.chapterContext ? { chapterContext: options.chapterContext } : {}),
+    ...(options.termCandidates ? { termCandidates: options.termCandidates } : {}),
+  };
   if (!shouldTileTallImage(actualImageSize)) {
     const normalizeStarted = Date.now();
     const normalized = await normalizeForProvider(imageBuffer, { maxLongEdge: options.maxLongEdge, jpegQuality: Math.round(options.jpegQuality * 100) });
     const normalizeMs = Date.now() - normalizeStarted;
     const providerStarted = Date.now();
-    const providerRegions = await provider.process({ task, imageBuffer: normalized.buffer, imageHash, width: normalized.width, height: normalized.height, forceRetranslate: options.forceRetranslate === true });
+    const providerRegions = await provider.process({ task, imageBuffer: normalized.buffer, imageHash, width: normalized.width, height: normalized.height, forceRetranslate: options.forceRetranslate === true, signal: options.signal, ...readerHints });
     const providerMs = Date.now() - providerStarted;
     return {
       regions: mapProviderRegionsToOriginalImage(
@@ -435,7 +498,7 @@ async function processImageForProvider(provider: VisionProvider, task: SurfaceTa
       surfaceRect: { ...task.surfaceRect, height: Math.round((height / actualImageSize.height) * task.surfaceRect.height) },
     };
     const providerStarted = Date.now();
-    const tileRegions = await provider.process({ task: tileTask, imageBuffer: tileBuffer, imageHash: `${imageHash}:tile:${tileCount}`, width: actualImageSize.width, height, forceRetranslate: options.forceRetranslate === true });
+    const tileRegions = await provider.process({ task: tileTask, imageBuffer: tileBuffer, imageHash: `${imageHash}:tile:${tileCount}`, width: actualImageSize.width, height, forceRetranslate: options.forceRetranslate === true, signal: options.signal, ...readerHints });
     providerMs += Date.now() - providerStarted;
     regions.push(...tileRegions.map((region) => ({
       ...region,

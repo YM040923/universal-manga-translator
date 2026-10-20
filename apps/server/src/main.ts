@@ -9,10 +9,9 @@ import { OcrCache } from "./cache/ocr-cache.js";
 import { ManualOverrideStore } from "./cache/manual-overrides.js";
 import { openDatabase } from "./cache/db.js";
 import { loadConfigFromEnvFile, mergeConfigPatch, upsertConfigEnvText, type ServerConfig } from "./config/env.js";
-import { GenericNetworkOcrProvider } from "./providers/generic-network-ocr-provider.js";
-import { OpenAITextTranslator } from "./providers/openai-text-translator.js";
-import { OcrThenTranslateProvider } from "./providers/pipeline-provider.js";
+import { GenericNetworkOcrClient, OcrTranslatePipeline, OpenAICompatibleTextTranslator, type CorePipelineInput } from "@umt/core";
 import { resolveServerRuntimePaths } from "./runtime/paths.js";
+import type { ProviderInput, VisionProvider } from "./providers/provider.js";
 
 const runtimePaths = resolveServerRuntimePaths(fileURLToPath(import.meta.url));
 const envPath = runtimePaths.envPath;
@@ -76,10 +75,10 @@ function serverState(nextConfig: ServerConfig, nextProvider = createVisionProvid
   };
 }
 
-function createVisionProvider(nextConfig: ServerConfig) {
-  return new OcrThenTranslateProvider({
+function createVisionProvider(nextConfig: ServerConfig): VisionProvider {
+  const pipeline = new OcrTranslatePipeline({
     profile: `network-ocr:${nextConfig.ocrInputMode}+openai-compatible:${nextConfig.openaiModel}`,
-    ocr: new GenericNetworkOcrProvider({
+    ocr: new GenericNetworkOcrClient({
       endpoint: nextConfig.ocrApiUrl,
       apiKey: nextConfig.ocrApiKey,
       apiKeys: nextConfig.ocrApiKeys,
@@ -91,9 +90,34 @@ function createVisionProvider(nextConfig: ServerConfig) {
       boxPathCandidates: nextConfig.ocrBoxPaths,
       confidencePathCandidates: nextConfig.ocrConfidencePaths,
     }),
-    translator: new OpenAITextTranslator({ baseUrl: nextConfig.openaiBaseUrl, apiKey: nextConfig.openaiApiKey, model: nextConfig.openaiModel }),
+    translator: new OpenAICompatibleTextTranslator({ baseUrl: nextConfig.openaiBaseUrl, apiKey: nextConfig.openaiApiKey, model: nextConfig.openaiModel }),
     ocrCache,
   });
+
+  return {
+    profile: pipeline.profile,
+    listModels: () => pipeline.listModels(),
+    keyStatus: () => pipeline.keyStatus(),
+    process: async (input) => (await pipeline.process(toCorePipelineInput(input))).regions,
+  };
+}
+
+function toCorePipelineInput(input: ProviderInput): CorePipelineInput {
+  return {
+    imageBytes: new Uint8Array(input.imageBuffer),
+    fileName: "surface.jpg",
+    mimeType: "image/jpeg",
+    imageHash: input.imageHash,
+    width: input.width,
+    height: input.height,
+    targetLanguage: input.task.targetLanguage,
+    sourceLanguage: input.task.sourceLanguage,
+    retranslate: input.forceRetranslate === true,
+    ...(input.glossary ? { glossary: input.glossary } : {}),
+    ...(input.chapterContext ? { chapterContext: input.chapterContext } : {}),
+    ...(input.termCandidates ? { termCandidates: input.termCandidates } : {}),
+    ...(input.signal ? { signal: input.signal } : {}),
+  };
 }
 
 

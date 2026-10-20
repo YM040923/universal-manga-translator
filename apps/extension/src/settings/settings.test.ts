@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   DEFAULT_SETTINGS,
+  disableSiteForUrl,
   enableSiteForUrl,
   getEffectiveSiteSettings,
   isSiteEnabled,
@@ -9,8 +10,11 @@ import {
   normalizeSettings,
   primaryDomainFromUrl,
   saveSettings,
+  singleAreaStores,
+  SECRET_STORAGE_KEY,
   type ExtensionSettings,
   type SettingsStorageArea,
+  type SettingsStores,
 } from "./settings.js";
 
 test("loadSettings returns extended defaults when storage is empty", async () => {
@@ -189,7 +193,7 @@ test("normalizeSettings clamps invalid backend and performance fields", () => {
   assert.equal(settings.providerProfile, DEFAULT_SETTINGS.providerProfile);
   assert.equal(settings.openAICompatibleBaseUrl, "");
   assert.equal(settings.requestTimeoutMs, DEFAULT_SETTINGS.requestTimeoutMs);
-  assert.equal(settings.maxConcurrentSubmissions, 8);
+  assert.equal(settings.maxConcurrentSubmissions, 4);
   assert.equal(settings.maxFullPageSurfaces, DEFAULT_SETTINGS.maxFullPageSurfaces);
   assert.equal(settings.retryCount, 5);
 });
@@ -249,12 +253,13 @@ test("getEffectiveSiteSettings marks unsupported urls", () => {
   assert.equal(getEffectiveSiteSettings(DEFAULT_SETTINGS, "chrome://extensions").unsupported, true);
 });
 
-function fakeStorage(initial: Partial<ExtensionSettings> & { autoTranslate?: boolean } = {}): SettingsStorageArea & { saved: unknown } {
-  return {
+function fakeStorage(initial: Partial<ExtensionSettings> & { autoTranslate?: boolean } = {}): SettingsStores & { saved: unknown } {
+  const area: SettingsStorageArea & { saved: unknown } = {
     saved: undefined,
     async get() { return initial as Record<string, unknown>; },
     async set(value) { this.saved = value; },
   };
+  return { ...singleAreaStores(area), get saved() { return area.saved; } };
 }
 
 test("loadSettings includes debug overlay default", async () => {
@@ -293,6 +298,18 @@ test("sites are disabled until explicitly enabled by primary domain", () => {
   assert.equal(isSiteEnabled(enabled, "https://asurascans.com/other/chapter"), true);
   assert.equal(isSiteEnabled(enabled, "https://cdn.asurascans.com/assets/page.webp"), true);
   assert.deepEqual(enabled.enabledSites, { "asurascans.com": true });
+});
+
+test("revoking a site drops its grant instead of leaving a false entry", () => {
+  const enabled = enableSiteForUrl(enableSiteForUrl(normalizeSettings({}), "https://asurascans.com/comics/a"), "https://mangadex.org/title/b");
+  const sameSettings = enableSiteForUrl(enabled, "https://asurascans.com/comics/a");
+  const revoked = disableSiteForUrl(sameSettings, "https://cdn.asurascans.com/assets/page.webp");
+
+  assert.equal(isSiteEnabled(revoked, "https://asurascans.com/comics/a"), false);
+  assert.equal(isSiteEnabled(revoked, "https://mangadex.org/title/b"), true);
+  assert.deepEqual(revoked.enabledSites, { "mangadex.org": true });
+  assert.equal(disableSiteForUrl(enabled, "https://never-enabled.example/comic"), enabled);
+  assert.equal(Object.prototype.hasOwnProperty.call(revoked.enabledSites, "asurascans.com"), false);
 });
 
 test("loadSettings includes site activation and overlay visibility defaults", async () => {
@@ -396,3 +413,76 @@ test("normalizeSettings clamps OCR cost protection fields", () => {
   assert.equal(settings.directOcr.stopAfterConsecutiveFailures, 10);
   assert.equal(normalizeSettings({ directOcr: { ...DEFAULT_SETTINGS.directOcr, maxAutoOcrPages: 0, stopAfterConsecutiveFailures: 0 } as never }).directOcr.maxAutoOcrPages, DEFAULT_SETTINGS.directOcr.maxAutoOcrPages);
 });
+
+test("saveSettings keeps API keys out of the synced preferences area", async () => {
+  const preferences = recordingArea();
+  const secrets = keyAwareArea();
+
+  await saveSettings({
+    ...DEFAULT_SETTINGS,
+    directOcr: { ...DEFAULT_SETTINGS.directOcr, apiUrl: "https://ocr.example/ocr", apiKeys: ["ocr-secret-a", "ocr-secret-b"] },
+    directTranslator: { baseUrl: "https://api.example/v1", apiKey: "llm-secret", model: "gpt-test" },
+  }, { preferences, secrets });
+
+  assert.deepEqual(secrets.store[SECRET_STORAGE_KEY], {
+    version: 1,
+    ocrApiKeys: ["ocr-secret-a", "ocr-secret-b"],
+    translatorApiKey: "llm-secret",
+  });
+  assert.doesNotMatch(JSON.stringify(preferences.writes), /ocr-secret-a|ocr-secret-b|llm-secret/);
+  assert.equal((preferences.writes.at(-1) as { directTranslator: { apiKey: string } }).directTranslator.apiKey, "");
+});
+
+test("loadSettings reads API keys back from the secrets area", async () => {
+  const preferences = recordingArea({ targetLanguage: "ja" });
+  const secrets = keyAwareArea({ [SECRET_STORAGE_KEY]: { version: 1, ocrApiKeys: ["ocr-x"], translatorApiKey: "llm-x" } });
+
+  const settings = await loadSettings({ preferences, secrets });
+
+  assert.deepEqual(settings.directOcr.apiKeys, ["ocr-x"]);
+  assert.equal(settings.directTranslator.apiKey, "llm-x");
+  assert.equal(settings.targetLanguage, "ja");
+});
+
+test("loadSettings migrates keys found in synced preferences into local secrets and scrubs the copy", async () => {
+  const preferences = recordingArea({
+    directOcr: { ...DEFAULT_SETTINGS.directOcr, apiUrl: "https://ocr.example/ocr", apiKeys: ["legacy-ocr-key"] },
+    directTranslator: { baseUrl: "https://api.example/v1", apiKey: "legacy-llm-key", model: "gpt-test" },
+  });
+  const secrets = keyAwareArea();
+
+  const settings = await loadSettings({ preferences, secrets });
+
+  assert.deepEqual(settings.directOcr.apiKeys, ["legacy-ocr-key"]);
+  assert.deepEqual((secrets.store[SECRET_STORAGE_KEY] as { ocrApiKeys: string[] }).ocrApiKeys, ["legacy-ocr-key"]);
+  assert.doesNotMatch(JSON.stringify(preferences.writes), /legacy-ocr-key|legacy-llm-key/);
+  const scrubbed = preferences.writes.at(-1) as { directOcr: { apiKeys: string[] }; directTranslator: { apiKey: string } };
+  assert.deepEqual(scrubbed.directOcr.apiKeys, []);
+  assert.equal(scrubbed.directTranslator.apiKey, "");
+});
+
+test("loadSettings does not rewrite preferences when no legacy keys are present", async () => {
+  const preferences = recordingArea({ directOcr: { ...DEFAULT_SETTINGS.directOcr, apiUrl: "https://ocr.example/ocr" } });
+  const secrets = keyAwareArea({ [SECRET_STORAGE_KEY]: { version: 1, ocrApiKeys: ["ocr-x"], translatorApiKey: "" } });
+
+  await loadSettings({ preferences, secrets });
+
+  assert.equal(preferences.writes.length, 0);
+});
+
+function recordingArea(initial: Record<string, unknown> = {}): SettingsStorageArea & { writes: Record<string, unknown>[] } {
+  const writes: Record<string, unknown>[] = [];
+  return {
+    writes,
+    async get() { return { ...initial }; },
+    async set(value) { writes.push({ ...value }); Object.assign(initial, value); },
+  };
+}
+
+function keyAwareArea(store: Record<string, unknown> = {}): SettingsStorageArea & { store: Record<string, unknown> } {
+  return {
+    store,
+    async get(keys) { return typeof keys === "string" ? { [keys]: store[keys] } : {}; },
+    async set(value) { Object.assign(store, value); },
+  };
+}

@@ -1,7 +1,8 @@
 import { isUmtActivateSiteRequest, type UmtActivateSiteRequest, type UmtActivateSiteResponse } from "../content/messages.js";
-import { enableSiteForUrl, isSiteEnabled, loadSettings, saveSettings, type SettingsStorageArea } from "../settings/settings.js";
+import { defaultSettingsStores, enableSiteForUrl, isSiteEnabled, loadSettings, saveSettings, singleAreaStores, type SettingsStorageArea, type SettingsStores } from "../settings/settings.js";
 
 export interface ContentScriptInjectionDeps {
+  /** Test seam: a single area backing both preferences and secrets. */
   storage?: SettingsStorageArea;
   executeScript: (details: { tabId: number; files: string[] }) => Promise<void> | void;
 }
@@ -15,12 +16,16 @@ export interface TabQueryDeps extends ContentScriptInjectionDeps {
   queryTabs: () => Promise<InjectableTab[]> | InjectableTab[];
 }
 
+function resolveStores(deps: ContentScriptInjectionDeps): SettingsStores {
+  return deps.storage ? singleAreaStores(deps.storage) : defaultSettingsStores();
+}
+
 export async function handleActivateSiteMessage(message: UmtActivateSiteRequest, deps: ContentScriptInjectionDeps): Promise<UmtActivateSiteResponse> {
   try {
-    const storage = deps.storage;
-    const settings = await loadSettings(storage);
+    const stores = resolveStores(deps);
+    const settings = await loadSettings(stores);
     const next = enableSiteForUrl(settings, message.url);
-    await saveSettings(next, storage);
+    await saveSettings(next, stores);
     await injectContentScript(message.tabId, deps);
     return { ok: true };
   } catch (error) {
@@ -30,7 +35,7 @@ export async function handleActivateSiteMessage(message: UmtActivateSiteRequest,
 
 export async function maybeInjectContentScriptForTab(tabId: number, url: string | undefined, deps: ContentScriptInjectionDeps): Promise<void> {
   if (!url) return;
-  const settings = await loadSettings(deps.storage);
+  const settings = await loadSettings(resolveStores(deps));
   if (!isSiteEnabled(settings, url)) return;
   await injectContentScript(tabId, deps);
 }

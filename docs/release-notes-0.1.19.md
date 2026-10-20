@@ -17,7 +17,7 @@ if ($actual -ne $expected) { throw "extension-release.zip 校验失败" }
 - OCR 与 AI 自检拆成两个独立按钮，分别只请求各自接口；自检结果统一显示在 popup 的“服务与模型”分类里，不再泄漏到其他分类。
 - 后端模式下提供独立的“测试后端”按钮，不会把后端健康检查伪装成 OCR/AI 两项测试。
 - 设置页改为三个并列分类界面，避免不同板块重复显示同类控件。
-- 扩展版本 `0.1.18` -> `0.1.19`，并同步根 `package.json` 版本，修复 `build-info.json` 里 `packageVersion` 停留在旧版本的问题。
+- 版本号从 `0.2.0` 回退到 `0.1.19`（`apps/extension/public/manifest.json`、根 `package.json`、`apps/extension/package.json` 同步）。0.2.0 的改动经回滚后大部分并未保留，不配作为一次递增；`0.1.18` 从未发布过。同时修复 `build-info.json` 里 `packageVersion` 停留在旧版本的问题（`scripts/verify-release-assets.ps1` 现在会拒绝不匹配的发布包）。
 - 修复发布校验脚本：`options_ui` 指向 `settings.html` 是当前设计（`build-output.test.mjs` 已断言），此前 `verify-extension-package.ps1` 会把它误判为非法 options page 导致打包失败；现在改为校验 `options_ui.page === settings.html`、`open_in_tab === true` 且 zip 内必须包含 `settings.html` / `settings.js`。
 
 ## 主线功能

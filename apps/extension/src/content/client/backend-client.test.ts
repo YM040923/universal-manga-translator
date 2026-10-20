@@ -233,3 +233,154 @@ test("SurfaceSubmitTracker can release a surface for later retry", () => {
   assert.equal(tracker.shouldSubmit("s1"), true);
 });
 
+test("event stream is opened with a session id issued by the backend", async () => {
+  const httpUrls: string[] = [];
+  globalThis.fetch = (async (url: string | URL | Request) => {
+    httpUrls.push(String(url));
+    return new Response(JSON.stringify({ ok: true, sessionId: "session-1" }), { status: 200, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+  const socketUrls: string[] = [];
+  const received: unknown[] = [];
+  class FakeSocket {
+    private readonly listeners = new Map<string, (value: unknown) => void>();
+    constructor(url: string) { socketUrls.push(url); }
+    addEventListener(type: string, handler: (value: unknown) => void): void { this.listeners.set(type, handler); }
+    emit(type: string, value: unknown): void { this.listeners.get(type)?.(value); }
+  }
+  globalThis.WebSocket = FakeSocket as unknown as typeof WebSocket;
+
+  const client = new BackendClient("http://127.0.0.1:47831");
+  const socket = (await client.connectEvents((event) => received.push(event))) as unknown as FakeSocket;
+  await client.connectEvents(() => undefined);
+
+  assert.deepEqual(httpUrls, ["http://127.0.0.1:47831/v1/session"]);
+  assert.deepEqual(socketUrls, ["ws://127.0.0.1:47831/v1/events?sessionId=session-1", "ws://127.0.0.1:47831/v1/events?sessionId=session-1"]);
+  socket.emit("message", { data: JSON.stringify({ type: "job.queued", surfaceId: "s1" }) });
+  assert.deepEqual(received, [{ type: "job.queued", surfaceId: "s1" }]);
+});
+
+test("BackendClient forwards its timeout to the service-worker proxied request", async () => {
+  const inits: Array<Record<string, unknown>> = [];
+  const client = new BackendClient("http://127.0.0.1:47831", {
+    timeoutMs: 5000,
+    backendHttp: async (request) => {
+      inits.push({ url: request.url, ...(request.init ?? {}) });
+      return { ok: true, status: 200, body: { ok: true, surfaceId: "s1", status: "completed" } };
+    },
+  });
+
+  await client.health();
+  await client.submit(fakeTask(), "job-1");
+
+  assert.equal(inits[0]?.method, "GET");
+  assert.equal(inits[0]?.timeoutMs, 5000);
+  assert.equal(inits[1]?.method, "POST");
+  assert.equal(inits[1]?.timeoutMs, 5000);
+});
+
+test("BackendClient omits a timeout the reader never configured", async () => {
+  const seen: Array<Record<string, unknown>> = [];
+  const client = new BackendClient("http://127.0.0.1:47831", {
+    timeoutMs: 0,
+    backendHttp: async (request) => {
+      seen.push({ ...(request.init ?? {}) });
+      return { ok: true, status: 200, body: { ok: true } };
+    },
+  });
+
+  await client.health();
+
+  assert.equal("timeoutMs" in seen[0]!, false);
+});
+
+test("BackendClient sends the reader glossary with each submit", async () => {
+  const bodies: Array<Record<string, unknown>> = [];
+  globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+    bodies.push(JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>);
+    return new Response(JSON.stringify({ ok: true, surfaceId: "s1", status: "completed" }), { status: 200 });
+  }) as typeof fetch;
+  const client = new BackendClient("http://127.0.0.1:47831", { glossary: { 张三: "Zhang San" } });
+
+  await client.submit(fakeTask(), "job-1");
+  await client.retranslate(fakeTask(), "job-1");
+
+  assert.deepEqual(bodies[0], { task: fakeTask(), jobSessionId: "job-1", glossary: { 张三: "Zhang San" } });
+  assert.deepEqual(bodies[1], { task: fakeTask(), jobSessionId: "job-1", glossary: { 张三: "Zhang San" } });
+});
+
+test("BackendClient omits an empty glossary from the submit body", async () => {
+  const bodies: Array<Record<string, unknown>> = [];
+  globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+    bodies.push(JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>);
+    return new Response(JSON.stringify({ ok: true, surfaceId: "s1", status: "completed" }), { status: 200 });
+  }) as typeof fetch;
+  const client = new BackendClient("http://127.0.0.1:47831", { glossary: {} });
+
+  await client.submit(fakeTask());
+
+  assert.deepEqual(bodies[0], { task: fakeTask() });
+});
+
+test("BackendClient adopts the provider profile reported by the backend", async () => {
+  const result = { surfaceId: "s1", imageHash: "h1", status: "completed", regions: [], providerProfile: "network-ocr:image_base64+openai-compatible:gpt-5.4-mini", layoutVersion: 3, elapsedMs: 1 };
+  globalThis.fetch = (async () => new Response(JSON.stringify({ ok: true, surfaceId: "s1", status: "completed", result }), { status: 200 })) as typeof fetch;
+  const client = new BackendClient("http://127.0.0.1:47831");
+
+  assert.equal(client.providerProfile(), "");
+  await client.submit(fakeTask());
+
+  assert.equal(client.providerProfile(), "network-ocr:image_base64+openai-compatible:gpt-5.4-mini");
+});
+
+test("BackendClient ships earlier-page context once the backend returns a result", async () => {
+  const bodies: Array<Record<string, unknown>> = [];
+  const firstResult = {
+    surfaceId: "s1",
+    imageHash: "page-a-hash",
+    status: "completed",
+    regions: [{ id: "r1", box: { x: 0, y: 0, width: 10, height: 10 }, sourceText: "Clark attacks", translatedText: "克拉克进攻", confidence: 0.9, orientation: "horizontal", kind: "dialogue", style: { fontSize: 20, writingMode: "horizontal-tb", align: "left", background: "#fff", color: "#000" } }],
+    providerProfile: "mock",
+    layoutVersion: 3,
+    elapsedMs: 1,
+  };
+  globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+    bodies.push(JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>);
+    return new Response(JSON.stringify({ ok: true, surfaceId: "s1", status: "completed", result: firstResult }), { status: 200 });
+  }) as typeof fetch;
+  const client = new BackendClient("http://127.0.0.1:47831");
+
+  await client.submit({ ...fakeTask(), imageData: "data:image/png;base64,QUFB" });
+  await client.submit({ ...fakeTask(), surfaceId: "s2", imageData: "data:image/png;base64,QkJC" });
+
+  assert.equal(bodies[0]?.chapterContext, undefined);
+  assert.equal(bodies[0]?.termCandidates, undefined);
+  assert.ok(String(bodies[1]?.chapterContext ?? "").includes("Clark attacks => 克拉克进攻"));
+  assert.deepEqual(bodies[1]?.termCandidates, ["Clark"]);
+});
+
+test("BackendClient folds a manual edit into the context it sends next", async () => {
+  const bodies: Array<Record<string, unknown>> = [];
+  const result = {
+    surfaceId: "s1",
+    imageHash: "page-a-hash",
+    status: "completed",
+    regions: [{ id: "r1", box: { x: 0, y: 0, width: 10, height: 10 }, sourceText: "Clark attacks", translatedText: "克拉克进攻", confidence: 0.9, orientation: "horizontal", kind: "dialogue", style: { fontSize: 20, writingMode: "horizontal-tb", align: "left", background: "#fff", color: "#000" } }],
+    providerProfile: "mock",
+    layoutVersion: 3,
+    elapsedMs: 1,
+  };
+  globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+    if (String(url).endsWith("/v1/overrides")) return new Response(JSON.stringify({ ok: true, override: body }), { status: 200 });
+    bodies.push(body);
+    return new Response(JSON.stringify({ ok: true, surfaceId: "s1", status: "completed", result }), { status: 200 });
+  }) as typeof fetch;
+  const client = new BackendClient("http://127.0.0.1:47831");
+
+  await client.submit({ ...fakeTask(), imageData: "data:image/png;base64,QUFB" });
+  await client.saveManualOverride({ imageHash: "page-a-hash", targetLanguage: "zh-CN", regionId: "r1", translatedText: "卡拉克出手" });
+  await client.submit({ ...fakeTask(), surfaceId: "s2", imageData: "data:image/png;base64,QkJC" });
+
+  assert.ok(String(bodies[1]?.chapterContext ?? "").includes("Clark attacks => 卡拉克出手"));
+});
+

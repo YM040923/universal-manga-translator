@@ -96,6 +96,29 @@ export interface SettingsStorageArea {
   set(value: Record<string, unknown>): Promise<void> | void;
 }
 
+/**
+ * API keys must never reach `chrome.storage.sync`: sync replicates values to Google and to every
+ * device on the signed-in profile. Preferences stay in sync, secrets stay on this machine.
+ */
+export interface SettingsStores {
+  preferences: SettingsStorageArea;
+  secrets: SettingsStorageArea;
+}
+
+export interface PersistedSecrets {
+  version: 1;
+  ocrApiKeys: string[];
+  translatorApiKey: string;
+}
+
+export const SECRET_STORAGE_KEY = "umt.secrets:v1";
+
+const EMPTY_SECRETS: PersistedSecrets = { version: 1, ocrApiKeys: [], translatorApiKey: "" };
+
+export function defaultSettingsStores(): SettingsStores {
+  return { preferences: chrome.storage.sync, secrets: chrome.storage.local };
+}
+
 export const DEFAULT_SETTINGS: ExtensionSettings = {
   runMode: "direct",
   backendUrl: "http://127.0.0.1:47831",
@@ -147,6 +170,8 @@ export const DEFAULT_SETTINGS: ExtensionSettings = {
   },
 };
 
+const PREFERENCE_KEYS = [...Object.keys(DEFAULT_SETTINGS), "autoTranslate"];
+
 export function normalizeSettings(input: LegacyExtensionSettings = {}): ExtensionSettings {
   const glossaryText = normalizeGlossaryText(input.glossaryText);
   const glossary = parseGlossaryText(glossaryText);
@@ -158,7 +183,7 @@ export function normalizeSettings(input: LegacyExtensionSettings = {}): Extensio
     providerProfile: normalizeNonEmptyString(input.providerProfile, DEFAULT_SETTINGS.providerProfile),
     openAICompatibleBaseUrl: normalizeOptionalHttpUrl(input.openAICompatibleBaseUrl),
     requestTimeoutMs: normalizeInteger(input.requestTimeoutMs, 5000, 180000, DEFAULT_SETTINGS.requestTimeoutMs),
-    maxConcurrentSubmissions: normalizeInteger(input.maxConcurrentSubmissions, 1, 8, DEFAULT_SETTINGS.maxConcurrentSubmissions),
+    maxConcurrentSubmissions: normalizeInteger(input.maxConcurrentSubmissions, 1, 4, DEFAULT_SETTINGS.maxConcurrentSubmissions),
     maxFullPageSurfaces: normalizeInteger(input.maxFullPageSurfaces, 1, 300, DEFAULT_SETTINGS.maxFullPageSurfaces),
     retryCount: normalizeInteger(input.retryCount, 0, 5, DEFAULT_SETTINGS.retryCount),
     autoTranslateDefault: typeof input.autoTranslateDefault === "boolean"
@@ -225,15 +250,96 @@ export function normalizeOverlayAppearance(value: unknown): OverlayAppearance {
   };
 }
 
-export async function loadSettings(storage: SettingsStorageArea = chrome.storage.sync): Promise<ExtensionSettings> {
-  const saved = await storage.get([...Object.keys(DEFAULT_SETTINGS), "autoTranslate"]);
-  return normalizeSettings(saved as LegacyExtensionSettings);
+/**
+ * Test seam: wrap one storage area into a store pair. Secrets land in a private side map instead of
+ * the area's document, so a fake that ignores key lists still cannot mix secrets into preferences.
+ */
+const SHARED_SECRET_MAP = Symbol("umt.sharedSecretMap");
+
+export function singleAreaStores(area: SettingsStorageArea): SettingsStores {
+  let shared = (area as unknown as Record<symbol, unknown>)[SHARED_SECRET_MAP] as Map<string, unknown> | undefined;
+  if (!shared) {
+    shared = new Map<string, unknown>();
+    Object.defineProperty(area, SHARED_SECRET_MAP, { value: shared, enumerable: false });
+  }
+  const secrets: SettingsStorageArea = {
+    async get(keys) {
+      if (typeof keys !== "string") return {};
+      return { [keys]: shared!.get(keys) };
+    },
+    async set(value) {
+      for (const [key, entry] of Object.entries(value)) shared!.set(key, entry);
+    },
+  };
+  return { preferences: area, secrets };
 }
 
-export async function saveSettings(settings: LegacyExtensionSettings, storage: SettingsStorageArea = chrome.storage.sync): Promise<ExtensionSettings> {
+export async function loadSettings(stores: SettingsStores = defaultSettingsStores()): Promise<ExtensionSettings> {
+  const saved = await stores.preferences.get([...PREFERENCE_KEYS]) as LegacyExtensionSettings;
+  const legacySecrets = secretsFromPreferences(saved);
+  let secrets = await readSecrets(stores.secrets);
+  const needsMigration = !secrets && hasSecretMaterial(legacySecrets);
+  if (needsMigration) {
+    await stores.secrets.set({ [SECRET_STORAGE_KEY]: legacySecrets });
+    secrets = legacySecrets;
+  }
+  const merged = normalizeSettings(mergeSecrets(saved, secrets ?? EMPTY_SECRETS) as LegacyExtensionSettings);
+  if (needsMigration) await stores.preferences.set(toPreferences(merged));
+  return merged;
+}
+
+export async function saveSettings(settings: LegacyExtensionSettings, stores: SettingsStores = defaultSettingsStores()): Promise<ExtensionSettings> {
   const normalized = normalizeSettings(settings);
-  await storage.set({ ...normalized });
+  await stores.secrets.set({ [SECRET_STORAGE_KEY]: {
+    version: 1,
+    ocrApiKeys: normalized.directOcr.apiKeys,
+    translatorApiKey: normalized.directTranslator.apiKey,
+  } satisfies PersistedSecrets });
+  await stores.preferences.set(toPreferences(normalized));
   return normalized;
+}
+
+function toPreferences(settings: ExtensionSettings): Record<string, unknown> {
+  const { directOcr, directTranslator, ...rest } = settings;
+  return {
+    ...rest,
+    directOcr: { ...directOcr, apiKeys: [] },
+    directTranslator: { ...directTranslator, apiKey: "" },
+  };
+}
+
+function secretsFromPreferences(saved: LegacyExtensionSettings): PersistedSecrets {
+  const ocr = saved.directOcr as Record<string, unknown> | undefined;
+  const translator = saved.directTranslator as Record<string, unknown> | undefined;
+  const apiKeys = Array.isArray(ocr?.apiKeys) ? ocr.apiKeys : [];
+  return {
+    version: 1,
+    ocrApiKeys: apiKeys.filter((key): key is string => typeof key === "string" && key.trim().length > 0),
+    translatorApiKey: typeof translator?.apiKey === "string" ? translator.apiKey : "",
+  };
+}
+
+function hasSecretMaterial(secrets: PersistedSecrets): boolean {
+  return secrets.ocrApiKeys.length > 0 || secrets.translatorApiKey.length > 0;
+}
+
+async function readSecrets(area: SettingsStorageArea): Promise<PersistedSecrets | null> {
+  const raw = await area.get(SECRET_STORAGE_KEY);
+  const doc = raw?.[SECRET_STORAGE_KEY] as Partial<PersistedSecrets> | undefined;
+  if (!doc || doc.version !== 1) return null;
+  return {
+    version: 1,
+    ocrApiKeys: Array.isArray(doc.ocrApiKeys) ? doc.ocrApiKeys.filter((key): key is string => typeof key === "string") : [],
+    translatorApiKey: typeof doc.translatorApiKey === "string" ? doc.translatorApiKey : "",
+  };
+}
+
+function mergeSecrets(saved: LegacyExtensionSettings, secrets: PersistedSecrets): Record<string, unknown> {
+  return {
+    ...saved,
+    directOcr: { ...(saved.directOcr ?? {}), apiKeys: secrets.ocrApiKeys },
+    directTranslator: { ...(saved.directTranslator ?? {}), apiKey: secrets.translatorApiKey },
+  };
 }
 
 export function primaryDomainFromUrl(pageUrl: string): string | null {
@@ -261,6 +367,15 @@ export function enableSiteForUrl(settings: ExtensionSettings, pageUrl: string): 
     ...settings,
     enabledSites: { ...settings.enabledSites, [domain]: true },
   });
+}
+
+/** Revoking a site deletes its grant rather than storing false, so normalizeEnabledSites cannot keep a stale allow. */
+export function disableSiteForUrl(settings: ExtensionSettings, pageUrl: string): ExtensionSettings {
+  const domain = primaryDomainFromUrl(pageUrl);
+  if (!domain || settings.enabledSites[domain] !== true) return settings;
+  const enabledSites = { ...settings.enabledSites };
+  delete enabledSites[domain];
+  return normalizeSettings({ ...settings, enabledSites });
 }
 
 export function setTranslationOverlayVisible(settings: ExtensionSettings, visible: boolean): ExtensionSettings {

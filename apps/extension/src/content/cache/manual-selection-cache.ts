@@ -1,5 +1,8 @@
 import type { Rect, Size, SurfaceResult } from "@umt/shared/types";
 
+/** Each entry holds a full translation, so the per-chapter list stays bounded. */
+const MAX_CACHED_SELECTIONS = 40;
+
 export interface ManualSelectionCacheContext {
   pageUrl: string;
   targetLanguage: string;
@@ -51,6 +54,10 @@ export class ManualSelectionCache {
     const index = doc.entries.findIndex((item) => item.id === entry.id);
     if (index >= 0) doc.entries[index] = nextEntry;
     else doc.entries.push(nextEntry);
+    if (doc.entries.length > MAX_CACHED_SELECTIONS) {
+      doc.entries.sort((a, b) => (a.savedAt ?? 0) - (b.savedAt ?? 0));
+      doc.entries = doc.entries.slice(doc.entries.length - MAX_CACHED_SELECTIONS);
+    }
     await this.storage.set({ [doc.key]: doc });
   }
 

@@ -327,3 +327,46 @@ test("TranslationQueue follows up an active auto run when new surfaces are added
   assert.deepEqual(processed, ["s1", "s2"]);
   assert.equal(queue.getStatus("s2"), "completed");
 });
+
+test("TranslationQueue.cancelAll stops the batch and discards the late worker result", async () => {
+  const processed: string[] = [];
+  let releaseFirst!: () => void;
+  const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+  const queue = new TranslationQueue({
+    concurrency: 1,
+    worker: async (item) => {
+      processed.push(item.surfaceId);
+      if (item.surfaceId === "s1") await firstGate;
+      return "completed";
+    },
+  });
+  queue.setSurfaces([surface(1), surface(2), surface(3)]);
+  const run = queue.startAuto();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  queue.cancelAll();
+  releaseFirst();
+  await run;
+
+  assert.deepEqual(processed, ["s1"]);
+  assert.equal(queue.getStatus("s1"), "cancelled");
+  assert.equal(queue.getStatus("s2"), "cancelled");
+  assert.equal(queue.snapshot().paused, true);
+});
+
+test("TranslationQueue keeps a cancelled surface cancelled until the reader forces a rerun", async () => {
+  const processed: string[] = [];
+  const queue = new TranslationQueue({ concurrency: 1, worker: async (item) => { processed.push(item.surfaceId); return "completed"; } });
+  queue.setSurfaces([surface(1), surface(2)]);
+  queue.cancelAll();
+
+  await queue.startAuto();
+  assert.deepEqual(processed, []);
+
+  queue.mark("s1", "idle");
+  queue.mark("s2", "idle");
+  queue.resume();
+  await queue.startAuto();
+
+  assert.deepEqual(processed, ["s1", "s2"]);
+});

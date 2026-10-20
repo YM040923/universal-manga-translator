@@ -5,7 +5,7 @@ Universal Manga Translator 的普通用户交付物优先是 Chrome 插件包。
 Before publishing a release:
 
 1. Do not commit `.env`, `apps/server/data/`, build output, logs, `release/`, or `node_modules/`.
-2. Verify API examples use placeholder keys only.
+2. API examples must use placeholder keys only. `pnpm verify:secrets` (the first step of `pnpm release:check`) enforces this by scanning tracked files for credential-shaped strings; rotate a real key before deleting it, and use the `scan-secrets:ignore` comment only for a value that is provably fake.
 3. Run the local validation suite. The recommended one-command gate is:
 
    ```powershell
@@ -16,6 +16,7 @@ Before publishing a release:
 
    ```powershell
    pnpm install
+   pnpm verify:secrets
    pnpm typecheck
    pnpm test
    pnpm test:e2e

@@ -1,5 +1,13 @@
 ﻿import { existsSync, readFileSync } from "node:fs";
 import type { UpdateConfigRequest } from "@umt/shared";
+import { isLoopbackHostname } from "../api/origin-policy.js";
+
+export class ConfigValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ConfigValidationError";
+  }
+}
 
 export interface ServerConfig {
   port: number;
@@ -73,10 +81,10 @@ export function mergeConfigPatch(current: ServerConfig, patch: UpdateConfigReque
     ...current,
     provider: normalizeRuntimeProvider(patch.provider ?? current.provider),
     targetLanguage: normalizeString(patch.targetLanguage, current.targetLanguage),
-    openaiBaseUrl: normalizeUrl(patch.openAICompatible?.baseUrl, current.openaiBaseUrl),
+    openaiBaseUrl: normalizeUrl(patch.openAICompatible?.baseUrl, current.openaiBaseUrl, "openAICompatible.baseUrl"),
     openaiApiKey: normalizeString(patch.openAICompatible?.apiKey, current.openaiApiKey),
     openaiModel: normalizeString(patch.openAICompatible?.model, current.openaiModel),
-    ocrApiUrl: normalizeUrl(patch.ocr?.apiUrl, current.ocrApiUrl),
+    ocrApiUrl: normalizeUrl(patch.ocr?.apiUrl, current.ocrApiUrl, "ocr.apiUrl"),
     ocrApiKey: nextKeys[0] ?? "",
     ocrApiKeys: nextKeys,
     ocrInputMode: patch.ocr?.inputMode === "file" ? "file" : patch.ocr?.inputMode === "image_base64" ? "image_base64" : current.ocrInputMode,
@@ -139,18 +147,25 @@ function normalizeOptionalString(value: unknown): string {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : "";
 }
 
-function normalizeUrl(value: unknown, fallback: string): string {
-  if (typeof value !== "string" || !value.trim()) return fallback;
+function normalizeUrl(value: unknown, fallback: string, field: string): string {
+  const candidate = typeof value === "string" ? value.trim() : "";
+  if (!candidate) return fallback;
+  let url: URL;
   try {
-    const url = new URL(value.trim());
-    if (url.protocol !== "http:" && url.protocol !== "https:") return fallback;
-    url.pathname = url.pathname.replace(/\/$/, "");
-    url.search = "";
-    url.hash = "";
-    return url.toString().replace(/\/$/, "");
+    url = new URL(candidate);
   } catch {
-    return fallback;
+    throw new ConfigValidationError(`${field} is not a valid URL.`);
   }
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new ConfigValidationError(`${field} must be an http(s) URL.`);
+  }
+  if (url.protocol === "http:" && !isLoopbackHostname(url.hostname)) {
+    throw new ConfigValidationError(`${field} uses plain http on a non-loopback host; use https so API keys are not sent in clear text.`);
+  }
+  url.pathname = url.pathname.replace(/\/$/, "");
+  url.search = "";
+  url.hash = "";
+  return url.toString().replace(/\/$/, "");
 }
 
 function normalizeNumber(value: unknown, min: number, max: number, fallback: number): number {

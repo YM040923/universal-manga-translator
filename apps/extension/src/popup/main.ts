@@ -1,5 +1,7 @@
 ﻿import {
   DEFAULT_SETTINGS,
+  defaultSettingsStores,
+  disableSiteForUrl,
   enableSiteForUrl,
   isSiteEnabled,
   loadSettings,
@@ -9,6 +11,7 @@
   setTranslationOverlayVisible,
   setSiteSettings,
   normalizeSettings,
+  singleAreaStores,
   type ExtensionSettings,
 } from "../settings/settings.js";
 import type { UmtActivateSiteResponse, UmtContentCommand, UmtContentCommandName } from "../content/messages.js";
@@ -31,7 +34,8 @@ const TEXT = {
   apiReady: "API 已配置",
   apiMissing: "API 未配置",
   selfTest: "自检",
-  activate: "\u542f\u7528\u6b64\u7f51\u7ad9",
+  activate: "启用此网站",
+  deactivate: "停用此网站",
   translate: "\u7ffb\u8bd1\u672c\u9875",
   retranslate: "\u91cd\u7ffb\u672c\u9875",
   pause: "\u6682\u505c",
@@ -63,8 +67,8 @@ export async function mountSettingsPage(root: HTMLElement, deps: PopupDeps = {})
 }
 
 async function mountPage(root: HTMLElement, deps: PopupDeps, settingsPage: boolean): Promise<void> {
-  const storage = deps.storage;
-  let settings = await loadSettings(storage);
+  const stores = deps.storage ? singleAreaStores(deps.storage) : defaultSettingsStores();
+  let settings = await loadSettings(stores);
   const tab = settingsPage ? await querySettingsTab(deps) : await queryActiveTab(deps);
   let backendOnline: boolean | null = null;
   let selfTestResults = { ocr: "", ai: "", backend: "" };
@@ -113,7 +117,7 @@ async function mountPage(root: HTMLElement, deps: PopupDeps, settingsPage: boole
 
   const persist = async (next: ExtensionSettings): Promise<void> => {
     settings = next;
-    settings = await saveSettings(settings, storage);
+    settings = await saveSettings(settings, stores);
   };
 
   const sendCommand = async (command: UmtContentCommandName, extra: Partial<UmtContentCommand> = {}): Promise<void> => {
@@ -157,7 +161,13 @@ async function mountPage(root: HTMLElement, deps: PopupDeps, settingsPage: boole
       const response = await (deps.activateSite ?? defaultActivateSite)(tab.id, tab.url);
       if (!response.ok) return;
       settings = enableSiteForUrl(settings, tab.url);
-      settings = await saveSettings(settings, storage);
+      settings = await saveSettings(settings, stores);
+      render();
+    });
+    root.querySelector<HTMLButtonElement>("[data-action='deactivate-site']")?.addEventListener("click", async () => {
+      if (!tab?.url) return;
+      settings = disableSiteForUrl(settings, tab.url);
+      settings = await saveSettings(settings, stores);
       render();
     });
     root.querySelector<HTMLButtonElement>("[data-action='open-settings']")?.addEventListener("click", () => {
@@ -169,7 +179,7 @@ async function mountPage(root: HTMLElement, deps: PopupDeps, settingsPage: boole
       button.disabled = true;
       setSaveFeedback(root, "正在保存设置…");
       try {
-        settings = await saveSettings(next, storage);
+        settings = await saveSettings(next, stores);
         backendOnline = null;
         saveSummary = "设置已保存";
         setSaveFeedback(root, saveSummary);
@@ -307,7 +317,7 @@ function popupMarkup(input: { settings: ExtensionSettings; backendOnline: boolea
   return `<style>${popupStyles()}</style><section class="umt-popup">
     <header class="topbar"><div class="brand"><span class="logo">译</span><div><b>${TEXT.brand}</b></div></div><button class="muted settings-button" data-action="open-settings">设置</button></header>
     <div class="site-meta"><small title="${escapeAttr(domain ?? "非网页")}">${escapeHtml(domain ?? "非网页")}</small><span class="health ${healthClass}">${healthText}</span></div>
-    <main class="card site-card"><div><div class="site-state ${enabled ? "on" : "off"}">${status}</div><small>${enabled ? "此网站已允许插件运行" : "启用后才会在该网站注入功能"}</small></div>${!enabled && !unsupported ? `<button class="primary" data-action="activate-site">${TEXT.activate}</button>` : ""}</main>
+    <main class="card site-card"><div><div class="site-state ${enabled ? "on" : "off"}">${status}</div><small>${enabled ? "此网站已允许插件运行" : "启用后才会在该网站注入功能"}</small></div>${unsupported ? "" : enabled ? `<button class="danger" data-action="deactivate-site">${TEXT.deactivate}</button>` : `<button class="primary" data-action="activate-site">${TEXT.activate}</button>`}</main>
     <section class="card controls">
       <button class="primary wide" data-action="translate" data-requires-enabled>${TEXT.translate}</button>
       <button data-action="retranslate" data-requires-enabled>${TEXT.retranslate}</button>

@@ -2,6 +2,7 @@
 import type { ManualOverridePayload } from "@umt/shared/protocol";
 import type { OverlayRegion, Size, SurfaceResult } from "@umt/shared/types";
 import { DEFAULT_SETTINGS, normalizeOverlayAppearance, type OverlayAppearance } from "../../settings/settings.js";
+import { sanitizeSurfaceResult } from "../translation-result.js";
 import { mergeRenderableRegions, rectFromStyle, rectsOverlapSignificantly, type RenderedRect } from "./overlay-geometry.js";
 import { overlayHostForElement } from "./overlay-host.js";
 import { maskPaddingForBox, maskStyleForRegion } from "./overlay-mask.js";
@@ -80,9 +81,11 @@ export class OverlayRenderer {
   }
 
   render(element: HTMLElement, naturalSize: Size, result: SurfaceResult): void {
+    const sanitized = sanitizeSurfaceResult(result);
+    if (!sanitized) return;
     this.setVisible(true);
-    this.rendered.set(result.surfaceId, { element, naturalSize, result });
-    this.renderSurface(element, naturalSize, result);
+    this.rendered.set(sanitized.surfaceId, { element, naturalSize, result: sanitized });
+    this.renderSurface(element, naturalSize, sanitized);
   }
 
   refreshAll(): void {

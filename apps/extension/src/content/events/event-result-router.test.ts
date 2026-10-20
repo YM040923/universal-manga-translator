@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
 import { EventResultRouter } from "./event-result-router.js";
-import type { SurfaceResult } from "@umt/shared/types";
+import type { OverlayStyle, SurfaceResult } from "@umt/shared/types";
 
 test("EventResultRouter renders completed event results for tracked surfaces", () => {
   const dom = new JSDOM("<body><img id='page'></body>", { url: "https://manga.example/chapter/1" });
@@ -66,6 +66,48 @@ test("EventResultRouter ignores stale events after clear or session rotation", (
   assert.equal(router.handle({ type: "job.completed", surfaceId: "known", jobSessionId: "session-b", result: fakeResult("known") }), true);
   assert.equal(renderCount, 1);
 });
+
+test("EventResultRouter ignores events that do not carry the live job session", () => {
+  const dom = new JSDOM("<body><img id='page'></body>");
+  globalThis.document = dom.window.document;
+  globalThis.HTMLElement = dom.window.HTMLElement;
+  const img = document.querySelector<HTMLElement>("#page")!;
+  const calls: SurfaceResult[] = [];
+  const router = new EventResultRouter({ render: (_element, _size, result) => { calls.push(result); } });
+
+  router.setSession("session-a");
+  router.track("known", img, { width: 800, height: 12000 });
+  assert.equal(router.handle({ type: "job.completed", surfaceId: "known", result: fakeResult("known") }), false);
+  assert.equal(router.handle({ type: "job.cached", surfaceId: "known", result: fakeResult("known") }), false);
+  assert.equal(calls.length, 0);
+});
+
+test("EventResultRouter sanitizes region data before handing it to the renderer", () => {
+  const dom = new JSDOM("<body><img id='page'></body>");
+  globalThis.document = dom.window.document;
+  globalThis.HTMLElement = dom.window.HTMLElement;
+  const img = document.querySelector<HTMLElement>("#page")!;
+  const calls: SurfaceResult[] = [];
+  const router = new EventResultRouter({ render: (_element, _size, result) => { calls.push(result); } });
+
+  router.track("known", img, { width: 800, height: 12000 });
+  const hostile = fakeResult("known");
+  hostile.regions[0]!.style = {
+    fontSize: 18,
+    writingMode: "horizontal-tb; top: 0} * { display:none",
+    align: "center",
+    background: "#fff",
+    color: 'red; background-image: url("https://evil.test/beacon?k=1")',
+  } as unknown as OverlayStyle;
+  hostile.regions.push({ ...hostile.regions[0]!, id: "zero-area", box: { x: 0, y: 0, width: 0, height: 0 } });
+  assert.equal(router.handle({ type: "job.completed", surfaceId: "known", result: hostile }), true);
+
+  const region = calls[0]!.regions[0]!;
+  assert.equal(region.style.writingMode, "horizontal-tb");
+  assert.equal(region.style.color, "#111827");
+  assert.equal(calls[0]!.regions.length, 1);
+});
+
 function fakeResult(surfaceId: string): SurfaceResult {
   return {
     surfaceId,

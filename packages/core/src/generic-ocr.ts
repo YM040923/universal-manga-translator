@@ -1,5 +1,5 @@
 import type { Rect } from "@umt/shared";
-import { ApiKeyPool, type ApiKeyPoolStatus } from "./api-key-pool.js";
+import { ApiKeyPool, type ApiKeyPoolStatus, type KeyFailureSeverity } from "./api-key-pool.js";
 
 export type GenericOcrInputMode = "image_base64" | "file";
 
@@ -7,6 +7,8 @@ export interface GenericOcrImageInput {
   imageBytes: Uint8Array;
   fileName?: string;
   mimeType?: string;
+  /** Cancels the in-flight OCR request. The client's own timeout still applies on top of it. */
+  signal?: AbortSignal;
 }
 
 export interface GenericOcrRegion {
@@ -77,19 +79,21 @@ export class GenericNetworkOcrClient {
       try {
         const lease = this.keyPool.next();
         if (!lease && this.keyPool.status().count > 0) {
-          throw lastError instanceof Error ? lastError : new Error("No available OCR API key; all configured keys are blocked after quota/auth/rate-limit errors.");
+          throw lastError instanceof Error ? lastError : new Error("No available OCR API key: every configured key is cooling down or was disabled by a quota/auth error. Saving the OCR settings again re-enables them.");
         }
         try {
           const regions = await this.recognizeOnce(input, lease?.value);
           if (lease) this.keyPool.reportSuccess(lease);
           return regions;
         } catch (error) {
-          if (lease && isKeyExhaustionError(error)) this.keyPool.reportFailure(lease, error);
+          const severity = keyFailureSeverity(error);
+          if (lease && severity) this.keyPool.reportFailure(lease, error, severity);
           throw error;
         }
       } catch (error) {
         lastError = error;
-        const shouldTryAnotherKey = isKeyExhaustionError(error) && this.keyPool.status().available > 0;
+        if (input.signal?.aborted) break;
+        const shouldTryAnotherKey = keyFailureSeverity(error) !== undefined && this.keyPool.status().available > 0;
         if (attempt >= maxAttempts || (!shouldTryAnotherKey && (attempt >= attempts || !isRetriableOcrError(error)))) break;
         await delay((this.options.retryDelayMs ?? 900) * attempt);
       }
@@ -101,6 +105,9 @@ export class GenericNetworkOcrClient {
     if (!this.options.endpoint.trim()) throw new Error("OCR API URL is not configured.");
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), Math.max(1000, this.options.timeoutMs ?? 90000));
+    const abortFromCaller = () => controller.abort();
+    input.signal?.addEventListener("abort", abortFromCaller, { once: true });
+    if (input.signal?.aborted) controller.abort();
     try {
       const form = new FormData();
       const inputMode = this.options.inputMode ?? "image_base64";
@@ -125,6 +132,7 @@ export class GenericNetworkOcrClient {
       return parseGenericOcrRegions(payload, this.options);
     } finally {
       clearTimeout(timeout);
+      input.signal?.removeEventListener("abort", abortFromCaller);
     }
   }
 }
@@ -280,10 +288,16 @@ export function classifyGenericOcrError(error: unknown): GenericOcrErrorClassifi
   return { kind: "unknown", retryable: false };
 }
 
-function isKeyExhaustionError(error: unknown): boolean {
-  if (!(error instanceof Error)) return false;
+/**
+ * Rate limits recover on their own, so the key only cools down. Quota and auth
+ * failures stay put until the operator changes the configuration.
+ */
+function keyFailureSeverity(error: unknown): KeyFailureSeverity | undefined {
+  if (!(error instanceof Error)) return undefined;
   const kind = classifyGenericOcrError(error).kind;
-  return kind === "quota" || kind === "auth" || kind === "rate_limit";
+  if (kind === "rate_limit") return "cooldown";
+  if (kind === "quota" || kind === "auth") return "disabled";
+  return undefined;
 }
 
 function isRetriableOcrError(error: unknown): boolean {

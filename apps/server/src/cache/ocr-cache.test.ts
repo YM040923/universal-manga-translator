@@ -5,9 +5,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openDatabase } from "./db.js";
 import { OcrCache } from "./ocr-cache.js";
-import type { OcrRegion } from "../providers/pipeline-provider.js";
+import type { GenericOcrRegion } from "@umt/core";
 
-const regions: OcrRegion[] = [
+const regions: GenericOcrRegion[] = [
   { id: "r1", box: { x: 1, y: 2, width: 30, height: 40 }, sourceText: "HELLO", confidence: 0.9, orientation: "horizontal", kind: "dialogue" },
 ];
 
@@ -18,7 +18,7 @@ test("OcrCache saves, reads, stats and clears OCR regions", () => {
     const cache = new OcrCache(db);
 
     assert.equal(cache.get("missing"), null);
-    cache.save("key-a", regions);
+    cache.set("key-a", regions);
 
     assert.deepEqual(cache.get("key-a"), regions);
     assert.equal(cache.stats().entries, 1);

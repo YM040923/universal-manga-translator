@@ -188,13 +188,15 @@ test("first-run docs cover install, self-test, and common setup failures", () =>
     "extension-release.zip.sha256",
     "Get-FileHash",
     "启用此网站",
-    "API 设置",
+    "服务与模型",
+    "测试 OCR",
+    "测试 AI",
     "自检",
     "页面样本 OCR 正常",
   ]) assertIncludes(quickstart, phrase);
 
   const troubleshooting = read("docs/troubleshooting.md");
-  for (const phrase of ["402", "额度不足", "fetch failed", "未解析到文字区域", "字段映射", "页面样本自检未返回", "目录页", "气泡偏移"]) {
+  for (const phrase of ["402", "额度不足", "fetch failed", "未解析到文字区域", "字段映射", "页面样本自检未返回", "测试 OCR", "目录页", "气泡偏移"]) {
     assertIncludes(troubleshooting, phrase);
   }
   assert.doesNotMatch(`${quickstart}\n${troubleshooting}`, /uapis\.cn|baidu|sk-[A-Za-z0-9_-]{12,}/i);

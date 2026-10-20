@@ -62,6 +62,7 @@ export interface UmtBackendHttpRequest {
     headers?: Record<string, string>;
     body?: string;
     cache?: RequestCache;
+    timeoutMs?: number;
   };
 }
 
@@ -88,6 +89,8 @@ export interface UmtDirectHttpRequest {
   source: "umt-content" | "umt-popup";
   command: "directHttp";
   url: string;
+  /** Lets the sender cancel a request that is still running in the service worker. */
+  requestId?: string;
   init?: {
     method?: string;
     headers?: Record<string, string>;
@@ -95,6 +98,12 @@ export interface UmtDirectHttpRequest {
     formFields?: UmtDirectHttpFormField[];
     cache?: RequestCache;
   };
+}
+
+export interface UmtDirectHttpCancelRequest {
+  source: "umt-content" | "umt-popup";
+  command: "directHttpCancel";
+  requestId: string;
 }
 
 export interface UmtDirectHttpSuccess {
@@ -163,6 +172,16 @@ export function isUmtDirectHttpRequest(value: unknown): value is UmtDirectHttpRe
   const candidate = value as Partial<UmtDirectHttpRequest>;
   if ((candidate.source !== "umt-content" && candidate.source !== "umt-popup") || candidate.command !== "directHttp" || typeof candidate.url !== "string") return false;
   return directHttpUrlPolicyError(candidate.url) === "";
+}
+
+export function isUmtDirectHttpCancelRequest(value: unknown): value is UmtDirectHttpCancelRequest {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Partial<UmtDirectHttpCancelRequest>;
+  return (candidate.source === "umt-content" || candidate.source === "umt-popup")
+    && candidate.command === "directHttpCancel"
+    && typeof candidate.requestId === "string"
+    && candidate.requestId.length > 0
+    && candidate.requestId.length <= 128;
 }
 
 export function directHttpUrlPolicyError(value: string): string {
