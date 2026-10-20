@@ -13,7 +13,6 @@ export type ImageRange = "viewport" | "fullPage";
 export type SiteScope = "origin" | "similarPath";
 export type OverlayMaskShape = "auto" | "ellipse" | "rounded" | "transparent";
 export type RunMode = "direct" | "backend";
-export type TranslationStyle = "general" | "martial";
 
 export interface OverlayAppearance {
   maskShape: OverlayMaskShape;
@@ -65,8 +64,6 @@ export interface ExtensionSettings {
   translationModel: string;
   providerProfile: string;
   openAICompatibleBaseUrl: string;
-  /** "martial" applies wuxia/murim localization rules (for English-localized Korean murim manhwa). */
-  translationStyle: TranslationStyle;
   requestTimeoutMs: number;
   maxConcurrentSubmissions: number;
   maxFullPageSurfaces: number;
@@ -99,21 +96,6 @@ export interface SettingsStorageArea {
   set(value: Record<string, unknown>): Promise<void> | void;
 }
 
-/**
- * Settings that must NOT be synced to the user's Google account: API keys are
- * billing credentials, and a large glossary exceeds chrome.storage.sync's per
- * item quota. These live in chrome.storage.local; everything else stays in
- * chrome.storage.sync so preferences still roam between devices.
- */
-export const LOCAL_SETTINGS_KEYS = ["directOcr", "directTranslator", "glossaryText", "glossary", "glossaryHash"] as const;
-
-function resolveLocalStorage(primary: SettingsStorageArea): SettingsStorageArea {
-  if (typeof chrome !== "undefined" && chrome.storage?.local) return chrome.storage.local;
-  // Tests and non-extension environments share the primary store so a single
-  // mock storage keeps observing every write.
-  return primary;
-}
-
 export const DEFAULT_SETTINGS: ExtensionSettings = {
   runMode: "direct",
   backendUrl: "http://127.0.0.1:47831",
@@ -121,7 +103,6 @@ export const DEFAULT_SETTINGS: ExtensionSettings = {
   translationModel: "gpt-4.1-mini",
   providerProfile: "network-ocr-openai-compatible",
   openAICompatibleBaseUrl: "",
-  translationStyle: "general",
   requestTimeoutMs: 60000,
   maxConcurrentSubmissions: 2,
   maxFullPageSurfaces: 80,
@@ -176,7 +157,6 @@ export function normalizeSettings(input: LegacyExtensionSettings = {}): Extensio
     translationModel: normalizeNonEmptyString(input.translationModel, DEFAULT_SETTINGS.translationModel),
     providerProfile: normalizeNonEmptyString(input.providerProfile, DEFAULT_SETTINGS.providerProfile),
     openAICompatibleBaseUrl: normalizeOptionalHttpUrl(input.openAICompatibleBaseUrl),
-    translationStyle: input.translationStyle === "martial" ? "martial" : "general",
     requestTimeoutMs: normalizeInteger(input.requestTimeoutMs, 5000, 180000, DEFAULT_SETTINGS.requestTimeoutMs),
     maxConcurrentSubmissions: normalizeInteger(input.maxConcurrentSubmissions, 1, 8, DEFAULT_SETTINGS.maxConcurrentSubmissions),
     maxFullPageSurfaces: normalizeInteger(input.maxFullPageSurfaces, 1, 300, DEFAULT_SETTINGS.maxFullPageSurfaces),
@@ -237,36 +217,22 @@ export function normalizeOverlayAppearance(value: unknown): OverlayAppearance {
     : DEFAULT_SETTINGS.overlayAppearance.maskShape;
   return {
     maskShape,
-    fontScale: normalizeNumber(raw.fontScale, 0.75, 1.3, DEFAULT_SETTINGS.overlayAppearance.fontScale),
+    fontScale: normalizeNumber(raw.fontScale, 0.5, 1.8, DEFAULT_SETTINGS.overlayAppearance.fontScale),
     maskScale: normalizeNumber(raw.maskScale, 0.2, 4, DEFAULT_SETTINGS.overlayAppearance.maskScale),
-    ellipseX: normalizeNumber(raw.ellipseX, 20, 90, DEFAULT_SETTINGS.overlayAppearance.ellipseX),
-    ellipseY: normalizeNumber(raw.ellipseY, 20, 90, DEFAULT_SETTINGS.overlayAppearance.ellipseY),
-    opacity: normalizeNumber(raw.opacity, 0.35, 1, DEFAULT_SETTINGS.overlayAppearance.opacity),
+    ellipseX: normalizeNumber(raw.ellipseX, 10, 50, DEFAULT_SETTINGS.overlayAppearance.ellipseX),
+    ellipseY: normalizeNumber(raw.ellipseY, 10, 50, DEFAULT_SETTINGS.overlayAppearance.ellipseY),
+    opacity: normalizeNumber(raw.opacity, 0.05, 1, DEFAULT_SETTINGS.overlayAppearance.opacity),
   };
 }
 
-export async function loadSettings(storage: SettingsStorageArea = chrome.storage.sync, localStorageArea: SettingsStorageArea = resolveLocalStorage(storage)): Promise<ExtensionSettings> {
-  const [saved, localSaved] = await Promise.all([
-    storage.get([...Object.keys(DEFAULT_SETTINGS), "autoTranslate"]),
-    localStorageArea.get([...LOCAL_SETTINGS_KEYS]),
-  ]);
-  return normalizeSettings({ ...saved, ...localSaved } as LegacyExtensionSettings);
+export async function loadSettings(storage: SettingsStorageArea = chrome.storage.sync): Promise<ExtensionSettings> {
+  const saved = await storage.get([...Object.keys(DEFAULT_SETTINGS), "autoTranslate"]);
+  return normalizeSettings(saved as LegacyExtensionSettings);
 }
 
-export async function saveSettings(settings: LegacyExtensionSettings, storage: SettingsStorageArea = chrome.storage.sync, localStorageArea: SettingsStorageArea = resolveLocalStorage(storage)): Promise<ExtensionSettings> {
+export async function saveSettings(settings: LegacyExtensionSettings, storage: SettingsStorageArea = chrome.storage.sync): Promise<ExtensionSettings> {
   const normalized = normalizeSettings(settings);
-  const syncPayload: Record<string, unknown> = {};
-  const localPayload: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(normalized)) {
-    if ((LOCAL_SETTINGS_KEYS as readonly string[]).includes(key)) localPayload[key] = value;
-    else syncPayload[key] = value;
-  }
-  if (localStorageArea === storage) {
-    // Fallback path (tests / non-extension): keep a single atomic write.
-    await storage.set({ ...syncPayload, ...localPayload });
-  } else {
-    await Promise.all([storage.set(syncPayload), localStorageArea.set(localPayload)]);
-  }
+  await storage.set({ ...normalized });
   return normalized;
 }
 
@@ -274,9 +240,6 @@ export function primaryDomainFromUrl(pageUrl: string): string | null {
   const parsed = parseHttpUrl(pageUrl);
   if (!parsed) return null;
   const host = parsed.hostname.toLowerCase().replace(/^www\./, "");
-  // IP addresses and localhost are their own "domain"; the eTLD+1 logic below
-  // would mangle them into nonsense like "0.1".
-  if (host === "localhost" || /^\d+\.\d+\.\d+\.\d+$/.test(host)) return host;
   const parts = host.split(".").filter(Boolean);
   if (parts.length <= 2) return host;
   const lastTwo = parts.slice(-2).join(".");
@@ -357,7 +320,7 @@ function normalizeEnabledSites(value: unknown): Record<string, boolean> {
   for (const [domain, enabled] of Object.entries(value as Record<string, unknown>)) {
     if (enabled !== true) continue;
     const clean = domain.toLowerCase().replace(/^www\./, "").trim();
-    if (/^[a-z0-9.-]+\.[a-z]{2,}$/i.test(clean) || clean === "localhost" || /^\d+\.\d+\.\d+\.\d+$/.test(clean)) normalized[clean] = true;
+    if (/^[a-z0-9.-]+\.[a-z]{2,}$/i.test(clean)) normalized[clean] = true;
   }
   return normalized;
 }

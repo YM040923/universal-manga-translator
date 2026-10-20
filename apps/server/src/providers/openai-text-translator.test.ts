@@ -1,4 +1,4 @@
-import test from "node:test";
+﻿import test from "node:test";
 import assert from "node:assert/strict";
 import { OpenAITextTranslator, parseTranslationResults } from "./openai-text-translator.js";
 
@@ -8,10 +8,8 @@ test("parseTranslationResults reads strict JSON item translations", () => {
   assert.deepEqual(results, [{ id: "r1", translatedText: "你好" }]);
 });
 
-test("parseTranslationResults falls back to source text when model response is unusable", () => {
-  const results = parseTranslationResults("not json", [{ id: "r1", text: "Hello" }]);
-
-  assert.deepEqual(results, [{ id: "r1", translatedText: "Hello" }]);
+test("parseTranslationResults rejects unusable responses instead of treating source text as translated", () => {
+  assert.throws(() => parseTranslationResults("not json", [{ id: "r1", text: "Hello" }]), /did not contain a JSON/i);
 });
 
 test("OpenAITextTranslator sends text-only chat completion request", async () => {
@@ -27,9 +25,9 @@ test("OpenAITextTranslator sends text-only chat completion request", async () =>
 
     assert.equal(body.model, "gpt-test");
     assert.equal(body.messages[0].role, "user");
-    assert.match(body.messages[0].content, /Translate the OCR text below/);
+    assert.match(body.messages[0].content, /Translate the following OCR text/);
     assert.match(body.messages[0].content, /proper names/i);
-    assert.match(body.messages[0].content, /half-translated names/i);
+    assert.match(body.messages[0].content, /all-caps/i);
     assert.deepEqual(results, [{ id: "r1", translatedText: "你好" }]);
   } finally {
     globalThis.fetch = originalFetch;
@@ -106,10 +104,11 @@ test("OpenAITextTranslator uses a manga localization prompt with name guidance",
     const translator = new OpenAITextTranslator({ baseUrl: "https://api.example.test/v1", apiKey: "key", model: "gpt-test" });
     await translator.translate([{ id: "r1", text: "CLARK" }], "zh-CN", "auto");
 
-    assert.match(prompt, /professional manga localizer/i);
-    assert.match(prompt, /natural, colloquial/i);
+    assert.match(prompt, /manga.*localization/i);
+    assert.match(prompt, /speech bubbles/i);
+    assert.match(prompt, /natural Chinese/i);
     assert.match(prompt, /proper names/i);
-    assert.match(prompt, /Never output half-translated names/i);
+    assert.match(prompt, /do not translate.*names.*literally/i);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -128,8 +127,8 @@ test("OpenAITextTranslator can add retranslation improvement guidance", async ()
     await translator.translate([{ id: "r1", text: "Retry this" }], "zh-CN", "auto", { retranslate: true });
 
     assert.match(prompt, /retranslation/i);
-    assert.match(prompt, /previous version was poor/i);
-    assert.match(prompt, /rewrite the Chinese/i);
+    assert.match(prompt, /previous result may be poor/i);
+    assert.match(prompt, /improve/i);
   } finally {
     globalThis.fetch = originalFetch;
   }

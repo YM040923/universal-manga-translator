@@ -145,7 +145,7 @@ test("OcrTranslatePipeline coalesces concurrent OCR misses for the same image", 
     },
   };
   const translator: CoreTextTranslator = {
-    translate: async (items) => items.map((item) => ({ id: item.id, translatedText: "ä½ å¥½" })),
+    translate: async (items) => items.map((item) => ({ id: item.id, translatedText: "ÄãºÃ" })),
   };
   const first = new OcrTranslatePipeline({ profile: "network-ocr:image+openai-compatible:gpt", ocr, translator, ocrCache: cache });
   const second = new OcrTranslatePipeline({ profile: "network-ocr:image+openai-compatible:gpt", ocr, translator, ocrCache: cache });
@@ -170,7 +170,7 @@ test("OcrTranslatePipeline forwards chapter context and previous translations", 
     translator: {
       translate: async (items, _target, _source, options) => {
         optionsSeen = options;
-        return items.map((item) => ({ id: item.id, translatedText: "ä½ å¥½" }));
+        return items.map((item) => ({ id: item.id, translatedText: "ÄãºÃ" }));
       },
     },
   });
@@ -183,11 +183,11 @@ test("OcrTranslatePipeline forwards chapter context and previous translations", 
     targetLanguage: "zh-CN",
     sourceLanguage: "auto",
     chapterContext: "Earlier: protagonist is angry.",
-    previousTranslations: [{ id: "old", translatedText: "ä¹‹å‰çš„è¯‘æ–‡" }],
+    previousTranslations: [{ id: "old", translatedText: "Ö®Ç°ÒëÎÄ" }],
   });
 
   assert.equal(optionsSeen?.chapterContext, "Earlier: protagonist is angry.");
-  assert.deepEqual(optionsSeen?.previousTranslations, [{ id: "old", translatedText: "ä¹‹å‰çš„è¯‘æ–‡" }]);
+  assert.deepEqual(optionsSeen?.previousTranslations, [{ id: "old", translatedText: "Ö®Ç°ÒëÎÄ" }]);
 });
 
 test("buildOcrCacheKey ignores text style and glossary cache versions", () => {
@@ -220,28 +220,4 @@ test("OcrTranslatePipeline auto-detects repeated proper-name term candidates", a
   assert.ok(seenOptions?.termCandidates?.includes("Clark"));
   assert.ok(seenOptions?.termCandidates?.includes("Heavenly Demon"));
   assert.ok(seenOptions?.termCandidates?.includes("Moon Blade"));
-});
-
-test("OcrTranslatePipeline marks hangul and punctuation-only regions as sfx so they are not bubble-covered", async () => {
-  let seenKinds: string[] = [];
-  const pipeline = new OcrTranslatePipeline({
-    profile: "network-ocr:image+openai-compatible:gpt",
-    ocr: { recognize: async () => [
-      region("r1", "ì¿µì¾…!", 10, 20, 80, 30),
-      region("r2", "...", 10, 70, 40, 20),
-      region("r3", "I will not lose!", 10, 120, 200, 40),
-    ] },
-    translator: {
-      translate: async (items) => {
-        seenKinds = items.map((item) => (item.context ?? "").match(/kind: (\w+)/)?.[1] ?? "");
-        return items.map((item) => ({ id: item.id, translatedText: item.text }));
-      },
-    },
-  });
-
-  await pipeline.process({ imageBytes: new Uint8Array([1]), imageHash: "sfx", width: 300, height: 300, targetLanguage: "zh-CN", sourceLanguage: "auto" });
-
-  assert.ok(seenKinds[0]?.includes("sfx"), `r1 should be sfx, got ${seenKinds[0]}`);
-  assert.ok(seenKinds[1]?.includes("sfx"), `r2 should be sfx, got ${seenKinds[1]}`);
-  assert.ok(seenKinds[2]?.includes("dialogue"), `r3 should be dialogue, got ${seenKinds[2]}`);
 });

@@ -1,14 +1,9 @@
 import cors from "@fastify/cors";
-import rateLimit from "@fastify/rate-limit";
 import websocket from "@fastify/websocket";
 import Fastify, { type FastifyInstance } from "fastify";
 import type { CancelledResult, SaveManualOverrideRequest, SurfaceResult, SurfaceTask, TextRegion, UpdateConfigRequest } from "@umt/shared";
-
-/** Rejects decompression-bomb images whose decoded dimensions are absurd. */
-export const MAX_IMAGE_DIMENSION = 12000;
 import { clampRectToBounds } from "@umt/shared/geometry";
 import { buildCacheKey, sha256Hex } from "@umt/shared/hashing";
-import { isAllowedRequestOrigin, isAllowedServerHost } from "./origin-policy.js";
 import type { ManualOverrideStore } from "../cache/manual-overrides.js";
 import { applyManualOverrides } from "../cache/manual-overrides.js";
 import type { OcrCache } from "../cache/ocr-cache.js";
@@ -18,7 +13,7 @@ import { normalizeForProvider } from "../image/normalize.js";
 import sharp from "sharp";
 import { LAYOUT_VERSION, layoutRegions } from "../layout/layout.js";
 import type { VisionProvider } from "../providers/provider.js";
-import type { ApiKeyPoolStatus } from "@umt/core";
+import type { ApiKeyPoolStatus } from "../providers/api-key-pool.js";
 import { NullDiagnosticsWriter, type DiagnosticsWriter } from "./diagnostics.js";
 import { EventBus } from "./events.js";
 import { createSelfTestTask, type SelfTestReport, type SelfTestStep } from "./self-test.js";
@@ -60,8 +55,6 @@ export interface BuildServerOptions {
   ocrEnableCls?: boolean | undefined;
   configWritable?: boolean | undefined;
   updateConfig?: (patch: UpdateConfigRequest) => Promise<RuntimeServerState>;
-  /** Maximum concurrent OCR+LLM submissions before new ones wait. */
-  maxConcurrentSubmissions?: number;
 }
 
 export interface RuntimeServerState {
@@ -130,64 +123,21 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
   };
   const eventBus = options.eventBus ?? new EventBus();
   const memoryCache = new Map<string, SurfaceResult>();
-  const MEMORY_CACHE_LIMIT = 200;
-  const memoryCacheGet = (key: string): SurfaceResult | undefined => {
-    const value = memoryCache.get(key);
-    if (value !== undefined) {
-      memoryCache.delete(key);
-      memoryCache.set(key, value); // refresh recency
-    }
-    return value;
-  };
-  const memoryCacheSet = (key: string, value: SurfaceResult): void => {
-    memoryCache.delete(key);
-    memoryCache.set(key, value);
-    if (memoryCache.size > MEMORY_CACHE_LIMIT) {
-      const oldest = memoryCache.keys().next().value;
-      if (oldest !== undefined) memoryCache.delete(oldest);
-    }
-  };
   const surfaceCache = options.surfaceCache;
   const ocrCache = options.ocrCache;
   const manualOverrideStore = options.manualOverrideStore;
   const diagnostics = options.diagnosticsWriter ?? new NullDiagnosticsWriter();
   const cancelledSessions = new Set<string>();
-  const cancelledSurfaces = new Map<string, number>(); // surfaceId -> cancelledAt
-  const sessionAbortControllers = new Map<string, AbortController>();
-  const inFlightSubmissions = new Map<string, Promise<SurfaceResult>>();
-  const submissionSlot = createSubmissionSlotControl(options.maxConcurrentSubmissions ?? 4);
-  const acquireSubmissionSlot = (): Promise<void> => submissionSlot.acquire();
-  const releaseSubmissionSlot = (): void => submissionSlot.release();
 
-  await app.register(cors, {
-    origin: (origin, callback) => {
-      callback(null, isAllowedRequestOrigin(origin ?? undefined));
-    },
-  });
+  await app.register(cors, { origin: true });
   await app.register(websocket);
-  // Defensive rate limiting: legit clients (extension auto-translate) stay far
-  // below these ceilings; it only stops scripted abuse from hammering paid
-  // OCR/LLM work.
-  await app.register(rateLimit, { max: 600, timeWindow: "1 minute" });
 
-  // Loopback-only Host header check defeats DNS rebinding and keeps the trust
-  // boundary on the local machine regardless of CORS configuration.
-  app.addHook("onRequest", async (request, reply) => {
-    if (!isAllowedServerHost(request.headers.host)) {
-      return reply.code(403).send({ ok: false, error: "Forbidden host" });
-    }
-  });
-
-  app.get("/v1/events", { websocket: true, config: { rateLimit: false } }, (socket, request) => {
-    if (!isAllowedRequestOrigin(request.headers.origin)) {
-      socket.close();
-      return;
-    }
+  app.get("/v1/events", { websocket: true }, (socket) => {
     const unsubscribe = eventBus.subscribe((event) => socket.send(JSON.stringify(event)));
     socket.on("close", unsubscribe);
   });
 
-  app.get("/health", { config: { rateLimit: false } }, async () => ({ ok: true, provider: state.provider, targetLanguage: state.targetLanguage }));
+  app.get("/health", async () => ({ ok: true, provider: state.provider, targetLanguage: state.targetLanguage }));
 
   const currentStatus = () => ({
     ok: true,
@@ -290,17 +240,6 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
     return { ok: true, deleted };
   });
 
-  const isSurfaceCancelled = (surfaceId: string): boolean => cancelledSurfaces.has(surfaceId);
-
-  // Bound the cancelled-surface map: entries older than an hour are stale
-  // (no in-flight job for them anymore) and only waste memory.
-  const pruneCancelledSurfaces = (): void => {
-    const cutoff = Date.now() - 60 * 60 * 1000;
-    for (const [surfaceId, cancelledAt] of cancelledSurfaces) {
-      if (cancelledAt < cutoff) cancelledSurfaces.delete(surfaceId);
-    }
-  };
-
   const processSurface = async (task: SurfaceTask, force = false, jobSessionId?: string) => {
     const started = Date.now();
     const isCancelled = () => Boolean(jobSessionId && cancelledSessions.has(jobSessionId));
@@ -317,18 +256,16 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
       return { ok: false as const, error: result.error, result };
     };
     const sessionEventFields = jobSessionId ? { jobSessionId } : {};
-    const sessionController = new AbortController();
-    if (jobSessionId) sessionAbortControllers.set(jobSessionId, sessionController);
     eventBus.publish({ type: "job.queued", surfaceId: task.surfaceId, ...sessionEventFields });
     try {
-      if (isCancelled() || isSurfaceCancelled(task.surfaceId)) return returnCancelled();
+      if (isCancelled()) return returnCancelled();
       const imageReadStarted = Date.now();
-      const { buffer: imageBuffer, source: inputSource } = await readTaskImage(task, { signal: sessionController.signal });
+      const { buffer: imageBuffer, source: inputSource } = await readTaskImage(task);
       const imageReadMs = Date.now() - imageReadStarted;
-      if (isCancelled() || isSurfaceCancelled(task.surfaceId)) return returnCancelled();
+      if (isCancelled()) return returnCancelled();
       const imageHash = sha256Hex(imageBuffer);
       const cacheKey = buildCacheKey({ imageHash, targetLanguage: task.targetLanguage, providerProfile: provider.profile, layoutVersion: LAYOUT_VERSION });
-      const cached = surfaceCache?.get(cacheKey) ?? memoryCacheGet(cacheKey);
+      const cached = surfaceCache?.get(cacheKey) ?? memoryCache.get(cacheKey);
       if (cached && isReusableCachedResult(cached) && !force) {
         if (isCancelled()) return returnCancelled();
         const cachedForSurface: SurfaceResult = { ...cached, surfaceId: task.surfaceId, status: "cached" };
@@ -340,94 +277,49 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
 
       eventBus.publish({ type: "job.processing", surfaceId: task.surfaceId, ...sessionEventFields });
       if (isCancelled()) return returnCancelled();
-
-      // Coalesce concurrent identical submissions (same image + profile):
-      // wait for the in-flight run instead of paying a second OCR+LLM bill.
-      if (!force) {
-        const inFlight = inFlightSubmissions.get(cacheKey);
-        if (inFlight) {
-          try {
-            const raw = await inFlight;
-            if (isCancelled() || isSurfaceCancelled(task.surfaceId)) return returnCancelled();
-            const coalesced: SurfaceResult = { ...raw, surfaceId: task.surfaceId, status: "cached" };
-            const result = applyStoredOverrides(coalesced, task.targetLanguage, manualOverrideStore);
-            diagnostics.record({ surfaceId: task.surfaceId, status: "cached", providerProfile: provider.profile, inputSource, originalSize: task.naturalSize, providerSize: task.naturalSize, rawRegionCount: result.regions.length, finalRegionCount: result.regions.length, elapsedMs: Date.now() - started, note: "coalesced with in-flight submission" });
-            eventBus.publish({ type: "job.cached", surfaceId: task.surfaceId, ...sessionEventFields, result });
-            return { ok: true as const, surfaceId: task.surfaceId, status: "cached" as const, result };
-          } catch {
-            // The in-flight run failed; fall through and run our own attempt.
-          }
-        }
+      const imageMetadataStarted = Date.now();
+      const actualImageSize = await readImageSizeFromBuffer(imageBuffer, task.naturalSize);
+      const imageMetadataMs = Date.now() - imageMetadataStarted;
+      const providerOutput = await processImageForProvider(provider, task, imageBuffer, imageHash, actualImageSize, {
+        maxLongEdge: state.maxImageLongEdge ?? 1600,
+        jpegQuality: state.jpegQuality ?? 0.75,
+        forceRetranslate: force,
+      });
+      if (isCancelled()) return returnCancelled();
+      const providerRegions = providerOutput.regions;
+      const mappedRegions = providerRegions;
+      const regions = clampProviderRegionsToImage(mappedRegions, task.naturalSize);
+      const layoutStarted = Date.now();
+      const laidOutRegions = layoutRegions(regions);
+      const layoutMs = Date.now() - layoutStarted;
+      const rawResult: SurfaceResult = {
+        surfaceId: task.surfaceId,
+        imageHash,
+        status: regions.length ? "completed" : "empty",
+        regions: laidOutRegions,
+        providerProfile: provider.profile,
+        layoutVersion: LAYOUT_VERSION,
+        elapsedMs: Date.now() - started,
+      };
+      const cacheWriteStarted = Date.now();
+      if (rawResult.status === "completed" && rawResult.regions.length > 0) {
+        memoryCache.set(cacheKey, rawResult);
+        surfaceCache?.save(cacheKey, rawResult);
       }
-
-      const run = (async (): Promise<SurfaceResult> => {
-        await acquireSubmissionSlot();
-        try {
-          if (isCancelled() || isSurfaceCancelled(task.surfaceId)) throw new CancelledRunError();
-          const imageMetadataStarted = Date.now();
-          const actualImageSize = await readImageSizeFromBuffer(imageBuffer, task.naturalSize);
-          const imageMetadataMs = Date.now() - imageMetadataStarted;
-          if (actualImageSize.width > MAX_IMAGE_DIMENSION || actualImageSize.height > MAX_IMAGE_DIMENSION) {
-            throw new Error(`Image dimensions ${actualImageSize.width}x${actualImageSize.height} exceed the ${MAX_IMAGE_DIMENSION}px limit.`);
-          }
-          const providerOutput = await processImageForProvider(provider, task, imageBuffer, imageHash, actualImageSize, {
-            maxLongEdge: state.maxImageLongEdge ?? 1600,
-            jpegQuality: state.jpegQuality ?? 0.75,
-            forceRetranslate: force,
-            signal: sessionController.signal,
-          });
-          if (isCancelled() || isSurfaceCancelled(task.surfaceId)) throw new CancelledRunError();
-          const providerRegions = providerOutput.regions;
-          const regions = clampProviderRegionsToImage(providerRegions, task.naturalSize);
-          const layoutStarted = Date.now();
-          const laidOutRegions = layoutRegions(regions);
-          const layoutMs = Date.now() - layoutStarted;
-          const rawResult: SurfaceResult = {
-            surfaceId: task.surfaceId,
-            imageHash,
-            status: regions.length ? "completed" : "empty",
-            regions: laidOutRegions,
-            providerProfile: provider.profile,
-            layoutVersion: LAYOUT_VERSION,
-            elapsedMs: Date.now() - started,
-          };
-          const cacheWriteStarted = Date.now();
-          if (rawResult.status === "completed" && rawResult.regions.length > 0) {
-            memoryCacheSet(cacheKey, rawResult);
-            surfaceCache?.save(cacheKey, rawResult);
-          }
-          const cacheWriteMs = Date.now() - cacheWriteStarted;
-          diagnostics.record({ surfaceId: task.surfaceId, status: rawResult.status, providerProfile: provider.profile, inputSource, originalSize: task.naturalSize, providerSize: providerOutput.providerSize, rawRegionCount: providerRegions.length, finalRegionCount: regions.length, filteredRegionCount: Math.max(0, providerRegions.length - regions.length), elapsedMs: rawResult.elapsedMs, imageReadMs, imageMetadataMs, normalizeMs: providerOutput.normalizeMs, providerMs: providerOutput.providerMs, layoutMs, cacheWriteMs, tileCount: providerOutput.tileCount, ...diagnosticOcrNote(provider, diagnosticNoteForResult(providerRegions.length, regions.length, providerOutput.tileCount).note) });
-          return rawResult;
-        } finally {
-          releaseSubmissionSlot();
-        }
-      })();
-      if (!force) inFlightSubmissions.set(cacheKey, run);
-      let rawResult: SurfaceResult;
-      try {
-        rawResult = await run;
-      } catch (error) {
-        if (error instanceof CancelledRunError) return returnCancelled();
-        throw error;
-      } finally {
-        if (!force && inFlightSubmissions.get(cacheKey) === run) inFlightSubmissions.delete(cacheKey);
-      }
+      const cacheWriteMs = Date.now() - cacheWriteStarted;
       const result = applyStoredOverrides(rawResult, task.targetLanguage, manualOverrideStore);
+      diagnostics.record({ surfaceId: task.surfaceId, status: result.status, providerProfile: provider.profile, inputSource, originalSize: task.naturalSize, providerSize: providerOutput.providerSize, rawRegionCount: providerRegions.length, finalRegionCount: result.regions.length, filteredRegionCount: Math.max(0, providerRegions.length - regions.length), elapsedMs: rawResult.elapsedMs, imageReadMs, imageMetadataMs, normalizeMs: providerOutput.normalizeMs, providerMs: providerOutput.providerMs, layoutMs, cacheWriteMs, tileCount: providerOutput.tileCount, ...diagnosticOcrNote(provider, diagnosticNoteForResult(providerRegions.length, regions.length, providerOutput.tileCount).note) });
       eventBus.publish({ type: "job.completed", surfaceId: task.surfaceId, ...sessionEventFields, result });
       return { ok: true as const, surfaceId: task.surfaceId, status: result.status, result };
     } catch (error) {
-      if (isCancelled() || (error instanceof Error && error.name === "AbortError")) return returnCancelled();
       const failed = { surfaceId: task.surfaceId, status: "failed" as const, recoverable: true, error: error instanceof Error ? error.message : String(error) };
       diagnostics.record({ surfaceId: task.surfaceId, status: "failed", providerProfile: provider.profile, inputSource: task.imageData ? "imageData" : "imageUrl", originalSize: task.naturalSize, providerSize: task.naturalSize, rawRegionCount: 0, finalRegionCount: 0, elapsedMs: Date.now() - started, note: failed.error });
       eventBus.publish({ type: "job.failed", surfaceId: task.surfaceId, ...sessionEventFields, result: failed });
       return { ok: false as const, error: failed.error, result: failed };
-    } finally {
-      if (jobSessionId && sessionAbortControllers.get(jobSessionId) === sessionController) sessionAbortControllers.delete(jobSessionId);
     }
   };
 
-  app.post("/v1/self-test", { config: { rateLimit: { max: 60, timeWindow: "1 minute" } } }, async () => {
+  app.post("/v1/self-test", async () => {
     const steps: SelfTestStep[] = [
       { name: "backend", ok: true, detail: "HTTP server is reachable" },
       { name: "provider", ok: true, detail: provider.profile },
@@ -454,31 +346,21 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
     return report;
   });
 
-  app.post<{ Body: { task: SurfaceTask; jobSessionId?: string } }>("/v1/surfaces/submit", { config: { rateLimit: { max: 240, timeWindow: "1 minute" } } }, async (request) => {
+  app.post<{ Body: { task: SurfaceTask; jobSessionId?: string } }>("/v1/surfaces/submit", async (request) => {
     return processSurface(request.body.task, false, request.body.jobSessionId);
   });
 
-  app.post<{ Body: { task: SurfaceTask; jobSessionId?: string } }>("/v1/surfaces/retranslate", { config: { rateLimit: { max: 240, timeWindow: "1 minute" } } }, async (request) => {
+  app.post<{ Body: { task: SurfaceTask; jobSessionId?: string } }>("/v1/surfaces/retranslate", async (request) => {
     return processSurface(request.body.task, true, request.body.jobSessionId);
   });
 
   app.post<{ Body: { surfaceId: string } }>("/v1/surfaces/cancel", async (request) => {
-    const surfaceId = String(request.body?.surfaceId ?? "");
-    if (surfaceId) {
-      pruneCancelledSurfaces();
-      cancelledSurfaces.set(surfaceId, Date.now());
-    }
-    return { ok: true, surfaceId, status: "accepted", cancellable: true };
+    return { ok: true, surfaceId: request.body.surfaceId, status: "accepted", cancellable: false };
   });
 
   app.post<{ Body: { jobSessionId: string } }>("/v1/jobs/cancel-session", async (request) => {
     const jobSessionId = String(request.body?.jobSessionId ?? "");
-    if (jobSessionId) {
-      cancelledSessions.add(jobSessionId);
-      // Abort in-flight OCR/LLM calls for this session so the user is not billed
-      // for work they explicitly cancelled.
-      sessionAbortControllers.get(jobSessionId)?.abort();
-    }
+    if (jobSessionId) cancelledSessions.add(jobSessionId);
     return { ok: true, jobSessionId, status: "cancelled", cancellable: true };
   });
 
@@ -487,39 +369,6 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
 
 function applyStoredOverrides(result: SurfaceResult, targetLanguage: string, manualOverrideStore?: ManualOverrideStore): SurfaceResult {
   return manualOverrideStore ? applyManualOverrides(result, manualOverrideStore.listForImage(result.imageHash, targetLanguage)) : result;
-}
-
-class CancelledRunError extends Error {
-  constructor() {
-    super("cancelled");
-    this.name = "CancelledRunError";
-  }
-}
-
-export interface SubmissionSlotControl {
-  acquire(): Promise<void>;
-  release(): void;
-}
-
-export function createSubmissionSlotControl(maxConcurrent: number): SubmissionSlotControl {
-  const max = Math.max(1, Math.min(16, maxConcurrent));
-  let active = 0;
-  const waiters: Array<() => void> = [];
-  return {
-    async acquire(): Promise<void> {
-      if (active < max) {
-        active += 1;
-        return;
-      }
-      await new Promise<void>((resolve) => waiters.push(resolve));
-      active += 1;
-    },
-    release(): void {
-      const next = waiters.shift();
-      if (next) next();
-      else active -= 1;
-    },
-  };
 }
 
 interface ProviderImageOutput {
@@ -541,21 +390,13 @@ async function readImageSizeFromBuffer(imageBuffer: Buffer, fallback: { width: n
   }
 }
 
-async function processImageForProvider(provider: VisionProvider, task: SurfaceTask, imageBuffer: Buffer, imageHash: string, actualImageSize: { width: number; height: number }, options: { maxLongEdge: number; jpegQuality: number; forceRetranslate?: boolean; signal?: AbortSignal }): Promise<ProviderImageOutput> {
+async function processImageForProvider(provider: VisionProvider, task: SurfaceTask, imageBuffer: Buffer, imageHash: string, actualImageSize: { width: number; height: number }, options: { maxLongEdge: number; jpegQuality: number; forceRetranslate?: boolean }): Promise<ProviderImageOutput> {
   if (!shouldTileTallImage(actualImageSize)) {
     const normalizeStarted = Date.now();
     const normalized = await normalizeForProvider(imageBuffer, { maxLongEdge: options.maxLongEdge, jpegQuality: Math.round(options.jpegQuality * 100) });
     const normalizeMs = Date.now() - normalizeStarted;
     const providerStarted = Date.now();
-    const providerRegions = await provider.process({
-      task,
-      imageBuffer: normalized.buffer,
-      imageHash,
-      width: normalized.width,
-      height: normalized.height,
-      forceRetranslate: options.forceRetranslate === true,
-      ...(options.signal ? { signal: options.signal } : {}),
-    });
+    const providerRegions = await provider.process({ task, imageBuffer: normalized.buffer, imageHash, width: normalized.width, height: normalized.height, forceRetranslate: options.forceRetranslate === true });
     const providerMs = Date.now() - providerStarted;
     return {
       regions: mapProviderRegionsToOriginalImage(
@@ -594,15 +435,7 @@ async function processImageForProvider(provider: VisionProvider, task: SurfaceTa
       surfaceRect: { ...task.surfaceRect, height: Math.round((height / actualImageSize.height) * task.surfaceRect.height) },
     };
     const providerStarted = Date.now();
-    const tileRegions = await provider.process({
-      task: tileTask,
-      imageBuffer: tileBuffer,
-      imageHash: `${imageHash}:tile:${tileCount}`,
-      width: actualImageSize.width,
-      height,
-      forceRetranslate: options.forceRetranslate === true,
-      ...(options.signal ? { signal: options.signal } : {}),
-    });
+    const tileRegions = await provider.process({ task: tileTask, imageBuffer: tileBuffer, imageHash: `${imageHash}:tile:${tileCount}`, width: actualImageSize.width, height, forceRetranslate: options.forceRetranslate === true });
     providerMs += Date.now() - providerStarted;
     regions.push(...tileRegions.map((region) => ({
       ...region,

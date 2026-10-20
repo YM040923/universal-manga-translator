@@ -40,7 +40,7 @@ jobs:
 
       - name: Package extension
         shell: pwsh
-        run: pwsh -NoProfile -File .\scripts\package-extension.ps1
+        run: powershell -ExecutionPolicy Bypass -File .\scripts\package-extension.ps1
 
       - name: Upload extension artifact
         uses: actions/upload-artifact@v4

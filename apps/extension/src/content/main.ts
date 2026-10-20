@@ -1,4 +1,4 @@
-import { BackendClient, SurfaceSubmitTracker } from "./client/backend-client";
+﻿import { BackendClient, SurfaceSubmitTracker } from "./client/backend-client";
 import { DirectClient } from "./client/direct-client";
 import { supportsEventStream, type TranslatorClient } from "./client/translator-client";
 import { hasRelevantContentSettingChange } from "./settings-change";
@@ -14,11 +14,10 @@ import type { ServerEvent } from "@umt/shared/protocol";
 import { EventResultRouter } from "./events/event-result-router";
 import { isUmtContentCommand, type UmtPageSampleSelfTestResponse } from "./messages";
 import { OverlayRenderer } from "./overlay/overlay-renderer";
-import { createDocumentRectOverlayAnchor, createElementTrackingOverlayAnchor } from "./overlay/rect-anchor";
+import { createDocumentRectOverlayAnchor } from "./overlay/rect-anchor";
 import { ChapterProgress } from "./progress/chapter-progress";
 import { FloatingPanel } from "./panel/floating-panel";
 import { ManualSelectionController } from "./selection/manual-selection";
-import { resolveSelectionContentAnchor } from "./selection/selection-anchor";
 import { TranslationQueue } from "./queue/translation-queue";
 import type { SurfaceStatus } from "./surface/surface-state";
 import { SurfaceControl } from "./surface/surface-control";
@@ -30,25 +29,6 @@ import { createJobSessionId, debounce, formatShortError, isUmtOwnedMutation, req
 import { getEffectiveSiteSettings, isSiteEnabled, loadSettings, saveSettings, setSiteSettings, setTranslationOverlayVisible, type ExtensionSettings } from "../settings/settings";
 
 const bootstrapWindow = window as Window & { __umtContentBootstrapState?: "starting" | "running" | undefined };
-
-/**
- * Filters DOM mutations down to image-relevant ones so the reader re-scan does
- * not spin on animations/ad scripts: only newly added <img> subtrees and
- * attribute changes on <img> elements count.
- */
-function hasReaderRelevantMutation(mutations: MutationRecord[]): boolean {
-  for (const mutation of mutations) {
-    if (mutation.type === "childList") {
-      for (const node of mutation.addedNodes) {
-        if (node instanceof Element && (node.tagName === "IMG" || node.querySelector?.("img") !== null)) return true;
-      }
-    } else if (mutation.type === "attributes" && mutation.target instanceof Element && mutation.target.tagName === "IMG") {
-      return true;
-    }
-  }
-  return false;
-}
-
 if (bootstrapWindow.__umtContentBootstrapState !== "starting" && bootstrapWindow.__umtContentBootstrapState !== "running") {
   bootstrapWindow.__umtContentBootstrapState = "starting";
   void bootstrap().then((started) => { bootstrapWindow.__umtContentBootstrapState = started ? "running" : undefined; }).catch((error) => {
@@ -79,8 +59,6 @@ async function bootstrap(): Promise<boolean> {
   let readerUiMounted = false;
   let controls = new Map<string, SurfaceControl>();
   const surfaceFailureDetails = new Map<string, string>();
-  const trackedManualAnchors = new Set<HTMLElement>();
-  let manualRefreshFrame = 0;
 
   let queue = createQueue();
   let eventResultRouter = createEventResultRouter(renderer);
@@ -283,10 +261,7 @@ async function bootstrap(): Promise<boolean> {
     try {
       const detected = toDetectedSurface(surface);
       eventResultRouter.track(surface.surfaceId, surface.element, surface.naturalSize);
-      const task = await createSurfaceTaskWithImageData(detected, "p2", settings.targetLanguage, {
-        allowImageUrlFallback: settings.runMode !== "direct",
-        allowScreenshotFallback: settings.runMode === "direct",
-      });
+      const task = await createSurfaceTaskWithImageData(detected, "p2", settings.targetLanguage, { allowImageUrlFallback: settings.runMode !== "direct" });
       logger.info("submit surface", `${surface.surfaceId} | #${surface.index} | ${task.imageData ? "imageData" : "imageUrl"}`);
       markSurface(surface.surfaceId, "ocr");
       const response = force ? await client.retranslate(task, jobSessionId) : await client.submit(task, jobSessionId);
@@ -388,7 +363,6 @@ async function bootstrap(): Promise<boolean> {
   async function translateManualRect(rect: { x: number; y: number; width: number; height: number }): Promise<void> {
     ensureEventStream();
     try {
-      const anchorInfo = resolveSelectionContentAnchor(rect);
       const screenshotDataUrl = await requestVisibleTabScreenshot();
       const screenshotSize = await readImageSize(screenshotDataUrl);
       const surface = await createScreenshotSurface({
@@ -403,10 +377,7 @@ async function bootstrap(): Promise<boolean> {
       if (response.ok && isRenderableSurfaceResult(response.result)) {
         const result = await manualOverrides.applyToResult(response.result, settings.targetLanguage);
         const documentRect = { x: rect.x + window.scrollX, y: rect.y + window.scrollY, width: rect.width, height: rect.height };
-        // Anchor to the real content element so the overlay follows the selected
-        // content across scrolling, inner scroll containers, and layout shifts.
-        trackedManualAnchors.add(anchorInfo.element);
-        renderer.render(createElementTrackingOverlayAnchor(anchorInfo.element, anchorInfo.contentRect), surface.naturalSize, result);
+        renderer.render(createDocumentRectOverlayAnchor(documentRect), surface.naturalSize, result);
         renderer.setVisible(settings.translationOverlayVisible);
         void manualSelectionCache.save(manualSelectionCacheContext(), { id: surface.surfaceId, documentRect, naturalSize: surface.naturalSize, result }).catch((error) => logger.error("save manual selection cache failed", error));
         logger.info("render manual region", `regions=${result.regions.length}`);
@@ -449,7 +420,6 @@ async function bootstrap(): Promise<boolean> {
     await cancelCurrentQueue(reason);
     submitTracker.clear();
     surfaceFailureDetails.clear();
-    trackedManualAnchors.clear();
     eventResultRouter.clear();
     queue.clear(reason);
     resetProgress("等待开始");
@@ -487,7 +457,6 @@ async function bootstrap(): Promise<boolean> {
     }
     if (settings.targetLanguage !== previousTargetLanguage || settings.backendUrl !== previousBackendUrl || settings.runMode !== previousRunMode || directChanged) {
       renderer = createRenderer(settings, client);
-      trackedManualAnchors.clear();
       eventResultRouter = createEventResultRouter(renderer);
       eventResultRouter.setSession(jobSessionId);
     }
@@ -498,19 +467,6 @@ async function bootstrap(): Promise<boolean> {
 
   function refreshControls(): void {
     for (const control of controls.values()) control.refreshPosition();
-  }
-
-  /** Re-positions manual selection overlays when any element scrolls (capture phase catches inner scroll containers). */
-  function onAnyScrollRefresh(): void {
-    if (manualRefreshFrame || trackedManualAnchors.size === 0) return;
-    for (const element of trackedManualAnchors) {
-      if (!element.isConnected) trackedManualAnchors.delete(element);
-    }
-    if (trackedManualAnchors.size === 0) return;
-    manualRefreshFrame = requestAnimationFrame(() => {
-      manualRefreshFrame = 0;
-      renderer.refreshManualSelections();
-    });
   }
 
   function refreshLayout(): void {
@@ -545,22 +501,15 @@ async function bootstrap(): Promise<boolean> {
 
   const observer = new MutationObserver((mutations) => {
     if (mutations.every(isUmtOwnedMutation)) return;
-    // Only re-scan when something image-related actually changed: dynamic image
-    // injection (childList with img) or lazy-loading attribute changes on an
-    // <img>. Style changes on other elements (animations, ads) must not spin
-    // the reader scan on every frame.
-    if (!hasReaderRelevantMutation(mutations)) return;
     rescan("mutation");
   });
   observer.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ["src", "srcset", "data-src", "data-original", "style"] });
 
   window.addEventListener("scroll", () => refreshControls(), { passive: true });
-  window.addEventListener("scroll", onAnyScrollRefresh, { capture: true, passive: true });
   window.addEventListener("resize", () => refreshLayout());
 
   chrome.storage?.onChanged?.addListener((changes, areaName) => {
-    // Settings live in both sync (preferences) and local (API keys, glossary).
-    if (areaName !== "sync" && areaName !== "local") return;
+    if (areaName !== "sync") return;
     if (hasRelevantContentSettingChange(changes)) void reloadSettings();
   });
 

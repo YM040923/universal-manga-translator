@@ -61,6 +61,30 @@ $zip = [System.IO.Compression.ZipFile]::OpenRead($ZipPath)
 try {
   $entries = @($zip.Entries | ForEach-Object { $_.FullName.Replace("\", "/") })
 
+  $manifestEntry = $zip.Entries | Where-Object { $_.FullName -eq "manifest.json" } | Select-Object -First 1
+  $manifestReader = New-Object System.IO.StreamReader($manifestEntry.Open())
+  try {
+    $manifest = $manifestReader.ReadToEnd() | ConvertFrom-Json
+  }
+  finally {
+    $manifestReader.Dispose()
+  }
+
+  if ($manifest.options_page) {
+    throw "Extension package is invalid: options_page is disabled; use options_ui pointing at settings.html"
+  }
+
+  $optionsUi = $manifest.options_ui
+  if ($optionsUi) {
+    if ($optionsUi.page -ne "settings.html") {
+      throw "Extension package is invalid: options_ui.page must be settings.html"
+    }
+    if (-not $optionsUi.open_in_tab) {
+      throw "Extension package is invalid: options_ui.open_in_tab must be true"
+    }
+    $requiredRootEntries += "settings.html"
+    $requiredRootEntries += "settings.js"
+  }
   foreach ($required in $requiredRootEntries) {
     if (-not ($entries -contains $required)) {
       throw "Extension package is invalid: missing root entry $required"
@@ -72,18 +96,6 @@ try {
     throw "Extension package is invalid: manifest.json is nested under $nestedManifest"
   }
 
-  $manifestEntry = $zip.Entries | Where-Object { $_.FullName -eq "manifest.json" } | Select-Object -First 1
-  $manifestReader = New-Object System.IO.StreamReader($manifestEntry.Open())
-  try {
-    $manifest = $manifestReader.ReadToEnd() | ConvertFrom-Json
-  }
-  finally {
-    $manifestReader.Dispose()
-  }
-
-  if ($manifest.options_page -or $manifest.options_ui) {
-    throw "Extension package is invalid: options pages are disabled; use the popup API settings page"
-  }
 
   if ($manifest.content_scripts) {
     throw "Extension package is invalid: content_scripts must not be statically declared; use site activation and dynamic injection"

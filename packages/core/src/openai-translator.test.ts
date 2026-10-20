@@ -1,4 +1,4 @@
-import test from "node:test";
+﻿import test from "node:test";
 import assert from "node:assert/strict";
 import { OpenAICompatibleTextTranslator, parseTranslationResults } from "./openai-translator.js";
 
@@ -7,22 +7,9 @@ test("parseTranslationResults reads strict JSON item translations", () => {
   assert.deepEqual(results, [{ id: "r1", translatedText: "你好" }]);
 });
 
-test("parseTranslationResults falls back to source text when model response is unusable", () => {
-  const results = parseTranslationResults("not json", [{ id: "r1", text: "Hello" }]);
-  assert.deepEqual(results, [{ id: "r1", translatedText: "Hello" }]);
-});
-
-test("parseTranslationResults fills missing items with source text instead of dropping them", () => {
-  const results = parseTranslationResults('{"items":[{"id":"r1","translatedText":"你好"}]}', [
-    { id: "r1", text: "Hello" },
-    { id: "r2", text: "World" },
-    { id: "r3", text: "Again" },
-  ]);
-  assert.deepEqual(results, [
-    { id: "r1", translatedText: "你好" },
-    { id: "r2", translatedText: "World" },
-    { id: "r3", translatedText: "Again" },
-  ]);
+test("parseTranslationResults rejects unusable or incomplete responses instead of treating source text as translated", () => {
+  assert.throws(() => parseTranslationResults("not json", [{ id: "r1", text: "Hello" }]), /did not contain a JSON/i);
+  assert.throws(() => parseTranslationResults('{"items":[]}', [{ id: "r1", text: "Hello" }]), /omitted 1 requested item/i);
 });
 
 test("OpenAICompatibleTextTranslator sends text-only chat completion request", async () => {
@@ -40,11 +27,107 @@ test("OpenAICompatibleTextTranslator sends text-only chat completion request", a
   const results = await translator.translate([{ id: "r1", text: "Hello" }], "zh-CN", "auto");
 
   assert.equal(body.model, "gpt-test");
+  assert.equal(body.reasoning_effort, "none");
+  assert.equal(body.response_format.type, "json_schema");
+  assert.equal(body.response_format.json_schema.strict, true);
+  assert.equal(body.temperature, undefined);
   assert.equal(body.messages[0].role, "user");
-  assert.match(body.messages[0].content, /Translate the OCR text below/);
+  assert.match(body.messages[0].content, /Translate the following OCR text/);
   assert.match(body.messages[0].content, /proper names/i);
-  assert.match(body.messages[0].content, /half-translated names/i);
+  assert.match(body.messages[0].content, /all-caps/i);
   assert.deepEqual(results, [{ id: "r1", translatedText: "你好" }]);
+});
+
+test("OpenAICompatibleTextTranslator adapts when a provider rejects optional request parameters", async () => {
+  const bodies: Array<Record<string, any>> = [];
+  const translator = new OpenAICompatibleTextTranslator({
+    baseUrl: "https://fallback.example.test/v1",
+    apiKey: "key",
+    model: "fallback-test",
+    attempts: 1,
+    fetch: async (_url, init) => {
+      const body = JSON.parse(String(init?.body));
+      bodies.push(body);
+      if (body.reasoning_effort !== undefined) {
+        return new Response(JSON.stringify({ error: { message: "Unsupported parameter: reasoning_effort" } }), { status: 400, headers: { "content-type": "application/json" } });
+      }
+      if (body.response_format?.type === "json_schema") {
+        return new Response(JSON.stringify({ error: { message: "json_schema is not supported" } }), { status: 400, headers: { "content-type": "application/json" } });
+      }
+      if (body.response_format?.type === "json_object") {
+        return new Response(JSON.stringify({ error: { message: "response_format is not supported" } }), { status: 422, headers: { "content-type": "application/json" } });
+      }
+      return new Response(JSON.stringify({ choices: [{ message: { content: '{"items":[{"id":"r1","translatedText":"你好"}]}' } }] }), { status: 200, headers: { "content-type": "application/json" } });
+    },
+  });
+
+  const result = await translator.translate([{ id: "r1", text: "Hello" }], "zh-CN", "auto");
+
+  assert.deepEqual(result, [{ id: "r1", translatedText: "你好" }]);
+  assert.equal(bodies.length, 4);
+  assert.equal(bodies[0]?.reasoning_effort, "none");
+  assert.equal(bodies[1]?.response_format.type, "json_schema");
+  assert.equal(bodies[1]?.reasoning_effort, undefined);
+  assert.deepEqual(bodies[2]?.response_format, { type: "json_object" });
+  assert.equal(bodies[3]?.response_format, undefined);
+});
+
+test("OpenAICompatibleTextTranslator falls back to the lowest accepted reasoning effort", async () => {
+  const efforts: unknown[] = [];
+  const translator = new OpenAICompatibleTextTranslator({
+    baseUrl: "https://effort-fallback.example.test/v1",
+    apiKey: "key",
+    model: "effort-fallback-test",
+    attempts: 1,
+    fetch: async (_url, init) => {
+      const body = JSON.parse(String(init?.body));
+      efforts.push(body.reasoning_effort);
+      if (body.reasoning_effort === "none") {
+        return new Response(JSON.stringify({ error: { message: "Invalid reasoning_effort value 'none'. Supported values: minimal, low, medium." } }), { status: 400, headers: { "content-type": "application/json" } });
+      }
+      if (body.reasoning_effort === "minimal") {
+        return new Response(JSON.stringify({ error: { message: "reasoning_effort value 'minimal' is not supported by this model." } }), { status: 422, headers: { "content-type": "application/json" } });
+      }
+      return new Response(JSON.stringify({ choices: [{ message: { content: '{"items":[{"id":"r1","translatedText":"你好"}]}' } }] }), { status: 200, headers: { "content-type": "application/json" } });
+    },
+  });
+
+  assert.deepEqual(
+    await translator.translate([{ id: "r1", text: "Hello" }], "zh-CN", "auto"),
+    [{ id: "r1", translatedText: "你好" }],
+  );
+  assert.deepEqual(efforts, ["none", "minimal", "low"]);
+});
+
+test("OpenAICompatibleTextTranslator accepts text content blocks in Chat Completions responses", async () => {
+  const translator = new OpenAICompatibleTextTranslator({
+    baseUrl: "https://content-blocks.example.test/v1",
+    apiKey: "key",
+    model: "content-blocks-test",
+    fetch: async () => new Response(JSON.stringify({
+      choices: [{ message: { content: [{ type: "text", text: '{"items":' }, { type: "text", text: '[{"id":"r1","translatedText":"你好"}]}' }] } }],
+    }), { status: 200, headers: { "content-type": "application/json" } }),
+  });
+
+  assert.deepEqual(
+    await translator.translate([{ id: "r1", text: "Hello" }], "zh-CN", "auto"),
+    [{ id: "r1", translatedText: "你好" }],
+  );
+});
+
+test("OpenAICompatibleTextTranslator includes provider error detail but redacts the API key", async () => {
+  const translator = new OpenAICompatibleTextTranslator({
+    baseUrl: "https://provider-errors.example.test/v1",
+    apiKey: "secret-key",
+    model: "error-test",
+    attempts: 1,
+    fetch: async () => new Response(JSON.stringify({ error: { message: "Quota exceeded for secret-key" } }), { status: 402, headers: { "content-type": "application/json" } }),
+  });
+
+  await assert.rejects(
+    translator.translate([{ id: "r1", text: "Hello" }], "zh-CN", "auto"),
+    (error: Error) => error.message.includes("HTTP 402") && error.message.includes("Quota exceeded") && !error.message.includes("secret-key"),
+  );
 });
 
 test("OpenAICompatibleTextTranslator lists models from OpenAI-compatible /models endpoint", async () => {
@@ -137,11 +220,11 @@ test("OpenAICompatibleTextTranslator uses a manga localization prompt with name 
 
   await translator.translate([{ id: "r1", text: "CLARK" }], "zh-CN", "auto");
 
-  assert.match(prompt, /professional manga localizer/i);
-  assert.match(prompt, /colloquial/i);
-  assert.match(prompt, /natural, colloquial/i);
+  assert.match(prompt, /manga.*localization/i);
+  assert.match(prompt, /speech bubbles/i);
+  assert.match(prompt, /natural Chinese/i);
   assert.match(prompt, /proper names/i);
-  assert.match(prompt, /Never output half-translated names/i);
+  assert.match(prompt, /do not translate.*names.*literally/i);
 });
 
 test("OpenAICompatibleTextTranslator prompt discourages literal machine-translation style and uses page context", async () => {
@@ -159,9 +242,9 @@ test("OpenAICompatibleTextTranslator prompt discourages literal machine-translat
 
   await translator.translate([{ id: "r1", text: "Where is Clark?", context: "order 1/2; next: He went home." }], "zh-CN", "auto");
 
-  assert.match(prompt, /RULES \(follow all\)/);
-  assert.match(prompt, /NEVER translate word-by-word/i);
-  assert.match(prompt, /machine translation, rewrite it/i);
+  assert.match(prompt, /First understand the whole page/i);
+  assert.match(prompt, /Avoid literal word-by-word translation/i);
+  assert.match(prompt, /not machine-translated/i);
   assert.match(prompt, /speaker intent/i);
   assert.match(prompt, /order 1\/2/);
 });
@@ -182,8 +265,8 @@ test("OpenAICompatibleTextTranslator can add retranslation improvement guidance"
   await translator.translate([{ id: "r1", text: "Retry this" }], "zh-CN", "auto", { retranslate: true });
 
   assert.match(prompt, /retranslation/i);
-  assert.match(prompt, /previous version was poor/i);
-  assert.match(prompt, /rewrite the Chinese/i);
+  assert.match(prompt, /previous result may be poor/i);
+  assert.match(prompt, /improve/i);
 });
 
 test("OpenAICompatibleTextTranslator prompt makes glossary terms mandatory and stable", async () => {
@@ -207,12 +290,12 @@ test("OpenAICompatibleTextTranslator prompt makes glossary terms mandatory and s
   );
 
   assert.match(prompt, /User glossary/i);
-  assert.match(prompt, /hard constraint/i);
+  assert.match(prompt, /mandatory/i);
   assert.match(prompt, /Clark/);
   assert.match(prompt, /克拉克/);
   assert.match(prompt, /Murim/);
   assert.match(prompt, /武林/);
-  assert.match(prompt, /Never rename, reinterpret, or vary it/i);
+  assert.match(prompt, /Do not rename/i);
 });
 
 test("OpenAICompatibleTextTranslator prompt includes chapter context and stronger natural manga style rules", async () => {
@@ -237,9 +320,9 @@ test("OpenAICompatibleTextTranslator prompt includes chapter context and stronge
 
   assert.match(prompt, /Chapter context/i);
   assert.match(prompt, /Clark is suspicious/);
-  assert.match(prompt, /spoken-language style/i);
+  assert.match(prompt, /spoken Chinese/i);
   assert.match(prompt, /translationese/i);
-  assert.match(prompt, /Dialogue must be short, emotional, spoken-language/i);
+  assert.match(prompt, /dialogue.*spoken Chinese/i);
 });
 
 
@@ -258,8 +341,7 @@ test("OpenAICompatibleTextTranslator prompt keeps Chinese style guidance readabl
 
   await translator.translate([{ id: "r1", text: "Hello" }], "zh-CN", "auto");
 
-  // Chinese target includes a concrete zh example in the prompt.
-  assert.match(prompt, /我都会保护好大家/);
+  assert.match(prompt, /口语/);
   assert.doesNotMatch(prompt, /鍙|\uFFFD/);
 });
 
@@ -283,98 +365,7 @@ test("OpenAICompatibleTextTranslator prompt includes auto term candidates for st
     { termCandidates: ["Clark", "Heavenly Demon"] },
   );
 
-  assert.match(prompt, /Likely proper names on this page/i);
+  assert.match(prompt, /Auto-detected term candidates/i);
   assert.match(prompt, /Clark/);
   assert.match(prompt, /Heavenly Demon/);
-});
-
-test("OpenAICompatibleTextTranslator splits large batches into smaller requests", async () => {
-  const requests: string[][] = [];
-  const translator = new OpenAICompatibleTextTranslator({
-    baseUrl: "https://api.example.test/v1",
-    apiKey: "key",
-    model: "gpt-test",
-    maxItemsPerRequest: 2,
-    fetch: async (_url, init) => {
-      const body = JSON.parse(String(init?.body));
-      const itemsPayload = JSON.parse(body.messages[0].content.split("\n").at(-1)).items as Array<{ id: string }>;
-      requests.push(itemsPayload.map((item) => item.id));
-      const ids = itemsPayload.map((item) => `{"id":"${item.id}","translatedText":"译${item.id}"}`);
-      return new Response(JSON.stringify({ choices: [{ message: { content: `{"items":[${ids.join(",")}]}` } }] }), { status: 200, headers: { "content-type": "application/json" } });
-    },
-  });
-
-  const results = await translator.translate(
-    [{ id: "r1", text: "a" }, { id: "r2", text: "b" }, { id: "r3", text: "c" }, { id: "r4", text: "d" }, { id: "r5", text: "e" }],
-    "zh-CN",
-    "auto",
-  );
-
-  assert.equal(requests.length, 3);
-  assert.deepEqual(requests, [["r1", "r2"], ["r3", "r4"], ["r5"]]);
-  assert.deepEqual(results.map((item) => item.id), ["r1", "r2", "r3", "r4", "r5"]);
-});
-
-test("OpenAICompatibleTextTranslator sends response_format json_object and retries without it on 400", async () => {
-  const bodies: Array<{ response_format?: unknown }> = [];
-  let calls = 0;
-  const translator = new OpenAICompatibleTextTranslator({
-    baseUrl: "https://api.example.test/v1",
-    apiKey: "key",
-    model: "gpt-test",
-    fetch: async (_url, init) => {
-      const body = JSON.parse(String(init?.body));
-      bodies.push(body);
-      calls += 1;
-      if (calls === 1) {
-        return new Response(JSON.stringify({ error: { message: "response_format is not supported" } }), { status: 400, headers: { "content-type": "application/json" } });
-      }
-      return new Response(JSON.stringify({ choices: [{ message: { content: '{"items":[{"id":"r1","translatedText":"你好"}]}' } }] }), { status: 200, headers: { "content-type": "application/json" } });
-    },
-  });
-
-  const results = await translator.translate([{ id: "r1", text: "Hello" }], "zh-CN", "auto");
-
-  assert.equal(calls, 2);
-  assert.deepEqual(bodies[0]?.response_format, { type: "json_object" });
-  assert.equal(bodies[1]?.response_format, undefined);
-  assert.deepEqual(results, [{ id: "r1", translatedText: "你好" }]);
-});
-
-test("OpenAICompatibleTextTranslator uses a balanced default temperature", async () => {
-  let body: any;
-  const translator = new OpenAICompatibleTextTranslator({
-    baseUrl: "https://api.example.test/v1",
-    apiKey: "key",
-    model: "gpt-test",
-    fetch: async (_url, init) => {
-      body = JSON.parse(String(init?.body));
-      return new Response(JSON.stringify({ choices: [{ message: { content: '{"items":[{"id":"r1","translatedText":"你好"}]}' } }] }), { status: 200, headers: { "content-type": "application/json" } });
-    },
-  });
-
-  await translator.translate([{ id: "r1", text: "Hello" }], "zh-CN", "auto");
-  assert.equal(body.temperature, 0.4);
-  assert.equal(body.max_tokens, 2048);
-});
-
-test("martial style adds wuxia localization guidance to the prompt", async () => {
-  let prompt = "";
-  const translator = new OpenAICompatibleTextTranslator({
-    baseUrl: "https://api.example.test/v1",
-    apiKey: "key",
-    model: "gpt-test",
-    fetch: async (_url, init) => {
-      const body = JSON.parse(String(init?.body));
-      prompt = body.messages[0].content;
-      return new Response(JSON.stringify({ choices: [{ message: { content: '{"items":[{"id":"r1","translatedText":"天魔"}]}' } }] }), { status: 200, headers: { "content-type": "application/json" } });
-    },
-  });
-
-  await translator.translate([{ id: "r1", text: "Heavenly Demon" }], "zh-CN", "auto", { style: "martial" });
-
-  assert.match(prompt, /MARTIAL ARTS/);
-  assert.match(prompt, /Heavenly Demon.*天魔/);
-  assert.match(prompt, /wuxia/);
-  assert.match(prompt, /reorder to natural Chinese word order/i);
 });

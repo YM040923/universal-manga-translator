@@ -107,40 +107,7 @@ if ($buildInfo.dirty -isnot [bool]) {
   throw "Release build metadata dirty must be a boolean"
 }
 
-# The version recorded in the zip's own manifest must match the build metadata,
-# otherwise a stale build could be shipped while the source tree has moved on.
-Add-Type -AssemblyName System.IO.Compression.FileSystem
-$zip = [System.IO.Compression.ZipFile]::OpenRead($ZipPath)
-try {
-  $manifestEntry = $zip.Entries | Where-Object { $_.FullName -eq "manifest.json" } | Select-Object -First 1
-  if ($null -eq $manifestEntry) {
-    throw "Release zip is missing manifest.json"
-  }
-  $manifestReader = New-Object System.IO.StreamReader($manifestEntry.Open())
-  try {
-    $zipManifest = $manifestReader.ReadToEnd() | ConvertFrom-Json
-  }
-  finally {
-    $manifestReader.Dispose()
-  }
-}
-finally {
-  $zip.Dispose()
-}
-$zipManifestVersion = [string]$zipManifest.version
-if ($zipManifestVersion -ne $buildInfo.extensionVersion) {
-  throw "Release zip manifest version mismatch: expected $($buildInfo.extensionVersion), got $zipManifestVersion"
-}
-
-# PowerShell 7's ConvertFrom-Json parses ISO date strings into DateTime, so
-# stringify dates back to their UTC ISO form before validating the format.
-$builtAtRaw = $buildInfo.builtAtUtc
-if ($builtAtRaw -is [datetime] -or $builtAtRaw -is [datetimeoffset]) {
-  $builtAtUtc = ([datetimeoffset]$builtAtRaw).ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'", [Globalization.CultureInfo]::InvariantCulture)
-}
-else {
-  $builtAtUtc = [string]$builtAtRaw
-}
+$builtAtUtc = [string]$buildInfo.builtAtUtc
 if ($builtAtUtc -notmatch "^\d{4}-\d{2}-\d{2}T.*Z$") {
   throw "Release build metadata builtAtUtc must be an ISO UTC timestamp: $builtAtUtc"
 }

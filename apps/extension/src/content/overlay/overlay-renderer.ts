@@ -1,4 +1,4 @@
-import { clampRectToBounds, mapNaturalBoxToRenderedBox } from "@umt/shared/geometry";
+﻿import { clampRectToBounds, mapNaturalBoxToRenderedBox } from "@umt/shared/geometry";
 import type { ManualOverridePayload } from "@umt/shared/protocol";
 import type { OverlayRegion, Size, SurfaceResult } from "@umt/shared/types";
 import { DEFAULT_SETTINGS, normalizeOverlayAppearance, type OverlayAppearance } from "../../settings/settings.js";
@@ -89,13 +89,6 @@ export class OverlayRenderer {
     for (const { element, naturalSize, result } of this.rendered.values()) this.renderSurface(element, naturalSize, result);
   }
 
-  /** Re-renders only manual-selection surfaces so their anchors track scrolling and layout shifts. */
-  refreshManualSelections(): void {
-    for (const [surfaceId, { element, naturalSize, result }] of this.rendered) {
-      if (isManualSelectionSurface(surfaceId)) this.renderSurface(element, naturalSize, result);
-    }
-  }
-
   setAppearance(appearance: Partial<OverlayAppearance>): void {
     this.appearance = normalizeOverlayAppearance(appearance);
     this.refreshAll();
@@ -113,7 +106,6 @@ export class OverlayRenderer {
     const isManualSelection = isManualSelectionSurface(result.surfaceId);
     const currentManualBoxes: RenderedRect[] = [];
     const renderRegions = mergeRenderableRegions(result.regions);
-    const latinDominant = isLatinDominantResult(result.regions);
     for (const region of renderRegions) {
       const clampedNaturalBox = clampRectToBounds(region.box, naturalSize);
       if (!clampedNaturalBox) continue;
@@ -140,13 +132,13 @@ export class OverlayRenderer {
       const text = normalizeOverlayText(rawText);
       const initialInnerWidth = Math.max(1, textBox.width - padding * 2);
       const initialInnerHeight = Math.max(1, textBox.height - padding * 2);
-      const stableLayout = createStableTextLayout(text, initialInnerWidth, initialInnerHeight, region.style.fontSize, region.kind);
+      const stableLayout = createStableTextLayout(text, initialInnerWidth, initialInnerHeight, region.style.fontSize, region.kind, this.appearance.fontScale);
       const initialFontSize = stableLayout.fontSize;
       const glyphInset = glyphSafeInsetForText(text, textBox.width, textBox.height, initialFontSize);
       const innerWidth = Math.max(1, textBox.width - padding * 2 - glyphInset * 2);
       const innerHeight = Math.max(1, textBox.height - padding * 2 - glyphInset * 2);
-      const finalLayout = glyphInset > 0 ? createStableTextLayout(text, innerWidth, innerHeight, region.style.fontSize, region.kind) : stableLayout;
-      const fittedFontSize = Math.max(8, Math.min(72, Math.round(finalLayout.fontSize * this.appearance.fontScale)));
+      const finalLayout = glyphInset > 0 ? createStableTextLayout(text, innerWidth, innerHeight, region.style.fontSize, region.kind, this.appearance.fontScale) : stableLayout;
+      const fittedFontSize = finalLayout.fontSize;
       const finalDisplayText = finalLayout.text;
       const layoutKey = [
         text,
@@ -157,7 +149,7 @@ export class OverlayRenderer {
         region.style.writingMode,
         region.kind,
       ].join("|");
-      const maskStyle = maskStyleForRegion(region.kind, box.width, box.height, this.appearance, region.sourceText, latinDominant);
+      const maskStyle = maskStyleForRegion(region.kind, box.width, box.height, this.appearance);
       const nodeStyle = [
         "position:absolute",
         `left:${roundCssPx(box.x)}px`,
@@ -172,7 +164,6 @@ export class OverlayRenderer {
         `padding:${padding}px`,
         `border-radius:${maskStyle.borderRadius}`,
         `clip-path:${maskStyle.clipPath}`,
-        `opacity:${this.appearance.opacity}`,
         "overflow:hidden",
         "pointer-events:none",
       ].join(";");
@@ -298,21 +289,6 @@ function isManualSelectionSurface(surfaceId: string): boolean {
   return surfaceId.startsWith("manual:");
 }
 
-/** True when the majority of letters on this surface are Latin (matches the classifier's page-level rule). */
-function isLatinDominantResult(regions: OverlayRegion[]): boolean {
-  let latin = 0;
-  let total = 0;
-  for (const region of regions) {
-    for (const char of region.sourceText) {
-      if (/\p{L}/u.test(char)) {
-        total += 1;
-        if (/[A-Za-z]/u.test(char)) latin += 1;
-      }
-    }
-  }
-  return total === 0 || latin / total >= 0.5;
-}
-
 function glyphSafeInsetForText(text: string, width: number, height: number, fittedFontSize: number): number {
   const hasCjk = /[\u1100-\u11ff\u2e80-\u9fff\uf900-\ufaff\uff00-\uffef]/u.test(text);
   const explicitLines = text.replace(/\r\n?/g, "\n").split("\n").length;
@@ -348,10 +324,10 @@ function expandRectWithinBounds(rect: { x: number; y: number; width: number; hei
     return { x, y, width: Math.max(2, width), height: Math.max(2, height) };
   }
   const padX = scale >= 1
-    ? Math.min(80, basePadX + Math.round(rect.width * 0.18 * (scale - 1)))
+    ? basePadX + Math.round(rect.width * 0.18 * (scale - 1))
     : Math.max(0, Math.round(basePadX * scale));
   const padY = scale >= 1
-    ? Math.min(72, basePadY + Math.round(rect.height * 0.3 * (scale - 1)))
+    ? basePadY + Math.round(rect.height * 0.3 * (scale - 1))
     : Math.max(0, Math.round(basePadY * scale));
   const x1 = Math.max(0, rect.x - padX);
   const y1 = Math.max(0, rect.y - padY);

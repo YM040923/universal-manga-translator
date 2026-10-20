@@ -9,7 +9,9 @@ export function readDirectConfigFromDom(root: HTMLElement, settings: ExtensionSe
     directOcr: {
       ...settings.directOcr,
       apiUrl: value("direct-ocr-url"),
-      apiKeys: splitLines(value("direct-ocr-keys")),
+      apiKeys: [...root.querySelectorAll<HTMLInputElement>("[data-field='direct-ocr-key']")]
+        .map((input) => input.value.trim())
+        .filter(Boolean),
       inputMode: value("direct-ocr-input-mode") === "file" ? "file" : "image_base64",
       imageField: value("direct-ocr-image-field"),
       regionsPaths: splitLines(value("direct-ocr-regions-paths")),
@@ -25,7 +27,6 @@ export function readDirectConfigFromDom(root: HTMLElement, settings: ExtensionSe
       apiKey: value("direct-translator-api-key"),
       model: value("direct-translator-model"),
     },
-    translationStyle: value("translation-style") === "martial" ? "martial" : "general",
     glossaryText: value("glossary-text"),
   });
 }

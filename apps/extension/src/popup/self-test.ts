@@ -1,45 +1,28 @@
+import { OpenAICompatibleTextTranslator } from "@umt/core";
 import { directHttpUrlPolicyError, type UmtActivateSiteResponse, type UmtContentCommand, type UmtDirectHttpRequest, type UmtDirectHttpResponse, type UmtPageSampleSelfTestResponse } from "../content/messages.js";
 import type { ExtensionSettings } from "../settings/settings.js";
 import type { PopupDeps, PopupTab } from "./types.js";
 
 type DirectHttpFormFields = NonNullable<NonNullable<UmtDirectHttpRequest["init"]>["formFields"]>;
 
-export async function runSelfTest(settings: ExtensionSettings, deps: PopupDeps, tab?: PopupTab | null, siteEnabled = false): Promise<string> {
+export async function runSelfTest(settings: ExtensionSettings, deps: PopupDeps, tab?: PopupTab | null, siteEnabled = false, pageContextAvailable = true, scope: "all" | "ocr" | "ai" = "all"): Promise<string> {
   if (settings.runMode === "backend") {
-    try {
-      const online = await (deps.checkBackend ?? defaultCheckBackend)(settings.backendUrl);
-      if (!online) return "后端离线或无法访问";
-      const status = await (deps.fetchBackendStatus ?? defaultFetchBackendStatus)(settings.backendUrl);
-      if (!status?.ok) return "后端响应异常";
-      const parts: string[] = ["后端连通正常"];
-      if (!status.ocr?.apiUrl && !status.ocr?.apiKeyConfigured) parts.push("OCR 未配置");
-      if (!status.openAICompatible?.baseUrl && !status.openAICompatible?.apiKeyConfigured) parts.push("翻译 API 未配置");
-      return parts.join("；");
-    } catch (error) { return `后端自检失败：${formatError(error)}`; }
+    try { return await (deps.checkBackend ?? defaultCheckBackend)(settings.backendUrl) ? "后端连通正常" : "后端离线或无法访问"; }
+    catch (error) { return `后端自检失败：${formatError(error)}`; }
   }
   const results: string[] = [];
-  if (!settings.directOcr.apiUrl || !settings.directOcr.apiKeys.length) results.push("OCR 未配置");
-  else results.push(await testDirectOcr(settings, deps, tab, siteEnabled));
-  if (!settings.directTranslator.baseUrl || !settings.directTranslator.apiKey || !settings.directTranslator.model) results.push("翻译 API 未配置");
-  else results.push(await testTranslator(settings, deps));
+  if (scope !== "ai") {
+    if (!settings.directOcr.apiUrl || !settings.directOcr.apiKeys.length) results.push("OCR 未配置");
+    else results.push(await testDirectOcr(settings, deps, tab, siteEnabled, pageContextAvailable));
+  }
+  if (scope !== "ocr") {
+    if (!settings.directTranslator.baseUrl || !settings.directTranslator.apiKey || !settings.directTranslator.model) results.push("翻译 API 未配置");
+    else results.push(await testTranslator(settings, deps));
+  }
   return results.join("；");
 }
 
-async function defaultFetchBackendStatus(backendUrl: string): Promise<{ ok: boolean; ocr?: { apiUrl?: string; apiKeyConfigured?: boolean }; openAICompatible?: { baseUrl?: string; apiKeyConfigured?: boolean } } | null> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 3000);
-  try {
-    const response = await fetch(`${backendUrl.replace(/\/$/, "")}/v1/config/status`, { cache: "no-store", signal: controller.signal });
-    if (!response.ok) return null;
-    return await response.json() as { ok: boolean; ocr?: { apiUrl?: string; apiKeyConfigured?: boolean }; openAICompatible?: { baseUrl?: string; apiKeyConfigured?: boolean } };
-  } catch {
-    return null;
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
-async function testDirectOcr(settings: ExtensionSettings, deps: PopupDeps, tab?: PopupTab | null, siteEnabled = false): Promise<string> {
+async function testDirectOcr(settings: ExtensionSettings, deps: PopupDeps, tab?: PopupTab | null, siteEnabled = false, pageContextAvailable = true): Promise<string> {
   const key = settings.directOcr.apiKeys[0] ?? "";
   const imageBase64 = OCR_SELF_TEST_PNG_BASE64;
   const formFields: DirectHttpFormFields = settings.directOcr.inputMode === "file"
@@ -57,11 +40,12 @@ async function testDirectOcr(settings: ExtensionSettings, deps: PopupDeps, tab?:
   const parsed = parseSelfTestOcrRegions(bodyText, settings);
   if (parsed.status === "ok") return `OCR 解析正常：识别 ${parsed.count} 行 · ${parsed.preview}`;
   if (parsed.status === "mapping-mismatch") return "OCR 接口连通正常；未解析到文字区域，请检查 regionsPaths/textPaths/boxPaths 字段映射";
-  const pageSample = await testCurrentPageOcrSample(deps, tab, siteEnabled);
+  const pageSample = pageContextAvailable ? await testCurrentPageOcrSample(deps, tab, siteEnabled) : "";
   if (pageSample) return pageSample;
+  if (!pageContextAvailable && parsed.status === "empty") return "OCR 接口连通正常；内置测试图未返回文字区域。当前没有关联漫画页样本，这不代表真实漫画 OCR 故障。";
   if (parsed.status === "empty") return siteEnabled
-    ? "OCR 接口连通正常；页面样本自检未执行，请确认当前标签页已重载插件并处于漫画阅读页"
-    : "OCR 接口连通正常；测试图未返回文字区域。当前网站未启用，无法执行页面样本自检";
+    ? "OCR 接口可连接；文字识别未验证（测试图片没有识别到文字，页面样本检查也未完成）"
+    : "OCR 接口可连接；识字效果未验证（内置测试图未识别到文字，且当前网站未启用，因此没有读取页面图片）。这不表示真实漫画 OCR 故障。";
   return "OCR 接口连通正常；未解析到文字区域，请检查 regionsPaths/textPaths/boxPaths 字段映射";
 }
 
@@ -180,42 +164,37 @@ function readPath(value: unknown, path: string): unknown {
 }
 
 async function testTranslator(settings: ExtensionSettings, deps: PopupDeps): Promise<string> {
-  const baseUrl = settings.directTranslator.baseUrl.replace(/\/$/, "");
-  const models = await directHttp(deps, { url: `${baseUrl}/models`, init: { method: "GET", headers: { authorization: `Bearer ${settings.directTranslator.apiKey}` }, cache: "no-store" } });
-  if (!models.ok) return explainHttpFailure("AI", models.status, models.bodyText ?? "", models.error ?? models.statusText ?? "");
-  const contentType = models.headers?.["content-type"] ?? models.headers?.["Content-Type"] ?? "";
-  if (!/json/i.test(contentType)) return `AI 失败：返回非 JSON。请检查 Base URL 是否包含 /v1`;
-  const chat = await directHttp(deps, {
-    url: `${baseUrl}/chat/completions`,
-    init: {
-      method: "POST",
-      headers: { authorization: `Bearer ${settings.directTranslator.apiKey}`, "content-type": "application/json" },
-      bodyText: JSON.stringify({
-        model: settings.directTranslator.model,
-        messages: [
-          { role: "system", content: "You are a manga translation connectivity self-test. Return only the Chinese translation." },
-          { role: "user", content: "Translate to Simplified Chinese: HELLO OCR" },
-        ],
-        temperature: 0,
-        max_tokens: 24,
-      }),
-    },
-  });
-  if (!chat.ok) return explainHttpFailure("AI", chat.status, chat.bodyText ?? "", chat.error ?? chat.statusText ?? "");
-  const chatContentType = chat.headers?.["content-type"] ?? chat.headers?.["Content-Type"] ?? "";
-  if (!/json/i.test(chatContentType)) return `AI 失败：chat/completions 返回非 JSON。请检查 Base URL 和模型接口`;
-  const sample = extractChatCompletionText(chat.bodyText ?? "");
-  if (!sample) return "AI 失败：chat/completions 未返回可读文本，请检查模型是否兼容 OpenAI Chat Completions";
-  return `AI 调用正常：${sample.slice(0, 40)}`;
-}
-
-function extractChatCompletionText(bodyText: string): string {
   try {
-    const parsed = JSON.parse(bodyText) as { choices?: Array<{ message?: { content?: unknown }; text?: unknown }> };
-    const content = parsed.choices?.[0]?.message?.content ?? parsed.choices?.[0]?.text;
-    return typeof content === "string" ? content.trim() : "";
-  } catch {
-    return "";
+    const translator = new OpenAICompatibleTextTranslator({
+      baseUrl: settings.directTranslator.baseUrl,
+      apiKey: settings.directTranslator.apiKey,
+      model: settings.directTranslator.model,
+      attempts: 1,
+      retryDelayMs: 0,
+      fetch: async (input, init) => {
+        const headers = Object.fromEntries(new Headers(init?.headers).entries());
+        const result = await directHttp(deps, {
+          url: String(input),
+          init: {
+            ...(init?.method ? { method: init.method } : {}),
+            headers,
+            ...(typeof init?.body === "string" ? { bodyText: init.body } : {}),
+            cache: "no-store",
+          },
+        });
+        const status = result.status && result.status >= 200 && result.status <= 599 ? result.status : 502;
+        const body = result.bodyText ?? JSON.stringify({ error: "error" in result ? result.error : "Request failed" });
+        return new Response(body, {
+          status,
+          ...(result.statusText !== undefined ? { statusText: result.statusText } : {}),
+          ...(result.headers !== undefined ? { headers: result.headers } : {}),
+        });
+      },
+    });
+    const [sample] = await translator.translate([{ id: "self-test", text: "HELLO OCR" }], "Simplified Chinese", "English");
+    return "AI 调用正常：" + (sample?.translatedText.slice(0, 40) ?? "");
+  } catch (error) {
+    return "AI 失败：" + formatError(error);
   }
 }
 

@@ -6,15 +6,15 @@ export function normalizeOverlayText(text: string): string {
     .trim();
 }
 
-export function createStableTextLayout(text: string, width: number, height: number, preferred: number, kind: string): { text: string; fontSize: number } {
+export function createStableTextLayout(text: string, width: number, height: number, preferred: number, kind: string, fontScale = 1): { text: string; fontSize: number } {
   const normalized = normalizeOverlayText(text);
-  const fontSize = fittedFontSizeForBox(normalized, width, height, preferred, kind);
+  const fontSize = fittedFontSizeForBox(normalized, width, height, preferred, kind, fontScale);
   if (!looksLikeCjkText(normalized) || normalized.includes("\n")) return { text: normalized, fontSize };
   const aspect = width / Math.max(1, height);
   const shapedWidth = kind === "dialogue"
     ? width * (aspect >= 2.35 ? 0.94 : aspect >= 1.7 ? 0.86 : 0.78)
     : width * 0.9;
-  const maxCharsPerLine = Math.max(3, Math.floor((shapedWidth * 0.8) / Math.max(1, fontSize)));
+  const maxCharsPerLine = Math.max(3, Math.floor(shapedWidth / Math.max(1, fontSize)));
   const desiredLines = desiredLineCount(normalized, maxCharsPerLine, width, height, kind);
   return { text: balanceCjkLines(normalized, desiredLines, maxCharsPerLine), fontSize };
 }
@@ -23,7 +23,7 @@ function looksLikeCjkText(text: string): boolean {
   const chars = Array.from(text).filter((char) => !/\s/u.test(char));
   if (!chars.length) return false;
   const cjk = chars.filter((char) => /[\u1100-\u11ff\u2e80-\u9fff\uf900-\ufaff\uff00-\uffef]/u.test(char));
-  return cjk.length / chars.length >= 0.15;
+  return cjk.length / chars.length >= 0.45;
 }
 
 function desiredLineCount(text: string, maxCharsPerLine: number, width: number, height: number, kind: string): number {
@@ -33,8 +33,8 @@ function desiredLineCount(text: string, maxCharsPerLine: number, width: number, 
   const base = Math.max(1, Math.ceil(chars.length / Math.max(1, maxCharsPerLine)));
   const wideDialogueBoost = kind === "dialogue" && aspect >= 1.8 && aspect < 2.35 && chars.length >= 16 ? 1 : 0;
   const roomyBubbleBoost = kind === "dialogue" && aspect < 1.8 && width >= 360 && height >= 150 && chars.length >= 16 ? 1 : 0;
-  const maxByHeight = Math.max(1, Math.floor(height / 30));
-  return Math.max(1, Math.min(Math.max(base, base + wideDialogueBoost, base + roomyBubbleBoost), maxByHeight, 8));
+  const maxByHeight = Math.max(1, Math.floor(height / 34));
+  return Math.max(1, Math.min(Math.max(base, base + wideDialogueBoost, base + roomyBubbleBoost), maxByHeight, 5));
 }
 
 function balanceCjkLines(text: string, desiredLines: number, maxCharsPerLine: number): string {
@@ -88,7 +88,7 @@ function rebalanceShortTail(lines: string[]): string[] {
 }
 
 
-function fittedFontSizeForBox(text: string, width: number, height: number, preferred: number, kind = "dialogue"): number {
+function fittedFontSizeForBox(text: string, width: number, height: number, preferred: number, kind = "dialogue", fontScale = 1): number {
   const normalized = text.replace(/\r\n?/g, "\n").trim();
   const chars = Array.from(normalized || " ");
   const explicitLines = Math.max(1, normalized.split("\n").length);
@@ -98,16 +98,17 @@ function fittedFontSizeForBox(text: string, width: number, height: number, prefe
   const shallowCap = height < 115 ? 29 : height < 150 && chars.length >= 15 ? 30 : height < 180 && chars.length >= 24 ? 32 : 46;
   const ellipseCap = kind === "dialogue" ? Math.max(28, Math.min(44, Math.round(Math.min(width, height) * 0.24))) : 46;
   const contentCap = chars.length <= 18 && width >= 220 && height >= 110 ? Math.max(preferredCap, shortTextBoost) : Math.min(preferredCap, lengthCap);
-  const upper = Math.max(12, Math.min(46, contentCap, shallowCap, ellipseCap));
-  for (let size = upper; size >= 12; size -= 1) {
-    const metrics = estimateWrappedTextMetrics(normalized, size, kind === "dialogue" ? width * 0.66 : width, explicitLines);
-    if (metrics.height <= height * 0.9 && metrics.longestLineWidth <= width * 0.98) return size;
+  const baseUpper = Math.max(12, Math.min(46, contentCap, shallowCap, ellipseCap));
+  const upper = Math.max(8, Math.min(72, Math.round(baseUpper * fontScale)));
+  for (let size = upper; size >= 8; size -= 1) {
+    const metrics = estimateWrappedTextMetrics(normalized, size, kind === "dialogue" ? width * 0.78 : width, explicitLines);
+    if (metrics.height <= height * 0.92 && metrics.longestLineWidth <= width * 1.03) return size;
   }
-  return 12;
+  return 8;
 }
 
 function estimateWrappedTextMetrics(text: string, fontSize: number, width: number, explicitLines: number): { height: number; longestLineWidth: number } {
-  const lineHeight = fontSize * 1.25;
+  const lineHeight = fontSize * 1.18;
   let lineCount = 0;
   let longestLineWidth = 0;
   for (const paragraph of (text || " ").split("\n")) {
@@ -123,7 +124,7 @@ function estimateTextWidth(text: string, fontSize: number): number {
   return Array.from(text).reduce((sum, char) => {
     if (/\s/.test(char)) return sum + fontSize * 0.32;
     if (/[\u1100-\u11ff\u2e80-\u9fff\uf900-\ufaff\uff00-\uffef]/u.test(char)) return sum + fontSize;
-    if (/[A-Z0-9]/.test(char)) return sum + fontSize * 0.72;
-    return sum + fontSize * 0.6;
+    if (/[A-Z0-9]/.test(char)) return sum + fontSize * 0.68;
+    return sum + fontSize * 0.56;
   }, 0);
 }

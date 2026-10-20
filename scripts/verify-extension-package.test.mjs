@@ -5,18 +5,6 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-// GitHub Actions runs Windows PowerShell in Constrained Language Mode where
-// Get-FileHash/Add-Type are unavailable; PowerShell 7 (pwsh) runs full language.
-// Dev machines may lack pwsh, so fall back to Windows PowerShell.
-function resolveShell() {
-  for (const name of ["pwsh", "powershell"]) {
-    const probe = spawnSync(name, ["-NoProfile", "-Command", "$PSVersionTable.PSVersion.Major"], { encoding: "utf8" });
-    if (probe.status === 0) return name;
-  }
-  return "powershell";
-}
-const shell = resolveShell();
-
 const root = path.resolve(import.meta.dirname, "..");
 const verifier = path.join(root, "scripts", "verify-extension-package.ps1");
 
@@ -103,7 +91,55 @@ test("verify-extension-package rejects options pages and static content scripts"
     const result = runVerifier(zipPath);
 
     assert.notEqual(result.status, 0);
-    assert.match(`${result.stdout}\n${result.stderr}`, /options pages are disabled/);
+    assert.match(`${result.stdout}\n${result.stderr}`, /options_page is disabled/);
+  }
+  finally {
+    rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test("verify-extension-package accepts the settings.html options_ui page", () => {
+  const workspace = mkdtempSync(path.join(tmpdir(), "umt-package-test-"));
+  try {
+    const source = path.join(workspace, "dist");
+    const iconDir = path.join(source, "icons");
+    const zipPath = path.join(workspace, "extension.zip");
+    mkdirSync(iconDir, { recursive: true });
+
+    writeCompleteMinimalExtension(source, iconDir, {
+      options_ui: { page: "settings.html", open_in_tab: true },
+    });
+    writeFileSync(path.join(source, "settings.html"), "<html></html>");
+    writeFileSync(path.join(source, "settings.js"), "");
+
+    zipDirectory(source, zipPath);
+    const result = runVerifier(zipPath);
+
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    assert.match(result.stdout, /Extension package verified/);
+  }
+  finally {
+    rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test("verify-extension-package rejects options_ui that omits settings assets", () => {
+  const workspace = mkdtempSync(path.join(tmpdir(), "umt-package-test-"));
+  try {
+    const source = path.join(workspace, "dist");
+    const iconDir = path.join(source, "icons");
+    const zipPath = path.join(workspace, "extension.zip");
+    mkdirSync(iconDir, { recursive: true });
+
+    writeCompleteMinimalExtension(source, iconDir, {
+      options_ui: { page: "settings.html", open_in_tab: true },
+    });
+
+    zipDirectory(source, zipPath);
+    const result = runVerifier(zipPath);
+
+    assert.notEqual(result.status, 0);
+    assert.match(`${result.stdout}\n${result.stderr}`, /missing root entry settings\.html/);
   }
   finally {
     rmSync(workspace, { recursive: true, force: true });
@@ -117,7 +153,7 @@ function zipDirectory(source, zipPath) {
     `$items = Get-ChildItem -LiteralPath '${psSource}' -Force`,
     `Compress-Archive -Path $items.FullName -DestinationPath '${psZipPath}' -Force`,
   ].join("; ");
-  const result = spawnSync(shell, [
+  const result = spawnSync("powershell", [
     "-NoProfile",
     "-ExecutionPolicy",
     "Bypass",
@@ -129,7 +165,7 @@ function zipDirectory(source, zipPath) {
 }
 
 function runVerifier(zipPath) {
-  return spawnSync(shell, [
+  return spawnSync("powershell", [
     "-NoProfile",
     "-ExecutionPolicy",
     "Bypass",

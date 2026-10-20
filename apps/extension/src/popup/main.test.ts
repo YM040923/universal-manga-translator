@@ -1,7 +1,7 @@
-import test from "node:test";
+﻿import test from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
-import { mountPopupPage, type PopupDeps } from "./main.js";
+import { mountPopupPage, mountSettingsPage, type PopupDeps } from "./main.js";
 import type { UmtDirectHttpRequest, UmtDirectHttpResponse } from "../content/messages.js";
 import { DEFAULT_SETTINGS, enableSiteForUrl, setSiteSettings, type ExtensionSettings, type SettingsStorageArea } from "../settings/settings.js";
 
@@ -123,20 +123,20 @@ test("popup toggles translation overlay visibility and persists it", async () =>
   assert.deepEqual(sent, [{ tabId: 123, message: { source: "umt-popup", command: "setOverlayVisibility", visible: false } }]);
 });
 
-test("popup widget switches persist and send real page commands", async () => {
+test("settings widget switches persist and send real page commands", async () => {
   const dom = setupDom();
   const sent: unknown[] = [];
   const storage = fakeStorage(enableSiteForUrl(DEFAULT_SETTINGS, "https://asurascans.com/a"));
   const root = dom.window.document.querySelector<HTMLElement>("#app")!;
 
-  await mountPopupPage(root, deps({ storage, sentMessages: sent, tabUrl: "https://asurascans.com/a" }));
+  await mountSettingsPage(root, deps({ storage, sentMessages: sent, tabUrl: "https://asurascans.com/a" }));
   const floating = root.querySelector<HTMLInputElement>("[data-field='floating-button-enabled']")!;
   const progress = root.querySelector<HTMLInputElement>("[data-field='progress-widget-enabled']")!;
   floating.checked = false;
   floating.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
   progress.checked = false;
   progress.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  await Promise.resolve();
 
   assert.equal(storage.current.floatingButtonEnabled, false);
   assert.equal(storage.current.progressWidgetEnabled, false);
@@ -167,23 +167,29 @@ test("popup auto translate switch controls the current site and cancels queued a
   });
 });
 
-test("popup persists overlay appearance controls for the extension renderer", async () => {
+test("settings page persists overlay appearance controls for the extension renderer", async () => {
   const dom = setupDom();
   const storage = fakeStorage(enableSiteForUrl(DEFAULT_SETTINGS, "https://asurascans.com/a"));
   const sent: unknown[] = [];
   const root = dom.window.document.querySelector<HTMLElement>("#app")!;
 
-  await mountPopupPage(root, deps({ storage, sentMessages: sent, tabUrl: "https://asurascans.com/a" }));
+  await mountSettingsPage(root, deps({ storage, sentMessages: sent, tabUrl: "https://asurascans.com/a" }));
   const shape = root.querySelector<HTMLSelectElement>("[data-field='overlay-mask-shape']")!;
   const font = root.querySelector<HTMLInputElement>("[data-field='overlay-font-scale']")!;
   const ellipseY = root.querySelector<HTMLInputElement>("[data-field='overlay-ellipse-y']")!;
+  assert.equal(font.min, "0.5");
+  assert.equal(font.max, "1.8");
+  assert.equal(root.querySelector<HTMLInputElement>("[data-field='overlay-ellipse-x']")?.max, "50");
+  assert.equal(root.querySelector("[data-field='overlay-opacity']")?.parentElement?.textContent?.includes("100%"), true);
   shape.value = "rounded";
   shape.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
   font.value = "1.2";
   font.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+  font.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
   ellipseY.value = "40";
   ellipseY.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
-  await new Promise((resolve) => setTimeout(resolve, 170));
+  ellipseY.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
+  await Promise.resolve();
 
   assert.equal(storage.current.overlayAppearance.maskShape, "rounded");
   assert.equal(storage.current.overlayAppearance.fontScale, 1.2);
@@ -199,7 +205,34 @@ test("popup persists overlay appearance controls for the extension renderer", as
   assert.equal((root.textContent ?? "").includes("\u663e\u793a\u8c03\u6821"), true);
 });
 
-test("popup can reset overlay appearance controls to defaults", async () => {
+test("appearance sliders preview while dragging but only save the final value", async () => {
+  const dom = setupDom();
+  const storage = fakeStorage(enableSiteForUrl(DEFAULT_SETTINGS, "https://asurascans.com/a"));
+  let writes = 0;
+  const set = storage.set.bind(storage);
+  storage.set = async (value) => { writes += 1; await set(value); };
+  const sent: unknown[] = [];
+  const root = dom.window.document.querySelector<HTMLElement>("#app")!;
+
+  await mountSettingsPage(root, deps({ storage, sentMessages: sent, tabUrl: "https://asurascans.com/a" }));
+  const font = root.querySelector<HTMLInputElement>("[data-field='overlay-font-scale']")!;
+  font.value = "1.2";
+  font.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+  font.value = "1.5";
+  font.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+  assert.equal(writes, 0);
+
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  assert.equal(sent.length, 1);
+  assert.equal(writes, 0);
+
+  font.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
+  await Promise.resolve();
+  assert.equal(writes, 1);
+  assert.equal(storage.current.overlayAppearance.fontScale, 1.5);
+});
+
+test("settings page can reset overlay appearance controls to defaults", async () => {
   const dom = setupDom();
   const storage = fakeStorage(enableSiteForUrl({
     ...DEFAULT_SETTINGS,
@@ -215,7 +248,7 @@ test("popup can reset overlay appearance controls to defaults", async () => {
   const sent: unknown[] = [];
   const root = dom.window.document.querySelector<HTMLElement>("#app")!;
 
-  await mountPopupPage(root, deps({ storage, sentMessages: sent, tabUrl: "https://asurascans.com/a" }));
+  await mountSettingsPage(root, deps({ storage, sentMessages: sent, tabUrl: "https://asurascans.com/a" }));
   root.querySelector<HTMLButtonElement>("[data-action='reset-appearance']")!.click();
   await Promise.resolve();
 
@@ -258,18 +291,18 @@ test("popup shows direct mode status as primary when plugin-only mode is selecte
 
   const text = root.textContent ?? "";
   assert.equal(text.includes("插件直连"), true);
-  assert.equal(text.includes("OCR 2 key"), true);
-  assert.equal(text.includes("gpt-test"), true);
+  assert.equal(text.includes("API 已配置"), true);
+  assert.equal(text.includes("gpt-test"), false);
+  assert.equal(text.includes("key-a"), false);
   assert.equal(text.includes("\u540e\u7aef\u79bb\u7ebf"), false);
 });
 
-test("popup can switch between direct and backend mode", async () => {
+test("settings page can switch between direct and backend mode", async () => {
   const dom = setupDom();
   const storage = fakeStorage(enableSiteForUrl(DEFAULT_SETTINGS, "https://asurascans.com/a"));
   const root = dom.window.document.querySelector<HTMLElement>("#app")!;
 
-  await mountPopupPage(root, deps({ storage, tabUrl: "https://asurascans.com/a" }));
-  root.querySelector<HTMLButtonElement>("[data-action='open-api-settings']")!.click();
+  await mountSettingsPage(root, deps({ storage, tabUrl: "https://asurascans.com/a" }));
   const select = root.querySelector<HTMLSelectElement>("[data-field='run-mode']")!;
   select.value = "backend";
   root.querySelector<HTMLButtonElement>("[data-action='save-api-settings']")!.click();
@@ -278,17 +311,16 @@ test("popup can switch between direct and backend mode", async () => {
   assert.equal(storage.current.runMode, "backend");
 });
 
-test("popup exposes complete direct API configuration fields in plugin-only settings page", async () => {
+test("settings page exposes complete direct API configuration fields", async () => {
   const dom = setupDom();
   const storage = fakeStorage(enableSiteForUrl(DEFAULT_SETTINGS, "https://asurascans.com/a"));
   const root = dom.window.document.querySelector<HTMLElement>("#app")!;
 
-  await mountPopupPage(root, deps({ storage, tabUrl: "https://asurascans.com/a" }));
-  root.querySelector<HTMLButtonElement>("[data-action='open-api-settings']")!.click();
+  await mountSettingsPage(root, deps({ storage, tabUrl: "https://asurascans.com/a" }));
 
   for (const field of [
     "direct-ocr-url",
-    "direct-ocr-keys",
+    "direct-ocr-key",
     "direct-ocr-input-mode",
     "direct-ocr-image-field",
     "direct-translator-base-url",
@@ -303,10 +335,174 @@ test("popup exposes complete direct API configuration fields in plugin-only sett
   ]) {
     assert.ok(root.querySelector(`[data-field='${field}']`), `${field} should be rendered`);
   }
+  assert.equal(root.querySelector<HTMLInputElement>("[data-field='direct-ocr-image-field']")?.getAttribute("type"), "text");
   assert.equal(root.querySelector<HTMLInputElement>("[data-field='direct-translator-api-key']")?.type, "password");
+  assert.equal(root.textContent?.includes("全局配置"), true);
+  assert.equal(root.textContent?.includes("asurascans.com"), false);
 });
 
-test("popup API settings show a read-only configuration status checklist", async () => {
+test("advanced OCR mapping explains its purpose and stays optional", async () => {
+  const dom = setupDom();
+  const root = dom.window.document.querySelector<HTMLElement>("#app")!;
+
+  await mountSettingsPage(root, deps());
+
+  const details = root.querySelector<HTMLDetailsElement>(".advanced-config")!;
+  assert.equal(details.open, false);
+  assert.match(details.querySelector("summary")?.textContent ?? "", /自定义 OCR 接口适配.*一般无需修改/);
+  assert.match(details.querySelector(".mapping-help")?.textContent ?? "", /无法识别返回结果/);
+  assert.equal(details.querySelectorAll(".mapping-grid .api-field").length, 5);
+  assert.ok(details.querySelector("[data-field='direct-ocr-static-fields']")?.closest(".mapping-wide"));
+});
+
+test("OCR image submission menu is styled and keyboard-selectable", async () => {
+  const dom = setupDom();
+  const storage = fakeStorage(DEFAULT_SETTINGS);
+  const root = dom.window.document.querySelector<HTMLElement>("#app")!;
+
+  await mountSettingsPage(root, deps({ storage }));
+
+  const trigger = root.querySelector<HTMLButtonElement>("[data-custom-select='direct-ocr-input-mode'] .api-select-trigger")!;
+  const nativeValue = root.querySelector<HTMLSelectElement>("[data-field='direct-ocr-input-mode']")!;
+  const listbox = root.querySelector<HTMLElement>("#direct-ocr-input-mode-options")!;
+  assert.equal(nativeValue.hidden, true);
+  assert.equal(trigger.getAttribute("role"), "combobox");
+
+  trigger.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true, cancelable: true }));
+  assert.equal(trigger.getAttribute("aria-expanded"), "true");
+  trigger.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true, cancelable: true }));
+  assert.equal(trigger.getAttribute("aria-activedescendant"), "direct-ocr-input-mode-option-file");
+  trigger.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+
+  assert.equal(nativeValue.value, "file");
+  assert.equal(trigger.querySelector("[data-select-value]")?.textContent, "文件上传");
+  assert.equal(listbox.hidden, true);
+  root.querySelector<HTMLButtonElement>("[data-action='save-api-settings']")!.click();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(storage.current.directOcr.inputMode, "file");
+});
+
+test("settings page renders a dedicated workspace instead of popup controls", async () => {
+  const dom = setupDom();
+  const root = dom.window.document.querySelector<HTMLElement>("#app")!;
+
+  await mountSettingsPage(root, deps());
+
+  assert.ok(root.querySelector(".settings-layout"));
+  assert.ok(root.querySelector("#settings-service"));
+  assert.ok(root.querySelector("#settings-translation"));
+  assert.ok(root.querySelector("#settings-display"));
+  assert.equal(root.querySelector(".umt-popup"), null);
+  assert.equal(root.querySelector("[data-action='translate']"), null);
+  assert.equal(root.querySelectorAll("[data-settings-nav]").length, 3);
+  assert.ok(root.querySelector("#settings-service [data-action='self-test-ocr']"));
+  assert.ok(root.querySelector("#settings-service [data-action='self-test-ai']"));
+  assert.equal(root.querySelector("#settings-translation [data-action^='self-test-']"), null);
+  assert.equal(root.querySelector("#settings-display [data-action^='self-test-']"), null);
+  assert.equal(root.querySelector(".api-footer [data-action^='self-test-']"), null);
+  assert.equal(root.querySelector<HTMLElement>("#settings-service")?.hidden, false);
+  assert.equal(root.querySelector<HTMLElement>("#settings-translation")?.hidden, true);
+  assert.equal(root.querySelector<HTMLElement>("#settings-display")?.hidden, true);
+
+  const translationLink = root.querySelector<HTMLAnchorElement>("[href='#settings-translation']")!;
+  const glossary = root.querySelector<HTMLTextAreaElement>("[data-field='glossary-text']")!;
+  glossary.value = "Name = 名字";
+  translationLink.click();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(dom.window.location.hash, "#settings-translation");
+  assert.equal(translationLink.getAttribute("aria-current"), "location");
+  assert.equal(root.querySelector<HTMLElement>("#settings-service")?.hidden, true);
+  assert.equal(root.querySelector<HTMLElement>("#settings-translation")?.hidden, false);
+  assert.equal(root.querySelector<HTMLElement>("#settings-display")?.hidden, true);
+  assert.equal(root.querySelector<HTMLTextAreaElement>("[data-field='glossary-text']")?.value, "Name = 名字");
+
+  dom.window.location.hash = "#settings-display";
+  dom.window.dispatchEvent(new dom.window.HashChangeEvent("hashchange"));
+  assert.equal(root.querySelector<HTMLElement>("#settings-translation")?.hidden, true);
+  assert.equal(root.querySelector<HTMLElement>("#settings-display")?.hidden, false);
+});
+
+test("OCR and AI service checks call only their own API and keep results separate", async () => {
+  const dom = setupDom();
+  const configured = enableSiteForUrl({
+    ...DEFAULT_SETTINGS,
+    runMode: "direct",
+    directOcr: { ...DEFAULT_SETTINGS.directOcr, apiUrl: "https://ocr.example/ocr", apiKeys: ["ocr-key"], regionsPaths: ["data.words_result"], textPaths: ["words"], boxPaths: ["location"] },
+    directTranslator: { baseUrl: "https://api.example/v1", apiKey: "llm-key", model: "gpt-test" },
+  }, "https://asurascans.com/a");
+  const root = dom.window.document.querySelector<HTMLElement>("#app")!;
+  const seenUrls: string[] = [];
+
+  await mountSettingsPage(root, deps({
+    storage: fakeStorage(configured),
+    tabUrl: "https://asurascans.com/a",
+    directHttp: async (request) => {
+      seenUrls.push(request.url);
+      if (request.url.includes("ocr")) return { ok: true, status: 200, statusText: "OK", headers: { "content-type": "application/json" }, bodyText: JSON.stringify({ data: { words_result: [{ words: "HELLO", location: { left: 1, top: 1, width: 30, height: 12 } }] } }) };
+      if (request.url.endsWith("/models")) return { ok: true, status: 200, statusText: "OK", headers: { "content-type": "application/json" }, bodyText: JSON.stringify({ data: [{ id: "gpt-test" }] }) };
+      if (request.url.endsWith("/chat/completions")) return { ok: true, status: 200, statusText: "OK", headers: { "content-type": "application/json" }, bodyText: JSON.stringify({ choices: [{ message: { content: '{"items":[{"id":"self-test","translatedText":"你好"}]}' } }] }) };
+      throw new Error(`unexpected request ${request.url}`);
+    },
+  }));
+
+  const ocrTestButton = root.querySelector<HTMLButtonElement>("[data-action='self-test-ocr']")!;
+  const aiTestButton = root.querySelector<HTMLButtonElement>("[data-action='self-test-ai']")!;
+  assert.notEqual(ocrTestButton.closest(".api-section"), aiTestButton.closest(".api-section"));
+  root.querySelector<HTMLButtonElement>("[data-action='self-test-ocr']")!.click();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(seenUrls.some((url) => url.includes("api.example")), false);
+  assert.match(root.querySelector<HTMLElement>("[data-self-test-result='ocr']")?.textContent ?? "", /OCR 解析正常/);
+  assert.equal(root.querySelector<HTMLElement>("[data-self-test-result='ai']")?.textContent, "");
+
+  const requestsBeforeAiTest = seenUrls.length;
+  root.querySelector<HTMLButtonElement>("[data-action='self-test-ai']")!.click();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const aiRequests = seenUrls.slice(requestsBeforeAiTest);
+  assert.equal(aiRequests.some((url) => url.includes("ocr.example")), false);
+  assert.equal(aiRequests.some((url) => url.endsWith("/chat/completions")), true);
+  assert.match(root.querySelector<HTMLElement>("[data-self-test-result='ai']")?.textContent ?? "", /AI 调用正常/);
+  assert.equal(root.querySelector("#settings-translation [data-self-test-result]"), null);
+  assert.equal(root.querySelector("#settings-display [data-self-test-result]"), null);
+});
+
+test("backend mode exposes only its own test and never calls direct OCR or AI", async () => {
+  const dom = setupDom();
+  const configured = {
+    ...DEFAULT_SETTINGS,
+    runMode: "backend" as const,
+    backendUrl: "http://127.0.0.1:47831",
+  };
+  const root = dom.window.document.querySelector<HTMLElement>("#app")!;
+  const backendChecks: string[] = [];
+  const directRequests: string[] = [];
+
+  await mountSettingsPage(root, deps({
+    storage: fakeStorage(configured),
+    checkBackend: async (url) => { backendChecks.push(url); return true; },
+    directHttp: async (request) => {
+      directRequests.push(request.url);
+      return { ok: false, status: 500, statusText: "unexpected", error: "unexpected direct request", headers: {}, bodyText: "unexpected direct request" };
+    },
+  }));
+
+  assert.equal(root.querySelector<HTMLElement>("[data-mode-panel='backend']")?.hidden, false);
+  assert.equal(root.querySelector<HTMLElement>("[data-mode-panel='direct']")?.hidden, true);
+  assert.equal(root.querySelector("#settings-translation [data-self-test-result]"), null);
+  assert.equal(root.querySelector("#settings-display [data-self-test-result]"), null);
+
+  const checksBeforeClick = backendChecks.length;
+  root.querySelector<HTMLButtonElement>("[data-action='self-test-backend']")!.click();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.ok(backendChecks.length > checksBeforeClick);
+  assert.ok(backendChecks.every((url) => url === "http://127.0.0.1:47831"));
+  assert.deepEqual(directRequests, []);
+  assert.match(root.querySelector<HTMLElement>("[data-self-test-result='backend']")?.textContent ?? "", /后端连通正常/);
+});
+
+test("settings page avoids a misleading duplicate configuration checklist", async () => {
   const dom = setupDom();
   const configured = enableSiteForUrl({
     ...DEFAULT_SETTINGS,
@@ -324,30 +520,41 @@ test("popup API settings show a read-only configuration status checklist", async
   const storage = fakeStorage(configured);
   const root = dom.window.document.querySelector<HTMLElement>("#app")!;
 
-  await mountPopupPage(root, deps({ storage, tabUrl: "https://asurascans.com/a" }));
-  root.querySelector<HTMLButtonElement>("[data-action='open-api-settings']")!.click();
+  await mountSettingsPage(root, deps({ storage, tabUrl: "https://asurascans.com/a" }));
 
-  const checklist = root.querySelector<HTMLElement>("[data-config-checklist]");
-  assert.notEqual(checklist, null);
-  const text = checklist?.textContent ?? "";
-  assert.match(text, /配置状态/);
-  assert.match(text, /OCR URL/);
-  assert.match(text, /OCR Key：2/);
-  assert.match(text, /字段映射/);
-  assert.match(text, /Base URL/);
-  assert.match(text, /翻译 Key/);
-  assert.match(text, /模型：gpt-test/);
+  assert.equal(root.querySelector("[data-config-checklist]"), null);
+  assert.equal(root.textContent?.includes("全局配置"), true);
+  assert.equal(root.textContent?.includes("配置状态"), false);
+  assert.equal(root.querySelectorAll("[data-field='direct-ocr-key']").length, 2);
 });
 
-test("popup saves direct OCR and translator API configuration", async () => {
+test("backend status refreshes inside API settings without replacing edited fields", async () => {
+  const dom = setupDom();
+  const storage = fakeStorage(enableSiteForUrl({ ...DEFAULT_SETTINGS, runMode: "backend" }, "https://asurascans.com/a"));
+  const root = dom.window.document.querySelector<HTMLElement>("#app")!;
+  let resolveHealth!: (value: boolean) => void;
+  const health = new Promise<boolean>((resolve) => { resolveHealth = resolve; });
+
+  await mountSettingsPage(root, deps({ storage, checkBackend: async () => health }));
+  const url = root.querySelector<HTMLInputElement>("[data-field='backend-url']")!;
+  url.value = "http://127.0.0.1:9999";
+  resolveHealth(true);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(root.querySelector<HTMLElement>("[data-backend-status]")?.textContent, "本地后端已连接");
+  assert.equal(root.querySelector<HTMLInputElement>("[data-field='backend-url']")?.value, "http://127.0.0.1:9999");
+});
+
+test("settings page saves direct OCR and translator API configuration", async () => {
   const dom = setupDom();
   const storage = fakeStorage(enableSiteForUrl(DEFAULT_SETTINGS, "https://asurascans.com/a"));
   const root = dom.window.document.querySelector<HTMLElement>("#app")!;
 
-  await mountPopupPage(root, deps({ storage, tabUrl: "https://asurascans.com/a" }));
-  root.querySelector<HTMLButtonElement>("[data-action='open-api-settings']")!.click();
+  await mountSettingsPage(root, deps({ storage, tabUrl: "https://asurascans.com/a" }));
   setValue(root, dom, "direct-ocr-url", "https://ocr.example/ocr");
-  setValue(root, dom, "direct-ocr-keys", "ocr-a\nocr-b");
+  root.querySelector<HTMLInputElement>("[data-field='direct-ocr-key']")!.value = "ocr-a";
+  root.querySelector<HTMLButtonElement>("[data-action='add-ocr-key']")!.click();
+  root.querySelectorAll<HTMLInputElement>("[data-field='direct-ocr-key']")[1]!.value = "ocr-b";
   setValue(root, dom, "direct-ocr-input-mode", "file");
   setValue(root, dom, "direct-ocr-image-field", "file");
   setValue(root, dom, "direct-translator-base-url", "https://api.example/v1");
@@ -378,30 +585,72 @@ test("popup saves direct OCR and translator API configuration", async () => {
   assert.deepEqual(storage.current.glossary, { Clark: "克拉克", Murim: "武林" });
 });
 
-test("popup self-test button reports missing direct configuration without leaking keys", async () => {
+test("settings page self-test reports missing direct configuration without leaking keys", async () => {
   const dom = setupDom();
   const storage = fakeStorage(enableSiteForUrl(DEFAULT_SETTINGS, "https://asurascans.com/a"));
   const root = dom.window.document.querySelector<HTMLElement>("#app")!;
 
-  await mountPopupPage(root, deps({ storage, tabUrl: "https://asurascans.com/a" }));
-  root.querySelector<HTMLButtonElement>("[data-action='open-api-settings']")!.click();
-  root.querySelector<HTMLButtonElement>("[data-action='self-test']")!.click();
+  await mountSettingsPage(root, deps({ storage, tabUrl: "https://asurascans.com/a" }));
+  root.querySelector<HTMLButtonElement>("[data-action='self-test-ocr']")!.click();
+  root.querySelector<HTMLButtonElement>("[data-action='self-test-ai']")!.click();
   await new Promise((resolve) => setTimeout(resolve, 0));
 
   const text = root.textContent ?? "";
-  assert.equal(text.includes("OCR 未配置"), true);
-  assert.equal(text.includes("翻译 API 未配置"), true);
+  assert.match(root.querySelector<HTMLElement>("[data-self-test-result='ocr']")?.textContent ?? "", /OCR 未配置/);
+  assert.match(root.querySelector<HTMLElement>("[data-self-test-result='ai']")?.textContent ?? "", /翻译 API 未配置/);
   assert.equal(text.includes("uapi-ak"), false);
 });
 
+test("settings self-test does not imply a manga page check when opened without page context", async () => {
+  const dom = setupDom();
+  const root = dom.window.document.querySelector<HTMLElement>("#app")!;
+  const storage = fakeStorage({
+    ...DEFAULT_SETTINGS,
+    directOcr: { ...DEFAULT_SETTINGS.directOcr, apiUrl: "https://ocr.example/ocr", apiKeys: ["ocr-key"], regionsPaths: ["data.words_result"] },
+  });
 
-test("popup preserves scroll position when changing controls", async () => {
+  await mountSettingsPage(root, deps({
+    storage,
+    querySettingsTab: async () => null,
+    directHttp: async () => ({ ok: true, status: 200, statusText: "OK", headers: { "content-type": "application/json" }, bodyText: JSON.stringify({ data: { words_result: [] } }) }),
+  }));
+  root.querySelector<HTMLButtonElement>("[data-action='self-test-ocr']")!.click();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  const summary = root.querySelector<HTMLElement>("[data-self-test-result='ocr']")?.textContent ?? "";
+  assert.match(summary, /内置测试图未返回文字区域/);
+  assert.match(summary, /当前没有关联漫画页样本/);
+  assert.doesNotMatch(summary, /当前网站未启用/);
+});
+
+test("settings self-test keeps unsaved API values and masks OCR keys", async () => {
+  const dom = setupDom();
+  const root = dom.window.document.querySelector<HTMLElement>("#app")!;
+  await mountSettingsPage(root, deps({
+    tabUrl: "https://asurascans.com/a",
+    directHttp: async () => ({ ok: false, status: 500, statusText: "failed", error: "failed", headers: {}, bodyText: "failed" }),
+  }));
+  setValue(root, dom, "direct-ocr-url", "https://unsaved.example/ocr");
+  const key = root.querySelector<HTMLInputElement>("[data-field='direct-ocr-key']")!;
+  key.value = "unsaved-secret";
+
+  root.querySelector<HTMLButtonElement>("[data-action='self-test-ocr']")!.click();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(root.querySelector<HTMLInputElement>("[data-field='direct-ocr-url']")?.value, "https://unsaved.example/ocr");
+  assert.equal(root.querySelector<HTMLInputElement>("[data-field='direct-ocr-key']")?.value, "unsaved-secret");
+  assert.equal(root.querySelector<HTMLInputElement>("[data-field='direct-ocr-key']")?.type, "password");
+  assert.match(root.querySelector<HTMLElement>("[data-self-test-result='ocr']")?.textContent ?? "", /OCR 失败/);
+});
+
+
+test("settings slider changes do not replace the page or interrupt focus", async () => {
   const dom = setupDom();
   const storage = fakeStorage(enableSiteForUrl(DEFAULT_SETTINGS, "https://asurascans.com/a"));
   const root = dom.window.document.querySelector<HTMLElement>("#app")!;
 
-  await mountPopupPage(root, deps({ storage, tabUrl: "https://asurascans.com/a" }));
-  let panel = root.querySelector<HTMLElement>(".umt-popup")!;
+  await mountSettingsPage(root, deps({ storage, tabUrl: "https://asurascans.com/a" }));
+  let panel = root.querySelector<HTMLElement>(".umt-settings")!;
   panel.scrollTop = 180;
 
   const input = root.querySelector<HTMLInputElement>("[data-field='overlay-mask-scale']")!;
@@ -409,21 +658,24 @@ test("popup preserves scroll position when changing controls", async () => {
   input.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
   await Promise.resolve();
 
-  panel = root.querySelector<HTMLElement>(".umt-popup")!;
+  panel = root.querySelector<HTMLElement>(".umt-settings")!;
+  assert.equal(root.querySelector<HTMLInputElement>("[data-field='overlay-mask-scale']"), input);
   assert.equal(panel.scrollTop, 180);
 });
 
-test("popup starts settings pages at the top instead of reusing main-panel scroll", async () => {
+test("popup settings button opens a dedicated page with the active tab context", async () => {
   const dom = setupDom();
   const storage = fakeStorage(enableSiteForUrl(DEFAULT_SETTINGS, "https://asurascans.com/a"));
   const root = dom.window.document.querySelector<HTMLElement>("#app")!;
+  let openedTab: number | undefined;
 
-  await mountPopupPage(root, deps({ storage, tabUrl: "https://asurascans.com/a" }));
-  root.querySelector<HTMLElement>(".umt-popup")!.scrollTop = 180;
+  await mountPopupPage(root, deps({ storage, tabUrl: "https://asurascans.com/a", openSettingsPage: (tabId) => { openedTab = tabId; } }));
 
-  root.querySelector<HTMLButtonElement>("[data-action='open-api-settings']")!.click();
+  assert.equal(root.querySelector("[data-field='direct-ocr-url']"), null);
+  assert.equal(root.querySelector("[data-field='overlay-mask-scale']"), null);
+  root.querySelector<HTMLButtonElement>("[data-action='open-settings']")!.click();
 
-  assert.equal(root.querySelector<HTMLElement>(".umt-popup")!.scrollTop, 0);
+  assert.equal(openedTab, 123);
 });
 function setupDom(): JSDOM {
   const dom = new JSDOM('<main id="app"></main>', { url: "chrome-extension://umt/popup.html" });
@@ -432,17 +684,19 @@ function setupDom(): JSDOM {
   return dom;
 }
 
-function deps(options: { storage?: SettingsStorageArea; backendOnline?: boolean; tabUrl?: string; sentMessages?: unknown[]; activated?: unknown[]; ensured?: unknown[]; checkBackend?: (backendUrl: string) => Promise<boolean>; directHttp?: (request: Omit<UmtDirectHttpRequest, "source" | "command">) => Promise<UmtDirectHttpResponse>; sendMessageToTab?: PopupDeps["sendMessageToTab"]; useDefaultSendMessageToTab?: boolean } = {}): PopupDeps {
+function deps(options: { storage?: SettingsStorageArea; backendOnline?: boolean; tabUrl?: string; sentMessages?: unknown[]; activated?: unknown[]; ensured?: unknown[]; checkBackend?: (backendUrl: string) => Promise<boolean>; directHttp?: (request: Omit<UmtDirectHttpRequest, "source" | "command">) => Promise<UmtDirectHttpResponse>; sendMessageToTab?: PopupDeps["sendMessageToTab"]; querySettingsTab?: PopupDeps["querySettingsTab"]; openSettingsPage?: PopupDeps["openSettingsPage"]; useDefaultSendMessageToTab?: boolean } = {}): PopupDeps {
   const sent = options.sentMessages;
   const activated = options.activated;
   const ensured = options.ensured;
   const result: PopupDeps = {
     storage: options.storage ?? fakeStorage(DEFAULT_SETTINGS),
     queryActiveTab: async () => ({ id: 123, url: options.tabUrl ?? "https://asurascans.com/chapter/1" }),
+    querySettingsTab: options.querySettingsTab ?? (async () => ({ id: 123, url: options.tabUrl ?? "https://asurascans.com/chapter/1" })),
     checkBackend: options.checkBackend ?? (async () => options.backendOnline ?? true),
     activateSite: async (tabId: number, url: string) => { activated?.push({ tabId, url }); return { ok: true }; },
     ensureContentScript: async (tabId: number, url: string) => { ensured?.push({ tabId, url }); return { ok: true }; },
   };
+  if (options.openSettingsPage) result.openSettingsPage = options.openSettingsPage;
   if (!options.useDefaultSendMessageToTab) {
     result.sendMessageToTab = options.sendMessageToTab ?? (async (tabId, message) => { sent?.push({ tabId, message }); });
   }
@@ -506,7 +760,7 @@ test("popup retranslate button targets only visible surfaces", async () => {
   assert.deepEqual(sent, [{ tabId: 123, message: { source: "umt-popup", command: "retranslateVisible" } }]);
 });
 
-test("popup keeps API configuration behind a separate settings page with explicit save", async () => {
+test("popup keeps settings out of the popup and exposes a separate settings entry", async () => {
   const dom = setupDom();
   const storage = fakeStorage(enableSiteForUrl(DEFAULT_SETTINGS, "https://asurascans.com/a"));
   const root = dom.window.document.querySelector<HTMLElement>("#app")!;
@@ -514,19 +768,19 @@ test("popup keeps API configuration behind a separate settings page with explici
   await mountPopupPage(root, deps({ storage, tabUrl: "https://asurascans.com/a" }));
 
   assert.equal(root.querySelector("[data-field='direct-ocr-url']"), null);
-  assert.ok(root.querySelector("[data-action='open-api-settings']"));
-  root.querySelector<HTMLButtonElement>("[data-action='open-api-settings']")!.click();
+  assert.ok(root.querySelector("[data-action='open-settings']"));
+  assert.equal(root.querySelector("[data-field='overlay-mask-scale']"), null);
+  await mountSettingsPage(root, deps({ storage, tabUrl: "https://asurascans.com/a" }));
   assert.ok(root.querySelector("[data-field='direct-ocr-url']"));
   assert.ok(root.querySelector("[data-action='save-api-settings']"));
 });
 
-test("popup API settings are saved only when pressing save", async () => {
+test("settings configuration is saved only when pressing save", async () => {
   const dom = setupDom();
   const storage = fakeStorage(enableSiteForUrl(DEFAULT_SETTINGS, "https://asurascans.com/a"));
   const root = dom.window.document.querySelector<HTMLElement>("#app")!;
 
-  await mountPopupPage(root, deps({ storage, tabUrl: "https://asurascans.com/a" }));
-  root.querySelector<HTMLButtonElement>("[data-action='open-api-settings']")!.click();
+  await mountSettingsPage(root, deps({ storage, tabUrl: "https://asurascans.com/a" }));
   setValue(root, dom, "direct-ocr-url", "https://ocr.example/ocr");
   await Promise.resolve();
   assert.equal(storage.current.directOcr.apiUrl, "");
@@ -547,7 +801,7 @@ test("popup direct self-test surfaces real OCR and AI API failures", async () =>
   const storage = fakeStorage(configured);
   const root = dom.window.document.querySelector<HTMLElement>("#app")!;
 
-  await mountPopupPage(root, deps({
+  await mountSettingsPage(root, deps({
     storage,
     tabUrl: "https://asurascans.com/a",
     directHttp: async (request) => {
@@ -555,8 +809,9 @@ test("popup direct self-test surfaces real OCR and AI API failures", async () =>
       return { ok: true, status: 200, statusText: "OK", headers: { "content-type": "text/html" }, bodyText: "<!doctype html>" };
     },
   }));
-  root.querySelector<HTMLButtonElement>("[data-action='open-api-settings']")!.click();
-  root.querySelector<HTMLButtonElement>("[data-action='self-test']")!.click();
+  root.querySelector<HTMLButtonElement>("[data-action='self-test-ocr']")!.click();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  root.querySelector<HTMLButtonElement>("[data-action='self-test-ai']")!.click();
   await new Promise((resolve) => setTimeout(resolve, 0));
   await new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -565,9 +820,12 @@ test("popup direct self-test surfaces real OCR and AI API failures", async () =>
   assert.match(text, /INSUFFICIENT_CREDITS/);
   assert.match(text, /账户积分不足/);
   assert.match(text, /Base URL.*\/v1|非 JSON/);
-  const selfTest = root.querySelector<HTMLElement>(".self-test")?.textContent ?? "";
-  assert.equal(selfTest.includes("ocr-key"), false);
-  assert.equal(selfTest.includes("llm-key"), false);
+  const ocrResult = root.querySelector<HTMLElement>("[data-self-test-result='ocr']")?.textContent ?? "";
+  const aiResult = root.querySelector<HTMLElement>("[data-self-test-result='ai']")?.textContent ?? "";
+  assert.match(ocrResult, /OCR 失败：402/);
+  assert.match(aiResult, /AI 失败/);
+  assert.equal(ocrResult.includes("ocr-key"), false);
+  assert.equal(aiResult.includes("llm-key"), false);
 });
 
 test("popup direct self-test explains OCR quota failures without leaking keys", async () => {
@@ -581,7 +839,7 @@ test("popup direct self-test explains OCR quota failures without leaking keys", 
   const storage = fakeStorage(configured);
   const root = dom.window.document.querySelector<HTMLElement>("#app")!;
 
-  await mountPopupPage(root, deps({
+  await mountSettingsPage(root, deps({
     storage,
     tabUrl: "https://asurascans.com/a",
     directHttp: async (request) => {
@@ -598,12 +856,11 @@ test("popup direct self-test explains OCR quota failures without leaking keys", 
       return { ok: true, status: 200, statusText: "OK", headers: { "content-type": "application/json" }, bodyText: JSON.stringify({ data: [{ id: "gpt-test" }] }) };
     },
   }));
-  root.querySelector<HTMLButtonElement>("[data-action='open-api-settings']")!.click();
-  root.querySelector<HTMLButtonElement>("[data-action='self-test']")!.click();
+  root.querySelector<HTMLButtonElement>("[data-action='self-test-ocr']")!.click();
   await new Promise((resolve) => setTimeout(resolve, 0));
   await new Promise((resolve) => setTimeout(resolve, 0));
 
-  const selfTest = root.querySelector<HTMLElement>(".self-test")?.textContent ?? "";
+  const selfTest = root.querySelector<HTMLElement>("[data-self-test-result='ocr']")?.textContent ?? "";
   assert.match(selfTest, /OCR 失败/);
   assert.match(selfTest, /402/);
   assert.match(selfTest, /账户积分不足/);
@@ -624,26 +881,25 @@ test("popup direct self-test rejects remote plain HTTP before sending API keys",
   const root = dom.window.document.querySelector<HTMLElement>("#app")!;
   const seenUrls: string[] = [];
 
-  await mountPopupPage(root, deps({
+  await mountSettingsPage(root, deps({
     storage,
     tabUrl: "https://asurascans.com/a",
     directHttp: async (request) => {
       seenUrls.push(request.url);
       if (request.url.endsWith("/models")) return { ok: true, status: 200, statusText: "OK", headers: { "content-type": "application/json" }, bodyText: JSON.stringify({ data: [{ id: "gpt-test" }] }) };
-      if (request.url.endsWith("/chat/completions")) return { ok: true, status: 200, statusText: "OK", headers: { "content-type": "application/json" }, bodyText: JSON.stringify({ choices: [{ message: { content: "你好 OCR" } }] }) };
+      if (request.url.endsWith("/chat/completions")) return { ok: true, status: 200, statusText: "OK", headers: { "content-type": "application/json" }, bodyText: JSON.stringify({ choices: [{ message: { content: '{"items":[{"id":"self-test","translatedText":"你好 OCR"}]}' } }] }) };
       throw new Error("must not call directHttp for insecure OCR URL");
     },
   }));
-  root.querySelector<HTMLButtonElement>("[data-action='open-api-settings']")!.click();
-  root.querySelector<HTMLButtonElement>("[data-action='self-test']")!.click();
+  root.querySelector<HTMLButtonElement>("[data-action='self-test-ocr']")!.click();
   await new Promise((resolve) => setTimeout(resolve, 0));
   await new Promise((resolve) => setTimeout(resolve, 0));
 
-  const selfTest = root.querySelector<HTMLElement>(".self-test")?.textContent ?? "";
+  const selfTest = root.querySelector<HTMLElement>("[data-self-test-result='ocr']")?.textContent ?? "";
   assert.match(selfTest, /OCR 失败/);
   assert.match(selfTest, /https/);
   assert.equal(selfTest.includes("ocr-secret"), false);
-  assert.deepEqual(seenUrls, ["https://api.example/v1/models", "https://api.example/v1/chat/completions"]);
+  assert.deepEqual(seenUrls, []);
 });
 
 test("popup direct self-test reports OCR mapping guidance when no configured regions are parsed", async () => {
@@ -657,7 +913,7 @@ test("popup direct self-test reports OCR mapping guidance when no configured reg
   const storage = fakeStorage(configured);
   const root = dom.window.document.querySelector<HTMLElement>("#app")!;
 
-  await mountPopupPage(root, deps({
+  await mountSettingsPage(root, deps({
     storage,
     tabUrl: "https://asurascans.com/a",
     directHttp: async (request) => {
@@ -665,12 +921,11 @@ test("popup direct self-test reports OCR mapping guidance when no configured reg
       return { ok: true, status: 200, statusText: "OK", headers: { "content-type": "application/json" }, bodyText: JSON.stringify({ data: [{ id: "gpt-test" }] }) };
     },
   }));
-  root.querySelector<HTMLButtonElement>("[data-action='open-api-settings']")!.click();
-  root.querySelector<HTMLButtonElement>("[data-action='self-test']")!.click();
+  root.querySelector<HTMLButtonElement>("[data-action='self-test-ocr']")!.click();
   await new Promise((resolve) => setTimeout(resolve, 0));
   await new Promise((resolve) => setTimeout(resolve, 0));
 
-  const selfTest = root.querySelector<HTMLElement>(".self-test")?.textContent ?? "";
+  const selfTest = root.querySelector<HTMLElement>("[data-self-test-result='ocr']")?.textContent ?? "";
   assert.match(selfTest, /未解析到文字区域|字段映射/);
   assert.match(selfTest, /regionsPaths|textPaths|boxPaths|字段映射/);
 });
@@ -686,7 +941,7 @@ test("popup direct self-test treats an empty OCR sample as connectivity success 
   const storage = fakeStorage(configured);
   const root = dom.window.document.querySelector<HTMLElement>("#app")!;
 
-  await mountPopupPage(root, deps({
+  await mountSettingsPage(root, deps({
     storage,
     tabUrl: "https://asurascans.com/a",
     directHttp: async (request) => {
@@ -694,15 +949,47 @@ test("popup direct self-test treats an empty OCR sample as connectivity success 
       return { ok: true, status: 200, statusText: "OK", headers: { "content-type": "application/json" }, bodyText: JSON.stringify({ data: [{ id: "gpt-test" }] }) };
     },
   }));
-  root.querySelector<HTMLButtonElement>("[data-action='open-api-settings']")!.click();
-  root.querySelector<HTMLButtonElement>("[data-action='self-test']")!.click();
+  root.querySelector<HTMLButtonElement>("[data-action='self-test-ocr']")!.click();
   await new Promise((resolve) => setTimeout(resolve, 0));
   await new Promise((resolve) => setTimeout(resolve, 0));
 
-  const selfTest = root.querySelector<HTMLElement>(".self-test")?.textContent ?? "";
+  const selfTest = root.querySelector<HTMLElement>("[data-self-test-result='ocr']")?.textContent ?? "";
   assert.match(selfTest, /OCR 接口连通正常/);
   assert.doesNotMatch(selfTest, /自检图片可能没有文字/);
   assert.doesNotMatch(selfTest, /OCR 失败/);
+});
+
+test("popup self-test labels empty OCR test image as unverified when the current site is disabled", async () => {
+  const dom = setupDom();
+  const configured = {
+    ...DEFAULT_SETTINGS,
+    runMode: "direct" as const,
+    directOcr: { ...DEFAULT_SETTINGS.directOcr, apiUrl: "https://ocr.example/ocr", apiKeys: ["ocr-key"], regionsPaths: ["data.words_result"] },
+    directTranslator: { baseUrl: "https://api.example/v1", apiKey: "llm-key", model: "gpt-test" },
+  };
+  const root = dom.window.document.querySelector<HTMLElement>("#app")!;
+  let pageSampleRequested = false;
+
+  await mountSettingsPage(root, deps({
+    storage: fakeStorage(configured),
+    tabUrl: "https://not-enabled.example/chapter",
+    sendMessageToTab: async () => { pageSampleRequested = true; return undefined; },
+    directHttp: async (request) => {
+      if (request.url.includes("ocr")) return { ok: true, status: 200, statusText: "OK", headers: { "content-type": "application/json" }, bodyText: JSON.stringify({ data: { words_result: [] } }) };
+      return { ok: true, status: 200, statusText: "OK", headers: { "content-type": "application/json" }, bodyText: JSON.stringify({ choices: [{ message: { content: '{"items":[{"id":"self-test","translatedText":"你好 OCR"}]}' } }] }) };
+    },
+  }));
+  root.querySelector<HTMLButtonElement>("[data-action='self-test-ocr']")!.click();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  const selfTest = root.querySelector<HTMLElement>("[data-self-test-result='ocr']")?.textContent ?? "";
+  assert.match(selfTest, /OCR 接口可连接/);
+  assert.match(selfTest, /识字效果未验证/);
+  assert.match(selfTest, /当前网站未启用/);
+  assert.match(selfTest, /不表示真实漫画 OCR 故障/);
+  assert.doesNotMatch(selfTest, /OCR 失败/);
+  assert.equal(pageSampleRequested, false);
 });
 
 test("popup direct self-test prefers a real current-page sample when the synthetic OCR image is empty", async () => {
@@ -716,7 +1003,7 @@ test("popup direct self-test prefers a real current-page sample when the synthet
   const storage = fakeStorage(configured);
   const root = dom.window.document.querySelector<HTMLElement>("#app")!;
 
-  await mountPopupPage(root, deps({
+  await mountSettingsPage(root, deps({
     storage,
     tabUrl: "https://asurascans.com/a",
     sendMessageToTab: async (_tabId, message) => {
@@ -725,15 +1012,14 @@ test("popup direct self-test prefers a real current-page sample when the synthet
     directHttp: async (request) => {
       if (request.url.includes("ocr")) return { ok: true, status: 200, statusText: "OK", headers: { "content-type": "application/json" }, bodyText: JSON.stringify({ data: { words_result: [] } }) };
       if (request.url.endsWith("/models")) return { ok: true, status: 200, statusText: "OK", headers: { "content-type": "application/json" }, bodyText: JSON.stringify({ data: [{ id: "gpt-test" }] }) };
-      return { ok: true, status: 200, statusText: "OK", headers: { "content-type": "application/json" }, bodyText: JSON.stringify({ choices: [{ message: { content: "你好 OCR" } }] }) };
+      return { ok: true, status: 200, statusText: "OK", headers: { "content-type": "application/json" }, bodyText: JSON.stringify({ choices: [{ message: { content: '{"items":[{"id":"self-test","translatedText":"你好 OCR"}]}' } }] }) };
     },
   }));
-  root.querySelector<HTMLButtonElement>("[data-action='open-api-settings']")!.click();
-  root.querySelector<HTMLButtonElement>("[data-action='self-test']")!.click();
+  root.querySelector<HTMLButtonElement>("[data-action='self-test-ocr']")!.click();
   await new Promise((resolve) => setTimeout(resolve, 0));
   await new Promise((resolve) => setTimeout(resolve, 0));
 
-  const selfTest = root.querySelector<HTMLElement>(".self-test")?.textContent ?? "";
+  const selfTest = root.querySelector<HTMLElement>("[data-self-test-result='ocr']")?.textContent ?? "";
   assert.match(selfTest, /页面样本 OCR 正常/);
   assert.match(selfTest, /第 1 张/);
   assert.match(selfTest, /7 个区域/);
@@ -762,22 +1048,21 @@ test("popup direct self-test uses the default chrome tabs message response for c
   } as never;
 
   try {
-    await mountPopupPage(root, deps({
+    await mountSettingsPage(root, deps({
       storage,
       tabUrl: "https://asurascans.com/a",
       directHttp: async (request) => {
         if (request.url.includes("ocr")) return { ok: true, status: 200, statusText: "OK", headers: { "content-type": "application/json" }, bodyText: JSON.stringify({ data: { words_result: [] } }) };
         if (request.url.endsWith("/models")) return { ok: true, status: 200, statusText: "OK", headers: { "content-type": "application/json" }, bodyText: JSON.stringify({ data: [{ id: "gpt-test" }] }) };
-        return { ok: true, status: 200, statusText: "OK", headers: { "content-type": "application/json" }, bodyText: JSON.stringify({ choices: [{ message: { content: "你好 OCR" } }] }) };
+        return { ok: true, status: 200, statusText: "OK", headers: { "content-type": "application/json" }, bodyText: JSON.stringify({ choices: [{ message: { content: '{"items":[{"id":"self-test","translatedText":"你好 OCR"}]}' } }] }) };
       },
       useDefaultSendMessageToTab: true,
     }));
-    root.querySelector<HTMLButtonElement>("[data-action='open-api-settings']")!.click();
-    root.querySelector<HTMLButtonElement>("[data-action='self-test']")!.click();
+    root.querySelector<HTMLButtonElement>("[data-action='self-test-ocr']")!.click();
     await new Promise((resolve) => setTimeout(resolve, 0));
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    const selfTest = root.querySelector<HTMLElement>(".self-test")?.textContent ?? "";
+    const selfTest = root.querySelector<HTMLElement>("[data-self-test-result='ocr']")?.textContent ?? "";
     assert.match(selfTest, /页面样本 OCR 正常/);
     assert.match(selfTest, /第 2 张/);
     assert.match(selfTest, /9 个区域/);
@@ -797,7 +1082,7 @@ test("popup direct self-test reports why current-page sample did not run instead
   const storage = fakeStorage(configured);
   const root = dom.window.document.querySelector<HTMLElement>("#app")!;
 
-  await mountPopupPage(root, deps({
+  await mountSettingsPage(root, deps({
     storage,
     tabUrl: "https://asurascans.com/a",
     sendMessageToTab: async (_tabId, message) => {
@@ -806,15 +1091,14 @@ test("popup direct self-test reports why current-page sample did not run instead
     directHttp: async (request) => {
       if (request.url.includes("ocr")) return { ok: true, status: 200, statusText: "OK", headers: { "content-type": "application/json" }, bodyText: JSON.stringify({ data: { words_result: [] } }) };
       if (request.url.endsWith("/models")) return { ok: true, status: 200, statusText: "OK", headers: { "content-type": "application/json" }, bodyText: JSON.stringify({ data: [{ id: "gpt-test" }] }) };
-      return { ok: true, status: 200, statusText: "OK", headers: { "content-type": "application/json" }, bodyText: JSON.stringify({ choices: [{ message: { content: "你好 OCR" } }] }) };
+      return { ok: true, status: 200, statusText: "OK", headers: { "content-type": "application/json" }, bodyText: JSON.stringify({ choices: [{ message: { content: '{"items":[{"id":"self-test","translatedText":"你好 OCR"}]}' } }] }) };
     },
   }));
-  root.querySelector<HTMLButtonElement>("[data-action='open-api-settings']")!.click();
-  root.querySelector<HTMLButtonElement>("[data-action='self-test']")!.click();
+  root.querySelector<HTMLButtonElement>("[data-action='self-test-ocr']")!.click();
   await new Promise((resolve) => setTimeout(resolve, 0));
   await new Promise((resolve) => setTimeout(resolve, 0));
 
-  const selfTest = root.querySelector<HTMLElement>(".self-test")?.textContent ?? "";
+  const selfTest = root.querySelector<HTMLElement>("[data-self-test-result='ocr']")?.textContent ?? "";
   assert.match(selfTest, /页面样本自检未返回/);
   assert.doesNotMatch(selfTest, /测试图未返回文字区域，真实漫画 OCR 时会继续验证字段映射/);
 });
@@ -838,7 +1122,7 @@ test("popup direct self-test validates OCR parsing and a real translator chat ca
   const root = dom.window.document.querySelector<HTMLElement>("#app")!;
   const seenUrls: string[] = [];
 
-  await mountPopupPage(root, deps({
+  await mountSettingsPage(root, deps({
     storage,
     tabUrl: "https://asurascans.com/a",
     directHttp: async (request) => {
@@ -856,22 +1140,27 @@ test("popup direct self-test validates OCR parsing and a real translator chat ca
         return { ok: true, status: 200, statusText: "OK", headers: { "content-type": "application/json" }, bodyText: JSON.stringify({ data: [{ id: "gpt-test" }] }) };
       }
       if (request.url.endsWith("/chat/completions")) {
-        return { ok: true, status: 200, statusText: "OK", headers: { "content-type": "application/json" }, bodyText: JSON.stringify({ choices: [{ message: { content: "你好 OCR" } }] }) };
+        return { ok: true, status: 200, statusText: "OK", headers: { "content-type": "application/json" }, bodyText: JSON.stringify({ choices: [{ message: { content: '{"items":[{"id":"self-test","translatedText":"你好 OCR"}]}' } }] }) };
       }
       throw new Error(`unexpected self-test request ${request.url}`);
     },
   }));
-  root.querySelector<HTMLButtonElement>("[data-action='open-api-settings']")!.click();
-  root.querySelector<HTMLButtonElement>("[data-action='self-test']")!.click();
+  root.querySelector<HTMLButtonElement>("[data-action='self-test-ocr']")!.click();
   await new Promise((resolve) => setTimeout(resolve, 0));
   await new Promise((resolve) => setTimeout(resolve, 0));
 
-  const selfTest = root.querySelector<HTMLElement>(".self-test")?.textContent ?? "";
-  assert.match(selfTest, /OCR 解析正常/);
-  assert.match(selfTest, /识别 1 行/);
-  assert.match(selfTest, /HELLO OCR/);
-  assert.match(selfTest, /AI 调用正常/);
-  assert.match(selfTest, /你好 OCR/);
+  const ocrTest = root.querySelector<HTMLElement>("[data-self-test-result='ocr']")?.textContent ?? "";
+  assert.match(ocrTest, /OCR 解析正常/);
+  assert.match(ocrTest, /识别 1 行/);
+  assert.match(ocrTest, /HELLO OCR/);
+  assert.equal(root.querySelector<HTMLElement>("[data-self-test-result='ai']")?.textContent, "");
+
+  root.querySelector<HTMLButtonElement>("[data-action='self-test-ai']")!.click();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const aiTest = root.querySelector<HTMLElement>("[data-self-test-result='ai']")?.textContent ?? "";
+  assert.match(aiTest, /AI 调用正常/);
+  assert.match(aiTest, /你好 OCR/);
   assert.equal(seenUrls.some((url) => url.endsWith("/chat/completions")), true);
 });
 
@@ -895,7 +1184,7 @@ test("popup direct self-test sends configured OCR static fields like real transl
   const root = dom.window.document.querySelector<HTMLElement>("#app")!;
   let ocrFields: NonNullable<UmtDirectHttpRequest["init"]>["formFields"] = [];
 
-  await mountPopupPage(root, deps({
+  await mountSettingsPage(root, deps({
     storage,
     tabUrl: "https://asurascans.com/a",
     directHttp: async (request) => {
@@ -910,11 +1199,10 @@ test("popup direct self-test sends configured OCR static fields like real transl
         };
       }
       if (request.url.endsWith("/models")) return { ok: true, status: 200, statusText: "OK", headers: { "content-type": "application/json" }, bodyText: JSON.stringify({ data: [{ id: "gpt-test" }] }) };
-      return { ok: true, status: 200, statusText: "OK", headers: { "content-type": "application/json" }, bodyText: JSON.stringify({ choices: [{ message: { content: "你好 OCR" } }] }) };
+      return { ok: true, status: 200, statusText: "OK", headers: { "content-type": "application/json" }, bodyText: JSON.stringify({ choices: [{ message: { content: '{"items":[{"id":"self-test","translatedText":"你好 OCR"}]}' } }] }) };
     },
   }));
-  root.querySelector<HTMLButtonElement>("[data-action='open-api-settings']")!.click();
-  root.querySelector<HTMLButtonElement>("[data-action='self-test']")!.click();
+  root.querySelector<HTMLButtonElement>("[data-action='self-test-ocr']")!.click();
   await new Promise((resolve) => setTimeout(resolve, 0));
   await new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -933,8 +1221,7 @@ test("popup saves OCR cost protection settings", async () => {
   const storage = fakeStorage(enableSiteForUrl(DEFAULT_SETTINGS, "https://asurascans.com/a"));
   const root = dom.window.document.querySelector<HTMLElement>("#app")!;
 
-  await mountPopupPage(root, deps({ storage, tabUrl: "https://asurascans.com/a" }));
-  root.querySelector<HTMLButtonElement>("[data-action='open-api-settings']")!.click();
+  await mountSettingsPage(root, deps({ storage, tabUrl: "https://asurascans.com/a" }));
 
   assert.ok(root.querySelector("[data-field='direct-ocr-max-auto-pages']"));
   assert.ok(root.querySelector("[data-field='direct-ocr-stop-after-failures']"));

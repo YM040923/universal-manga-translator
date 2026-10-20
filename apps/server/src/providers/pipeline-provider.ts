@@ -1,6 +1,6 @@
 import type { Rect, TextRegion } from "@umt/shared";
 import type { OcrCacheStore } from "../cache/ocr-cache.js";
-import type { ApiKeyPoolStatus } from "@umt/core";
+import type { ApiKeyPoolStatus } from "./api-key-pool.js";
 import type { ProviderInput, VisionProvider } from "./provider.js";
 
 export interface OcrRegion {
@@ -28,8 +28,6 @@ export interface TextTranslationResult {
 
 export interface TextTranslationOptions {
   retranslate?: boolean;
-  /** External cancellation signal (user cancel); aborts in-flight requests. */
-  signal?: AbortSignal;
 }
 
 export interface TextTranslationProvider {
@@ -62,17 +60,13 @@ export class OcrThenTranslateProvider implements VisionProvider {
   }
 
   async process(input: ProviderInput): Promise<TextRegion[]> {
-    const ocrRegions = await this.readOcrRegions(input);
-    const latinDominant = isLatinDominantPage(ocrRegions);
-    const classified = ocrRegions.map((region) => classifyRegionKind(region, input.width, input.height, latinDominant));
-    const textBlocks = groupOcrRegionsIntoTextBlocks(classified);
-    const translationOptions: TextTranslationOptions = { retranslate: input.forceRetranslate === true };
-    if (input.signal) translationOptions.signal = input.signal;
+    const ocrRegions = (await this.readOcrRegions(input)).map((region) => classifyRegionKind(region, input.width, input.height));
+    const textBlocks = groupOcrRegionsIntoTextBlocks(ocrRegions);
     const translated = await this.options.translator.translate(
       textBlocks.map((region) => ({ id: region.id, text: region.sourceText })),
       input.task.targetLanguage,
       input.task.sourceLanguage,
-      translationOptions,
+      { retranslate: input.forceRetranslate === true },
     );
     const translatedById = new Map(translated.map((item) => [item.id, item.translatedText]));
     return textBlocks.map((region) => ({
@@ -136,18 +130,11 @@ function shouldJoinGroup(group: OcrRegion[], next: OcrRegion): boolean {
   if (next.orientation === "vertical") return false;
   const union = unionRect(group.map((region) => region.box));
   const averageHeight = (previous.box.height + next.box.height) / 2;
-  if (verticalOverlap(union, next.box) >= Math.min(union.height, next.box.height) * 0.6) {
+  if (verticalOverlap(union, next.box) >= Math.min(union.height, next.box.height) * 0.55) {
     const horizontalGap = Math.max(0, next.box.x - (union.x + union.width));
-    if (next.kind === "narration") {
-      // Caption boxes: horizontally split fragments of one line are common.
-      const maxSameLineGap = Math.max(60, averageHeight * 2.6);
-      if (horizontalGap <= maxSameLineGap) return true;
-    } else if (next.kind === "dialogue") {
-      // Speech bubbles: adjacent bubbles must never fuse into one giant
-      // overlay; only merge tiny gaps that look like OCR splits of one line.
-      const maxSameLineGap = Math.max(16, averageHeight * 0.55);
-      if (horizontalGap <= maxSameLineGap) return true;
-    }
+    const maxSameLineGap = Math.max(80, averageHeight * 3.5);
+    if (next.kind === "narration" && horizontalGap <= maxSameLineGap) return true;
+    if (next.kind === "dialogue" && horizontalGap <= Math.max(60, averageHeight * 2.4)) return true;
   }
   const previousBottom = previous.box.y + previous.box.height;
   const verticalGap = next.box.y - previousBottom;
@@ -158,62 +145,22 @@ function shouldJoinGroup(group: OcrRegion[], next: OcrRegion): boolean {
   const merged = unionRect([...group.map((region) => region.box), next.box]);
   const mergedHeight = merged.height;
   const mergedWidth = merged.width;
-  // Only merge vertically when the two boxes genuinely look like one large
-  // bubble: tight thresholds plus a horizontal-overlap requirement so
-  // vertically adjacent DISTINCT bubbles are NOT fused into one giant overlay.
   const looksLikeSameLargeBubble =
     next.kind === "dialogue"
-    && verticalGap >= -averageHeight * 0.35
-    && verticalGap <= Math.max(48, averageHeight * 1.15)
-    && centerDistance <= Math.max(mergedWidth * 0.36, averageHeight * 2.2)
-    && overlap >= Math.min(union.width, next.box.width) * 0.12
-    && mergedHeight <= Math.max(260, averageHeight * 4.6)
-    && mergedWidth <= Math.max(640, averageHeight * 8);
+    && verticalGap >= -averageHeight * 0.45
+    && verticalGap <= Math.max(72, averageHeight * 1.75)
+    && centerDistance <= Math.max(mergedWidth * 0.48, averageHeight * 3.2)
+    && mergedHeight <= Math.max(360, averageHeight * 6.2)
+    && mergedWidth <= Math.max(900, averageHeight * 12);
   if (looksLikeSameLargeBubble) return true;
-  if (verticalGap < -averageHeight * 0.25 || verticalGap > Math.max(22, averageHeight * 0.7)) return false;
-  const maxReasonableDistance = Math.max(union.width, next.box.width) * 0.38;
-  return centerDistance <= maxReasonableDistance || overlap >= Math.min(union.width, next.box.width) * 0.3;
+  if (verticalGap < -averageHeight * 0.35 || verticalGap > Math.max(28, averageHeight * 0.9)) return false;
+  const maxReasonableDistance = Math.max(union.width, next.box.width) * 0.45;
+  return centerDistance <= maxReasonableDistance || overlap >= Math.min(union.width, next.box.width) * 0.25;
 }
 
-function classifyRegionKind(region: OcrRegion, imageWidth: number, imageHeight: number, latinDominant: boolean): OcrRegion {
+function classifyRegionKind(region: OcrRegion, imageWidth: number, imageHeight: number): OcrRegion {
   if (region.kind !== "dialogue") return region;
-  if (looksLikeNonLatinSoundEffect(region.sourceText, latinDominant)) return { ...region, kind: "sfx" };
   return looksLikeActionLettering(region, imageWidth, imageHeight) ? { ...region, kind: "sfx" } : region;
-}
-
-/**
- * On pages dominated by Latin text (e.g. English-localized manhwa), Korean
- * hangul, punctuation-only, and short unknown non-Latin strings are almost
- * always borderless sound effects and must not be covered by an opaque
- * bubble. On non-Latin-dominant pages (raw JP/KR/CN manga), non-Latin text is
- * body copy and stays dialogue.
- */
-function looksLikeNonLatinSoundEffect(text: string, latinDominant: boolean): boolean {
-  const trimmed = text.trim();
-  if (!trimmed) return true;
-  const letters = Array.from(trimmed).filter((char) => /\p{L}/u.test(char));
-  if (!letters.length) return true; // punctuation / symbols only
-  const latin = letters.filter((char) => /[A-Za-z]/u.test(char)).length;
-  if (latin > 0) return false; // contains latin → regular text
-  if (!latinDominant) return false; // raw-language page → body text
-  const short = Array.from(trimmed.replace(/\s+/g, "")).length <= 10;
-  const hangul = /[\uAC00-\uD7AF\u1100-\u11FF\u3130-\u318F]/.test(trimmed);
-  return short || hangul;
-}
-
-/** True when the majority of letters on the page are Latin. */
-function isLatinDominantPage(regions: OcrRegion[]): boolean {
-  let latin = 0;
-  let total = 0;
-  for (const region of regions) {
-    for (const char of region.sourceText) {
-      if (/\p{L}/u.test(char)) {
-        total += 1;
-        if (/[A-Za-z]/u.test(char)) latin += 1;
-      }
-    }
-  }
-  return total === 0 || latin / total >= 0.5;
 }
 
 function looksLikeActionLettering(region: OcrRegion, imageWidth: number, imageHeight: number): boolean {

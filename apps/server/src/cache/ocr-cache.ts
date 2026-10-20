@@ -41,10 +41,4 @@ export class OcrCache implements OcrCacheStore {
     const result = this.db.prepare("DELETE FROM ocr_results").run();
     return { deleted: result.changes };
   }
-
-  clearExpired(maxAgeMs: number): number {
-    const cutoff = Date.now() - Math.max(0, maxAgeMs);
-    const result = this.db.prepare("DELETE FROM ocr_results WHERE updated_at < ?").run(cutoff);
-    return result.changes;
-  }
 }

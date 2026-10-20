@@ -125,7 +125,7 @@ test("anchors overlays inside a transformed scroll container so site-specific sc
   assert.equal(wrapper.style.top, "83px");
 });
 
-test("uses rounded mask instead of square corners for speech bubbles", () => {
+test("uses rounded pill mask instead of square corners for speech bubbles", () => {
   const { img } = setupDomWithImage({ x: 0, y: 0, width: 500, height: 500 });
   const renderer = new OverlayRenderer();
   const result = fakeResult("pill-mask");
@@ -134,8 +134,7 @@ test("uses rounded mask instead of square corners for speech bubbles", () => {
   renderer.render(img, { width: 500, height: 500 }, result);
 
   const wrapper = document.querySelector<HTMLElement>("[data-umt-region-id='r1']")!;
-  assert.equal(wrapper.style.borderRadius, "10px");
-  assert.equal(wrapper.style.clipPath, "inset(0 round 10px)");
+  assert.equal(wrapper.style.borderRadius, "999px");
 })
 
 test("render restores overlay visibility after the page was cleared", () => {
@@ -470,7 +469,7 @@ test("shrinks multi-line Chinese text enough for a shallow speech bubble without
   assert.equal(size <= 31, true);
 });
 
-test("dialogue masks use a size-aware rounded rectangle instead of a forced ellipse", () => {
+test("clips dialogue masks to an ellipse so wide boxes do not paint square corners outside bubbles", () => {
   const { img } = setupDomWithImage({ x: 0, y: 0, width: 900, height: 900 });
   const renderer = new OverlayRenderer();
   const result = fakeResult("ellipse-dialogue-mask");
@@ -484,8 +483,7 @@ test("dialogue masks use a size-aware rounded rectangle instead of a forced elli
   renderer.render(img, { width: 900, height: 900 }, result);
 
   const wrapper = document.querySelector<HTMLElement>("[data-umt-region-id='r1']")!;
-  assert.equal(wrapper.style.clipPath.includes("ellipse"), false);
-  assert.equal(wrapper.style.clipPath, "inset(0 round 22px)");
+  assert.equal(wrapper.style.clipPath.includes("ellipse"), true);
 });
 
 test("wide dialogue masks use a text-band shape instead of a giant ellipse", () => {
@@ -559,7 +557,7 @@ test("renders sfx/action lettering without a huge opaque speech-bubble mask", ()
 
   const wrapper = document.querySelector<HTMLElement>("[data-umt-region-id='r1']")!;
   const chip = wrapper.querySelector<HTMLElement>("[data-umt-text-chip='true']")!;
-  assert.equal(wrapper.style.background, "transparent");
+  assert.equal(wrapper.style.background, "rgba(255, 255, 255, 0.28)");
   assert.equal(wrapper.style.clipPath, "none");
   assert.equal(chip.style.textShadow.includes("rgba(255,255,255,0.95)"), true);
 });
@@ -705,7 +703,8 @@ test("overlay appearance options can force rounded masks and scale font and mask
   const wrapper = document.querySelector<HTMLElement>("[data-umt-region-id='r1']")!;
   const chip = wrapper.querySelector<HTMLElement>("[data-umt-text-chip='true']")!;
   assert.equal(wrapper.style.clipPath.includes("ellipse"), false);
-  assert.equal(wrapper.style.opacity, "0.7");
+  assert.equal(wrapper.style.opacity, "");
+  assert.equal(wrapper.style.background.includes("0.7"), true);
   assert.equal(wrapper.style.left, "88px");
   assert.equal(wrapper.style.top, "90px");
   assert.equal(wrapper.style.width, "124px");
@@ -726,10 +725,10 @@ test("overlay appearance can be updated and re-render existing bubbles without r
   const wrapper = document.querySelector<HTMLElement>("[data-umt-region-id='r1']")!;
   assert.equal(chip.firstChild, firstTextNode);
   assert.equal(wrapper.style.background, "transparent");
-  assert.equal(wrapper.style.opacity, "0.5");
+  assert.equal(wrapper.style.opacity, "");
 });
 
-test("ellipse appearance controls forced ellipse aspect ratio while auto uses rounded rectangles", () => {
+test("ellipse appearance controls forced and automatic dialogue ellipse aspect ratio", () => {
   const { img } = setupDomWithImage({ x: 0, y: 0, width: 800, height: 800 });
   const renderer = new OverlayRenderer();
   const result = fakeResult("ellipse-aspect-controls");
@@ -747,8 +746,7 @@ test("ellipse appearance controls forced ellipse aspect ratio while auto uses ro
   assert.equal(wrapper.style.clipPath, "ellipse(42% 36% at 50% 50%)");
 
   renderer.setAppearance({ maskShape: "auto", fontScale: 1, maskScale: 1, ellipseX: 44, ellipseY: 38, opacity: 1 });
-  assert.equal(wrapper.style.clipPath.includes("ellipse"), false);
-  assert.equal(wrapper.style.clipPath, "inset(0 round 21px)");
+  assert.equal(wrapper.style.clipPath, "ellipse(44% 38% at 50% 50%)");
 });
 
 test("font scale directly changes rendered font size on an existing bubble", () => {
@@ -766,10 +764,47 @@ test("font scale directly changes rendered font size on an existing bubble", () 
   const chip = document.querySelector<HTMLElement>("[data-umt-text-chip='true']")!;
   const baseFont = Number(chip.style.fontSize.replace("px", ""));
 
-  renderer.setAppearance({ maskShape: "auto", fontScale: 1.3, maskScale: 1, opacity: 1 });
+  renderer.setAppearance({ maskShape: "auto", fontScale: 1.8, maskScale: 1, opacity: 1 });
   const largerFont = Number(chip.style.fontSize.replace("px", ""));
 
-  assert.equal(largerFont > baseFont + 4, true);
+  assert.equal(largerFont > baseFont + 10, true);
+});
+
+test("font scale downshifts typography without clipping text layout to the previous size", () => {
+  const { img } = setupDomWithImage({ x: 0, y: 0, width: 800, height: 800 });
+  const renderer = new OverlayRenderer();
+  const result = fakeResult("font-scale-down");
+  result.regions = [{
+    ...result.regions[0]!,
+    translatedText: "\u4f60\u597d",
+    box: { x: 100, y: 100, width: 360, height: 180 },
+    kind: "dialogue",
+    style: { ...result.regions[0]!.style, fontSize: 24 },
+  }];
+  renderer.render(img, { width: 800, height: 800 }, result);
+  const chip = document.querySelector<HTMLElement>("[data-umt-text-chip='true']")!;
+  const baseFont = Number(chip.style.fontSize.replace("px", ""));
+
+  renderer.setAppearance({ fontScale: 0.5 });
+
+  const smallerFont = Number(chip.style.fontSize.replace("px", ""));
+  assert.equal(smallerFont < baseFont, true);
+  assert.equal(smallerFont >= 8, true);
+});
+
+test("mask opacity changes the white cover without fading translated text", () => {
+  const { img } = setupDomWithImage({ x: 0, y: 0, width: 800, height: 800 });
+  const renderer = new OverlayRenderer();
+  const result = fakeResult("mask-opacity-independent-text");
+  result.regions = [{ ...result.regions[0]!, translatedText: "\u4f60\u597d", kind: "dialogue" }];
+  renderer.setAppearance({ maskShape: "rounded", fontScale: 1, maskScale: 1, opacity: 0.2 });
+  renderer.render(img, { width: 800, height: 800 }, result);
+
+  const wrapper = document.querySelector<HTMLElement>("[data-umt-region-id='r1']")!;
+  const chip = wrapper.querySelector<HTMLElement>("[data-umt-text-chip='true']")!;
+  assert.equal(wrapper.style.background.includes("0.2"), true);
+  assert.equal(wrapper.style.opacity, "");
+  assert.equal(chip.style.color, result.regions[0]!.style.color);
 });
 
 test("mask scale changes mask size without changing rendered font size", () => {
@@ -794,6 +829,31 @@ test("mask scale changes mask size without changing rendered font size", () => {
   const largerWidth = Number(wrapper.style.width.replace("px", ""));
   assert.equal(chip.style.fontSize, baseFont);
   assert.equal(largerWidth >= baseWidth + 40, true);
+});
+
+test("maximum mask scale visibly expands the cover while preserving font size", () => {
+  const { img } = setupDomWithImage({ x: 0, y: 0, width: 1000, height: 1000 });
+  const renderer = new OverlayRenderer();
+  const result = fakeResult("mask-scale-maximum");
+  result.regions = [{
+    ...result.regions[0]!,
+    translatedText: "\u4f60\u597d",
+    box: { x: 300, y: 300, width: 200, height: 100 },
+    kind: "dialogue",
+    style: { ...result.regions[0]!.style, fontSize: 24 },
+  }];
+  renderer.render(img, { width: 1000, height: 1000 }, result);
+  const wrapper = document.querySelector<HTMLElement>("[data-umt-region-id='r1']")!;
+  const chip = wrapper.querySelector<HTMLElement>("[data-umt-text-chip='true']")!;
+  const baseFont = chip.style.fontSize;
+  const baseWidth = Number(wrapper.style.width.replace("px", ""));
+  const baseHeight = Number(wrapper.style.height.replace("px", ""));
+
+  renderer.setAppearance({ maskScale: 4 });
+
+  assert.equal(Number(wrapper.style.width.replace("px", "")) > baseWidth * 1.7, true);
+  assert.equal(Number(wrapper.style.height.replace("px", "")) > baseHeight * 1.7, true);
+  assert.equal(chip.style.fontSize, baseFont);
 });
 
 test("very small mask scale can shrink the mask below the OCR text box without changing font size", () => {
