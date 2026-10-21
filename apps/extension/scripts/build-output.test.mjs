@@ -35,7 +35,8 @@ test("manifest uses dynamic injection and exposes the dedicated settings page", 
   assert.equal(manifest.content_scripts, undefined);
   assert.equal(manifest.options_page, undefined);
   assert.deepEqual(manifest.options_ui, { page: "settings.html", open_in_tab: true });
-  assert.equal(manifest.version, "0.1.19");
+  const packageJson = JSON.parse(readFileSync(resolve("package.json"), "utf8"));
+  assert.equal(manifest.version, packageJson.version);
 });
 
 test("popup shell is compact and every emitted relative import exists", () => {
