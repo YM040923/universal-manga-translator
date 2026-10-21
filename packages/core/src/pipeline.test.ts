@@ -303,3 +303,25 @@ test("OcrTranslatePipeline auto-detects repeated proper-name term candidates", a
   assert.ok(seenOptions?.termCandidates?.includes("Heavenly Demon"));
   assert.ok(seenOptions?.termCandidates?.includes("Moon Blade"));
 });
+
+test("classifyRegionKind detects Japanese SFX (katakana onomatopoeia)", async () => {
+  const pipeline = new OcrTranslatePipeline({
+    profile: "network-ocr:image+openai-compatible:gpt",
+    ocr: { recognize: async () => [
+      region("r1", "ドン！", 10, 20, 80, 80),
+      region("r2", "バキッ", 100, 20, 60, 60),
+      region("r3", "ゴゴゴ", 200, 20, 70, 70),
+      region("r4", "Hello world", 10, 150, 180, 30),
+    ] },
+    translator: {
+      translate: async (items) => items.map((item) => ({ id: item.id, translatedText: item.text })),
+    },
+  });
+
+  const result = await pipeline.process({ imageBytes: new Uint8Array([1]), imageHash: "sfx-test", width: 300, height: 300, targetLanguage: "zh-CN", sourceLanguage: "auto" });
+
+  assert.equal(result.regions[0]?.kind, "sfx");
+  assert.equal(result.regions[1]?.kind, "sfx");
+  assert.equal(result.regions[2]?.kind, "sfx");
+  assert.equal(result.regions[3]?.kind, "dialogue");
+});

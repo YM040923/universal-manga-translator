@@ -288,7 +288,9 @@ function shouldJoinGroup(group: GenericOcrRegion[], next: GenericOcrRegion): boo
 
 function classifyRegionKind(region: GenericOcrRegion, imageWidth: number, imageHeight: number): GenericOcrRegion {
   if (region.kind !== "dialogue") return region;
-  return looksLikeActionLettering(region, imageWidth, imageHeight) ? { ...region, kind: "sfx" } : region;
+  return looksLikeActionLettering(region, imageWidth, imageHeight) || looksLikeJapaneseSfx(region)
+    ? { ...region, kind: "sfx" }
+    : region;
 }
 
 function looksLikeActionLettering(region: GenericOcrRegion, imageWidth: number, imageHeight: number): boolean {
@@ -301,6 +303,42 @@ function looksLikeActionLettering(region: GenericOcrRegion, imageWidth: number, 
   const averageLineLength = lines.reduce((sum, line) => sum + Array.from(line.replace(/\s+/g, "")).length, 0) / Math.max(1, lines.length);
   const largeActionBox = region.box.height >= Math.max(220, imageHeight * 0.03) && region.box.width >= Math.max(220, imageWidth * 0.25);
   return largeActionBox && uppercaseRatio >= 0.78 && lines.length <= 4 && averageLineLength <= 9;
+}
+
+/**
+ * Japanese manga SFX (onomatopoeia) is typically written in katakana or hiragana,
+ * often short, emphatic, and may include exclamation marks or repeated characters.
+ * Examples: ドン！ バキッ ゴゴゴ キラキラ ドドド
+ */
+function looksLikeJapaneseSfx(region: GenericOcrRegion): boolean {
+  const text = region.sourceText.trim();
+  if (!text || text.length > 12) return false;
+
+  // Count katakana and hiragana characters
+  const katakana = text.match(/[\u30A0-\u30FF]/g)?.length ?? 0;
+  const hiragana = text.match(/[\u3040-\u309F]/g)?.length ?? 0;
+  const cjkKanji = text.match(/[\u4E00-\u9FFF]/g)?.length ?? 0;
+
+  // SFX is predominantly kana with little to no kanji
+  const totalKana = katakana + hiragana;
+  if (totalKana === 0) return false;
+  const kanaRatio = totalKana / Array.from(text).filter((char) => /\p{L}/u.test(char)).length;
+  if (kanaRatio < 0.7) return false; // Must be mostly kana
+  if (cjkKanji > 2) return false; // Too many kanji suggests dialogue, not SFX
+
+  // Short text (typical SFX is 1-8 characters)
+  const nonSpaceChars = Array.from(text.replace(/\s+/g, ""));
+  if (nonSpaceChars.length > 10) return false;
+
+  // Common SFX patterns: repeated characters, exclamation marks, prolonged sounds
+  const hasExclamation = /[!！]/.test(text);
+  const hasRepeatedChars = /(.)\1{1,}/.test(text); // e.g., ゴゴゴ, ドドド
+  const hasProlongedSound = /ー{2,}/.test(text); // prolonged sound mark
+
+  // Small box relative to image suggests SFX rather than dialogue bubble
+  const isSmallBox = region.box.width < 200 && region.box.height < 200;
+
+  return (hasExclamation || hasRepeatedChars || hasProlongedSound || isSmallBox) && nonSpaceChars.length <= 8;
 }
 
 function mergeGroup(group: GenericOcrRegion[]): GenericOcrRegion {
