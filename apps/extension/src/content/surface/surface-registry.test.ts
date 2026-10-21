@@ -181,3 +181,43 @@ test("isLikelyReaderPage accepts stacked manga pages even when CDN image urls ar
   assert.equal(surfaces.length, 3);
   assert.equal(isLikelyReaderPage(dom.window.document, surfaces), true);
 });
+
+function setupEmbedFrameDom(): { doc: Document; surfaces: ReturnType<typeof SurfaceRegistry.scan>["surfaces"] } {
+  const dom = new JSDOM(`<!doctype html><html><body>
+    <img id="p1" src="https://cdn.example.test/a8f921.webp">
+  </body></html>`, { url: "https://embed.example.test/" });
+  globalThis.window = dom.window as unknown as Window & typeof globalThis;
+  globalThis.document = dom.window.document;
+  globalThis.HTMLElement = dom.window.HTMLElement;
+  globalThis.HTMLImageElement = dom.window.HTMLImageElement;
+  const image = dom.window.document.querySelector<HTMLImageElement>("#p1")!;
+  Object.defineProperty(image, "naturalWidth", { value: 800, configurable: true });
+  Object.defineProperty(image, "naturalHeight", { value: 12000, configurable: true });
+  image.getBoundingClientRect = () => ({ x: 20, y: 0, left: 20, top: 0, right: 820, bottom: 12000, width: 800, height: 12000, toJSON: () => ({}) });
+  return { doc: dom.window.document, surfaces: SurfaceRegistry.scan(dom.window.document).surfaces };
+}
+
+test("isLikelyReaderPage lets a reader frame inherit the chapter page that embeds it", () => {
+  const { doc, surfaces } = setupEmbedFrameDom();
+
+  assert.equal(surfaces.length, 1);
+  assert.equal(isLikelyReaderPage(doc, surfaces, { pageUrl: "https://manga.example/the-title/chapter/9", isTopFrame: false }), true);
+});
+
+test("isLikelyReaderPage keeps an empty reader frame dormant until its pages arrive", () => {
+  const doc = new JSDOM(`<!doctype html><html><body></body></html>`, { url: "https://embedded-reader.test/" }).window.document;
+
+  assert.equal(isLikelyReaderPage(doc, [], { pageUrl: "https://manga.example/the-title/chapter/9", isTopFrame: false }), false);
+});
+
+test("isLikelyReaderPage does not inherit a chapter signal for the top frame", () => {
+  const { doc, surfaces } = setupEmbedFrameDom();
+
+  assert.equal(isLikelyReaderPage(doc, surfaces, { pageUrl: "https://manga.example/the-title/chapter/9", isTopFrame: true }), false);
+});
+
+test("isLikelyReaderPage does not inherit a listing page into a reader frame", () => {
+  const { doc, surfaces } = setupEmbedFrameDom();
+
+  assert.equal(isLikelyReaderPage(doc, surfaces, { pageUrl: "https://manga.example/comics/the-title", isTopFrame: false }), false);
+});

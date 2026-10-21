@@ -66,7 +66,9 @@ async function launchContext(): Promise<BrowserContext> {
 interface FixtureChrome {
   tabs: { query: (criteria: { url: string }) => Promise<Array<{ id?: number; url?: string }>> };
   storage: { sync: { set: (value: Record<string, unknown>) => Promise<void> } };
-  scripting: { executeScript: (details: { target: { tabId: number }; files: string[] }) => Promise<unknown[]> };
+  scripting: {
+    executeScript: (details: { target: { tabId: number; allFrames?: boolean }; files: string[] }) => Promise<unknown[]>;
+  };
 }
 
 async function activateCurrentPage(context: BrowserContext, page: Page): Promise<void> {
@@ -77,7 +79,8 @@ async function activateCurrentPage(context: BrowserContext, page: Page): Promise
     const tab = tabs.find((item) => item.url === url) ?? tabs[0];
     if (!tab?.id) return { ok: false, error: "fixture tab not found" };
     await chrome.storage.sync.set({ enabledSites: { "manga.test": true } });
-    const injected = await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["content.js"] });
+    // Mirrors the product's injection: an enabled tab is injected as a whole, frames included.
+    const injected = await chrome.scripting.executeScript({ target: { tabId: tab.id, allFrames: true }, files: ["content.js"] });
     return { ok: true, injectedLength: injected.length, tabUrl: tab.url };
   }, page.url());
   expect(result.ok).toBe(true);
@@ -122,5 +125,42 @@ test("enabled extension mounts controls for dynamically appended manga images", 
     await expect(page.locator(".reader img.page-image")).toHaveCount(1, { timeout: 5000 });
     await expect(page.locator("[data-umt-panel]")).toBeVisible({ timeout: 10000 });
     await expect(page.locator("[data-umt-surface-button]")).toHaveCount(1);
+  });
+});
+
+test("enabled extension mounts per-page controls inside an embedded reader frame", async () => {
+  await runWithFixtures(async (page, context, origin) => {
+    await page.goto(`${origin}/embedded-manga.html`);
+    const reader = page.frameLocator("iframe.reader-frame");
+    await expect(page.locator("[data-umt-panel]")).toHaveCount(0);
+    await expect(reader.locator("[data-umt-surface-button]")).toHaveCount(0);
+
+    await activateCurrentPage(context, page);
+
+    await expect(reader.locator("[data-umt-surface-button]")).toHaveCount(2, { timeout: 15000 });
+    // The shell page owns no pages, so the tab-level widget can only appear from the frame's
+    // report travelling through the service worker.
+    await expect(page.locator("[data-umt-panel]")).toBeVisible({ timeout: 15000 });
+    await expect(page.locator("[data-umt-surface-button]")).toHaveCount(0);
+  });
+});
+
+test("reader frame added after activation is injected without a reload", async () => {
+  await runWithFixtures(async (page, context, origin) => {
+    await page.goto(`${origin}/lazy-embedded-manga.html`);
+    await activateCurrentPage(context, page);
+    await expect(page.locator("[data-umt-panel]")).toHaveCount(0);
+
+    await page.evaluate(() => {
+      const frame = document.createElement("iframe");
+      frame.className = "reader-frame";
+      frame.title = "Manga reader frame";
+      frame.src = "./frame-reader.html";
+      document.querySelector("#shell")?.append(frame);
+    });
+
+    const reader = page.frameLocator("iframe.reader-frame");
+    await expect(reader.locator("[data-umt-surface-button]")).toHaveCount(2, { timeout: 20000 });
+    await expect(page.locator("[data-umt-panel]")).toBeVisible({ timeout: 20000 });
   });
 });

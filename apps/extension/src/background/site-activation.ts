@@ -26,7 +26,7 @@ export async function handleActivateSiteMessage(message: UmtActivateSiteRequest,
     const settings = await loadSettings(stores);
     const next = enableSiteForUrl(settings, message.url);
     await saveSettings(next, stores);
-    await injectContentScript(message.tabId, deps);
+    await injectContentScriptIntoTab(message.tabId, deps);
     return { ok: true };
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) };
@@ -37,7 +37,7 @@ export async function maybeInjectContentScriptForTab(tabId: number, url: string 
   if (!url) return;
   const settings = await loadSettings(resolveStores(deps));
   if (!isSiteEnabled(settings, url)) return;
-  await injectContentScript(tabId, deps);
+  await injectContentScriptIntoTab(tabId, deps);
 }
 
 export async function injectContentScriptsIntoEnabledTabs(deps: TabQueryDeps): Promise<void> {
@@ -52,8 +52,16 @@ export async function injectContentScriptsIntoEnabledTabs(deps: TabQueryDeps): P
   }));
 }
 
+export function createScriptingInjectionDeps(scripting: typeof chrome.scripting = chrome.scripting): ContentScriptInjectionDeps {
+  return {
+    // Embedded readers keep their pages inside frames the top document cannot reach, so an
+    // enabled tab is injected as a whole. Each frame still asks the worker whether it may run.
+    executeScript: async (details) => { await scripting.executeScript({ target: { tabId: details.tabId, allFrames: true }, files: details.files }); },
+  };
+}
+
 export function registerSiteActivationHandlers(runtime: typeof chrome.runtime = chrome.runtime, tabs: typeof chrome.tabs = chrome.tabs, scripting: typeof chrome.scripting = chrome.scripting): void {
-  const deps: ContentScriptInjectionDeps = { executeScript: async (details) => { await scripting.executeScript({ target: { tabId: details.tabId }, files: details.files }); } };
+  const deps = createScriptingInjectionDeps(scripting);
   runtime.onMessage.addListener((message: unknown, _sender, sendResponse) => {
     if (!isUmtActivateSiteRequest(message)) return false;
     void handleActivateSiteMessage(message, deps).then(sendResponse);
@@ -75,6 +83,7 @@ export function registerSiteActivationHandlers(runtime: typeof chrome.runtime = 
   void injectContentScriptsIntoEnabledTabs(queryDeps);
 }
 
-async function injectContentScript(tabId: number, deps: ContentScriptInjectionDeps): Promise<void> {
+/** Injects into every frame of one tab; whether the site is enabled stays the caller's decision. */
+export async function injectContentScriptIntoTab(tabId: number, deps: ContentScriptInjectionDeps): Promise<void> {
   await deps.executeScript({ tabId, files: ["content.js"] });
 }

@@ -5,3 +5,6 @@ body { margin: 0; background: #0f172a; }
 .reader canvas.canvas-page { display: block; width: 800px; height: 1200px; margin: 24px auto; background-color: white; }
 .reader .background-page { background-image: url("./page-1.svg"); background-size: cover; background-position: center; }
 .icon { width: 32px; height: 32px; }
+.reader-shell { width: 900px; margin: 0 auto; padding: 16px; }
+.reader-shell h1 { margin: 0 0 12px; color: #e2e8f0; font: 600 18px sans-serif; }
+iframe.reader-frame { display: block; width: 860px; height: 1000px; border: 0; background: #111827; }

@@ -1,7 +1,16 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { handleActivateSiteMessage, injectContentScriptsIntoEnabledTabs, maybeInjectContentScriptForTab } from "./site-activation.js";
+import { createScriptingInjectionDeps, handleActivateSiteMessage, injectContentScriptsIntoEnabledTabs, maybeInjectContentScriptForTab } from "./site-activation.js";
 import { DEFAULT_SETTINGS, type SettingsStorageArea } from "../settings/settings.js";
+
+test("createScriptingInjectionDeps reaches the frames an embedded reader keeps its pages in", async () => {
+  const calls: Array<{ target: unknown; files: string[] }> = [];
+  const scripting = { executeScript: async (details: { target: unknown; files: string[] }) => { calls.push(details); } } as unknown as typeof chrome.scripting;
+
+  await createScriptingInjectionDeps(scripting).executeScript({ tabId: 12, files: ["content.js"] });
+
+  assert.deepEqual(calls, [{ target: { tabId: 12, allFrames: true }, files: ["content.js"] }]);
+});
 
 test("handleActivateSiteMessage enables the primary domain and injects content script", async () => {
   const storage = fakeStorage();

@@ -25,9 +25,24 @@ export class SurfaceRegistry {
   }
 }
 
-export function isLikelyReaderPage(root: Document = document, surfaces: RegisteredSurface[] = SurfaceRegistry.scan(root).surfaces): boolean {
-  if (looksLikeComicDirectoryUrl(root.location.href) && !looksLikeChapterUrl(root.location.href)) return false;
-  if (looksLikeChapterUrl(root.location.href)) return true;
+export interface ReaderPageCheckOptions {
+  /** The tab's top-level URL: an embedded reader frame belongs to the page the reader opened. */
+  pageUrl?: string;
+  /** Defaults to true — the frame that owns the address bar. */
+  isTopFrame?: boolean;
+}
+
+export function isLikelyReaderPage(
+  root: Document = document,
+  surfaces: RegisteredSurface[] = SurfaceRegistry.scan(root).surfaces,
+  options: ReaderPageCheckOptions = {},
+): boolean {
+  const frameUrl = root.location.href;
+  const isTopFrame = options.isTopFrame !== false;
+  // A srcdoc or cross-origin reader frame has no useful URL of its own, so it borrows the page URL.
+  const inheritsReaderPage = !isTopFrame && looksLikeChapterUrl(options.pageUrl ?? frameUrl);
+  if (looksLikeComicDirectoryUrl(frameUrl) && !looksLikeChapterUrl(frameUrl)) return false;
+  if (looksLikeChapterUrl(frameUrl)) return true;
   if (surfaces.length >= 2 && looksLikeStackedReaderSurfaces(surfaces)) return true;
   if (surfaces.length === 1) {
     const surface = surfaces[0]!;
@@ -35,7 +50,7 @@ export function isLikelyReaderPage(root: Document = document, surfaces: Register
     const viewportWidth = root.defaultView?.innerWidth ?? rect.width;
     const isTallPage = rect.height >= Math.max(1200, rect.width * 1.8);
     const fillsReaderColumn = rect.width >= Math.min(700, viewportWidth * 0.55);
-    return isTallPage && fillsReaderColumn && looksLikeChapterImageUrl(surface.imageUrl);
+    return isTallPage && fillsReaderColumn && (looksLikeChapterImageUrl(surface.imageUrl) || inheritsReaderPage);
   }
   return false;
 }

@@ -1,15 +1,41 @@
 ﻿import type { OverlayAppearance } from "../settings/settings.js";
+import type { QueueSnapshot } from "./queue/translation-queue.js";
 
 export type UmtContentCommandName = "translate" | "refresh" | "togglePause" | "clearPage" | "selectRegion" | "retranslate" | "retranslateVisible" | "cancelQueue" | "setOverlayVisibility" | "toggleOverlayVisibility" | "applyOverlayAppearance" | "applySiteSettings" | "applyWidgetSettings" | "sampleOcrSelfTest";
 
+const CONTENT_COMMAND_NAMES: readonly UmtContentCommandName[] = ["translate", "refresh", "togglePause", "clearPage", "selectRegion", "retranslate", "retranslateVisible", "cancelQueue", "setOverlayVisibility", "toggleOverlayVisibility", "applyOverlayAppearance", "applySiteSettings", "applyWidgetSettings", "sampleOcrSelfTest"];
+
+/**
+ * Commands only the top frame may act on: the selection crop is measured against the tab
+ * viewport, the widgets are mounted once per tab, and the popup's sample test expects one answer.
+ */
+const CONTROLLER_ONLY_COMMANDS = new Set<UmtContentCommandName>(["selectRegion", "applyWidgetSettings", "sampleOcrSelfTest"]);
+
+/** Page commands the top frame's floating button may forward to the frames that hold the pages. */
+const RELAYABLE_PAGE_COMMANDS = new Set<UmtContentCommandName>(["retranslateVisible", "setOverlayVisibility"]);
+
+export function isUmtContentCommandName(value: unknown): value is UmtContentCommandName {
+  return typeof value === "string" && (CONTENT_COMMAND_NAMES as readonly string[]).includes(value);
+}
+
+export function isControllerOnlyCommand(command: UmtContentCommandName): boolean {
+  return CONTROLLER_ONLY_COMMANDS.has(command);
+}
+
+export function isRelayablePageCommand(command: unknown): command is UmtContentCommandName {
+  return isUmtContentCommandName(command) && RELAYABLE_PAGE_COMMANDS.has(command);
+}
+
 export interface UmtContentCommand {
-  source: "umt-popup" | "umt-page";
+  source: "umt-popup" | "umt-page" | "umt-service-worker";
   command: UmtContentCommandName;
   visible?: boolean;
   appearance?: Partial<OverlayAppearance>;
   autoTranslate?: boolean;
   floatingButtonEnabled?: boolean;
   progressWidgetEnabled?: boolean;
+  /** Set on commands the worker routed itself: the top frame already ran the action, so it must not run it again. */
+  frameScoped?: boolean;
 }
 
 export type UmtPageSampleSelfTestResponse =
@@ -128,22 +154,9 @@ export type UmtDirectHttpResponse = UmtDirectHttpSuccess | UmtDirectHttpFailure;
 export function isUmtContentCommand(value: unknown): value is UmtContentCommand {
   if (!value || typeof value !== "object") return false;
   const candidate = value as Partial<UmtContentCommand>;
-  return (candidate.source === "umt-popup" || candidate.source === "umt-page") && (
-    candidate.command === "translate" ||
-    candidate.command === "refresh" ||
-    candidate.command === "togglePause" ||
-    candidate.command === "clearPage" ||
-    candidate.command === "selectRegion" ||
-    candidate.command === "retranslate" ||
-    candidate.command === "retranslateVisible" ||
-    candidate.command === "cancelQueue" ||
-    candidate.command === "setOverlayVisibility" ||
-    candidate.command === "toggleOverlayVisibility" ||
-    candidate.command === "applyOverlayAppearance" ||
-    candidate.command === "applySiteSettings" ||
-    candidate.command === "applyWidgetSettings" ||
-    candidate.command === "sampleOcrSelfTest"
-  );
+  if (candidate.source !== "umt-popup" && candidate.source !== "umt-page" && candidate.source !== "umt-service-worker") return false;
+  if (!isUmtContentCommandName(candidate.command)) return false;
+  return candidate.frameScoped === undefined || typeof candidate.frameScoped === "boolean";
 }
 
 export function isUmtCaptureVisibleTabRequest(value: unknown): value is UmtCaptureVisibleTabRequest {
@@ -223,5 +236,152 @@ export function isUmtActivateSiteRequest(value: unknown): value is UmtActivateSi
     && typeof candidate.url === "string";
 }
 
+/**
+ * A frame asks the service worker whether it belongs to a site the reader enabled. Only the
+ * service worker sees the tab's top-level URL, so an embedded cross-origin reader frame cannot
+ * decide for itself that it is allowed to run.
+ */
+export interface UmtFrameContextRequest {
+  source: "umt-content";
+  command: "frameContext";
+}
 
+export interface UmtFrameContextResponse {
+  ok: boolean;
+  enabled: boolean;
+  pageUrl: string;
+}
 
+/** Queue state of one frame, reported to the service worker so the tab can be summed up. */
+export interface UmtFrameStatsReport {
+  source: "umt-content";
+  command: "frameStats";
+  snapshot: QueueSnapshot;
+}
+
+export interface UmtFrameGoneReport {
+  source: "umt-content";
+  command: "frameGone";
+}
+
+/**
+ * Queue state of every non-top frame, merged by the service worker and pushed to the frame that
+ * owns the progress widget.
+ */
+export interface UmtFrameProgressMessage {
+  source: "umt-service-worker";
+  command: "frameProgress";
+  snapshot: QueueSnapshot;
+}
+
+/**
+ * The top frame pulls the merge once after it starts listening: a child frame can finish its first
+ * scan before the top frame's listener exists, and then its push would be lost for the whole visit.
+ */
+export interface UmtFrameProgressRequest {
+  source: "umt-content";
+  command: "frameProgressRequest";
+}
+
+export interface UmtFrameProgressResponse {
+  snapshot: QueueSnapshot;
+}
+
+/** The top frame has no surfaces; ask the worker to run the sample test in the busiest frame. */
+export interface UmtDelegateSelfTestRequest {
+  source: "umt-content";
+  command: "delegateSelfTest";
+}
+
+export type UmtDelegateSelfTestResponse = UmtPageSampleSelfTestResponse | { ok: false; status: "no-frame"; detail: string };
+
+/** The widget lives in the top frame, so its buttons have to reach the reader frames through the worker. */
+export interface UmtFrameRelayRequest {
+  source: "umt-content";
+  command: "relayToFrames";
+  pageCommand: UmtContentCommandName;
+  visible?: boolean;
+}
+
+export interface UmtFrameRelayResponse {
+  ok: boolean;
+}
+
+/** The top frame saw an iframe appear; ask the worker to inject into frames the tab now has. */
+export interface UmtEnsureFramesRequest {
+  source: "umt-content";
+  command: "ensureFrames";
+}
+
+export interface UmtEnsureFramesResponse {
+  ok: boolean;
+}
+
+function isQueueSnapshot(value: unknown): value is QueueSnapshot {
+  if (!value || typeof value !== "object") return false;
+  const snapshot = value as Partial<QueueSnapshot>;
+  return typeof snapshot.total === "number"
+    && typeof snapshot.queued === "number"
+    && typeof snapshot.processing === "number"
+    && typeof snapshot.completed === "number"
+    && typeof snapshot.cached === "number"
+    && typeof snapshot.empty === "number"
+    && typeof snapshot.failed === "number"
+    && typeof snapshot.cancelled === "number"
+    && typeof snapshot.paused === "boolean";
+}
+
+export function isUmtFrameContextRequest(value: unknown): value is UmtFrameContextRequest {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Partial<UmtFrameContextRequest>;
+  return candidate.source === "umt-content" && candidate.command === "frameContext";
+}
+
+export function isUmtFrameStatsReport(value: unknown): value is UmtFrameStatsReport {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Partial<UmtFrameStatsReport>;
+  return candidate.source === "umt-content"
+    && candidate.command === "frameStats"
+    && isQueueSnapshot(candidate.snapshot);
+}
+
+export function isUmtFrameGoneReport(value: unknown): value is UmtFrameGoneReport {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Partial<UmtFrameGoneReport>;
+  return candidate.source === "umt-content" && candidate.command === "frameGone";
+}
+
+export function isUmtFrameProgressMessage(value: unknown): value is UmtFrameProgressMessage {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Partial<UmtFrameProgressMessage>;
+  return candidate.source === "umt-service-worker"
+    && candidate.command === "frameProgress"
+    && isQueueSnapshot(candidate.snapshot);
+}
+
+export function isUmtFrameProgressRequest(value: unknown): value is UmtFrameProgressRequest {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Partial<UmtFrameProgressRequest>;
+  return candidate.source === "umt-content" && candidate.command === "frameProgressRequest";
+}
+
+export function isUmtDelegateSelfTestRequest(value: unknown): value is UmtDelegateSelfTestRequest {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Partial<UmtDelegateSelfTestRequest>;
+  return candidate.source === "umt-content" && candidate.command === "delegateSelfTest";
+}
+
+export function isUmtFrameRelayRequest(value: unknown): value is UmtFrameRelayRequest {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Partial<UmtFrameRelayRequest>;
+  return candidate.source === "umt-content"
+    && candidate.command === "relayToFrames"
+    && typeof candidate.pageCommand === "string"
+    && isRelayablePageCommand(candidate.pageCommand);
+}
+
+export function isUmtEnsureFramesRequest(value: unknown): value is UmtEnsureFramesRequest {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Partial<UmtEnsureFramesRequest>;
+  return candidate.source === "umt-content" && candidate.command === "ensureFrames";
+}

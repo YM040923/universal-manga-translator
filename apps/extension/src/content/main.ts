@@ -11,13 +11,26 @@ import { createScreenshotSurface, readImageSize } from "./capture/screenshot-cro
 import { requestVisibleTabScreenshot } from "./capture/screenshot-request";
 import { DebugOverlayRenderer } from "./debug-overlay-renderer";
 import { createContentLogger } from "./content-logger";
+import {
+  delegateSelfTest,
+  ensureFramesInjected,
+  isTopFrameWindow,
+  notifyFrameGone,
+  reportFrameStats,
+  requestFrameContext,
+  requestFrameProgress,
+  relayToFrames,
+  shouldScanChildFrame,
+} from "./frame/frame-context.js";
 import type { ServerEvent } from "@umt/shared/protocol";
 import { EventResultRouter } from "./events/event-result-router";
-import { isUmtContentCommand, type UmtPageSampleSelfTestResponse } from "./messages";
+import { isControllerOnlyCommand, isUmtContentCommand, isUmtFrameProgressMessage, type UmtPageSampleSelfTestResponse } from "./messages";
 import { OverlayRenderer } from "./overlay/overlay-renderer";
 import { createDocumentRectOverlayAnchor } from "./overlay/rect-anchor";
 import { ChapterProgress } from "./progress/chapter-progress";
 import { FloatingPanel } from "./panel/floating-panel";
+import { mergeQueueSnapshots } from "./queue/queue-snapshot";
+import type { QueueSnapshot } from "./queue/translation-queue";
 import { ManualSelectionController } from "./selection/manual-selection";
 import { TranslationQueue } from "./queue/translation-queue";
 import type { SurfaceStatus } from "./surface/surface-state";
@@ -26,7 +39,7 @@ import { toDetectedSurface } from "./surface/detected-surface";
 import { selectVisibleSurfaces } from "./surface/visible-surfaces";
 import { isLikelyReaderPage, SurfaceRegistry, type RegisteredSurface } from "./surface/surface-registry";
 import { renderableSurfaceResult } from "./translation-result";
-import { createJobSessionId, debounce, formatShortError, isUmtOwnedMutation, reclaimOrphanUmtNodes, requestBackendHttp } from "./utils";
+import { createJobSessionId, debounce, formatShortError, isUmtOwnedMutation, readerFrameSignature, reclaimOrphanUmtNodes, requestBackendHttp } from "./utils";
 import { getEffectiveSiteSettings, isSiteEnabled, loadSettings, saveSettings, setSiteSettings, setTranslationOverlayVisible, SECRET_STORAGE_KEY, type ExtensionSettings } from "../settings/settings";
 
 const bootstrapWindow = window as Window & { __umtContentBootstrapState?: "starting" | "running" | undefined };
@@ -39,8 +52,15 @@ if (bootstrapWindow.__umtContentBootstrapState !== "starting" && bootstrapWindow
 }
 
 async function bootstrap(): Promise<boolean> {
+  const isTopFrame = isTopFrameWindow(window);
+  // The worker owns the enabled-site decision for the tab: a frame cannot read the address bar,
+  // and an embedded reader on another domain must not be able to switch itself on.
+  const context = await requestFrameContext();
+  if (!context) return false;
+  if (!shouldScanChildFrame(isTopFrame, window.innerWidth, window.innerHeight)) return false;
+  const pageUrl = context.pageUrl;
   let settings = await loadSettings();
-  if (!isSiteEnabled(settings, window.location.href)) return false;
+  if (!isSiteEnabled(settings, pageUrl)) return false;
   reclaimOrphanUmtNodes();
   let client = createClient(settings);
   let renderer = createRenderer(settings, client);
@@ -59,6 +79,7 @@ async function bootstrap(): Promise<boolean> {
   let eventsConnected = false;
   let registry: SurfaceRegistry = SurfaceRegistry.scan(document);
   let readerUiMounted = false;
+  let childSnapshot: QueueSnapshot | undefined;
   let controls = new Map<string, SurfaceControl>();
   let activeSelection: ManualSelectionController | null = null;
   const surfaceFailureDetails = new Map<string, string>();
@@ -111,7 +132,7 @@ async function bootstrap(): Promise<boolean> {
   }
 
   function site() {
-    return getEffectiveSiteSettings(settings, window.location.href);
+    return getEffectiveSiteSettings(settings, pageUrl);
   }
 
   function shouldAutoTranslate(): boolean {
@@ -158,14 +179,15 @@ async function bootstrap(): Promise<boolean> {
   }
 
   function cacheContext(): ChapterResultCacheContext {
-    return { pageUrl: window.location.href, targetLanguage: settings.targetLanguage, providerProfile: currentProviderProfile() };
+    return { pageUrl: pageUrl, targetLanguage: settings.targetLanguage, providerProfile: currentProviderProfile() };
   }
 
   function manualSelectionCacheContext(): ManualSelectionCacheContext {
-    return { pageUrl: window.location.href, targetLanguage: settings.targetLanguage, providerProfile: currentProviderProfile() };
+    return { pageUrl: pageUrl, targetLanguage: settings.targetLanguage, providerProfile: currentProviderProfile() };
   }
 
   async function restoreCachedManualSelections(): Promise<void> {
+    if (!isTopFrame) return;
     const doc = await manualSelectionCache.read(manualSelectionCacheContext());
     for (const entry of doc.entries) {
       const result = await manualOverrides.applyToResult({ ...entry.result, surfaceId: entry.id, status: "cached" as const }, settings.targetLanguage);
@@ -186,13 +208,13 @@ async function bootstrap(): Promise<boolean> {
     const surfaces = registry.surfaces.slice(0, settings.maxFullPageSurfaces);
     // A revoked site stays mounted until the page reloads, so every re-scan path (popup
     // commands, resize, observer callbacks) has to be refused here rather than trusting setup.
-    if (!isSiteEnabled(settings, window.location.href)) {
+    if (!isSiteEnabled(settings, pageUrl)) {
       queue.setSurfaces([]);
       updateProgress();
       logger.info("site revoked", `${reason} | surfaces ignored`);
       return [];
     }
-    if (!isLikelyReaderPage(document, surfaces)) {
+    if (!isLikelyReaderPage(document, surfaces, { pageUrl, isTopFrame })) {
       queue.setSurfaces([]);
       updateProgress();
       logger.info("reader page inactive", `${reason} | found=${surfaces.length}`);
@@ -248,19 +270,42 @@ async function bootstrap(): Promise<boolean> {
     controls.get(surfaceId)?.setStatus(status, detail ? { detail } : {});
   }
 
+  /** The tab's whole queue: this frame plus whatever the reader frames reported through the worker. */
+  function tabSnapshot(): QueueSnapshot {
+    const own = queue.snapshot();
+    return childSnapshot ? mergeQueueSnapshots([own, childSnapshot]) : own;
+  }
+
   function updateProgress(): void {
-    if (settings.progressWidgetEnabled) progress.update(queue.snapshot());
+    if (!isTopFrame) {
+      reportFrameStats(queue.snapshot());
+      return;
+    }
+    if (settings.progressWidgetEnabled) progress.update(tabSnapshot());
+  }
+
+  /**
+   * A reader frame can finish its first scan before this frame's listener exists, and the worker
+   * only pushes on change; pull the merge once so an iframe-only reader still gets its widget.
+   */
+  async function syncChildProgress(): Promise<void> {
+    const snapshot = await requestFrameProgress();
+    if (!snapshot || childSnapshot || snapshot.total === 0) return;
+    childSnapshot = snapshot;
+    mountReaderUi();
+    updateProgress();
   }
 
   function resetProgress(message = "等待开始"): void {
-    if (settings.progressWidgetEnabled) progress.reset(message);
+    if (isTopFrame && settings.progressWidgetEnabled) progress.reset(message);
   }
 
   async function setProgressWidgetEnabled(enabled: boolean): Promise<void> {
     settings = { ...settings, progressWidgetEnabled: enabled };
+    if (!isTopFrame) return;
     if (enabled) {
       await progress.mount();
-      progress.update(queue.snapshot());
+      progress.update(tabSnapshot());
     } else {
       progress.remove();
     }
@@ -351,12 +396,17 @@ async function bootstrap(): Promise<boolean> {
     updateProgress();
   }
 
-  async function sampleOcrSelfTest(): Promise<UmtPageSampleSelfTestResponse> {
+  async function sampleOcrSelfTest(allowDelegate = true): Promise<UmtPageSampleSelfTestResponse> {
     const startedAt = Date.now();
     try {
       const surfaces = scanAndMountControls("self-test");
       if (!surfaces.length) {
-        return { ok: false, status: isLikelyReaderPage(document, []) ? "no-surface" : "no-reader-page", detail: "当前页没有可用于 OCR 自检的漫画图片", elapsedMs: Date.now() - startedAt, providerProfile: currentProviderProfile() };
+        // The pages usually sit in a reader frame, and only that frame can hand over a sample.
+        if (allowDelegate && isTopFrame) {
+          const delegated = await delegateSelfTest();
+          if (delegated) return delegated;
+        }
+        return { ok: false, status: isLikelyReaderPage(document, [], { pageUrl, isTopFrame }) ? "no-surface" : "no-reader-page", detail: "当前页没有可用于 OCR 自检的漫画图片", elapsedMs: Date.now() - startedAt, providerProfile: currentProviderProfile() };
       }
       const surface = surfaces[0];
       if (!surface) return { ok: false, status: "no-surface", detail: "当前页没有可用于 OCR 自检的漫画图片", elapsedMs: Date.now() - startedAt, providerProfile: currentProviderProfile() };
@@ -373,7 +423,7 @@ async function bootstrap(): Promise<boolean> {
   }
 
   function startManualSelection(): void {
-    if (!isLikelyReaderPage(document, registry.surfaces.slice(0, settings.maxFullPageSurfaces))) {
+    if (!isLikelyReaderPage(document, registry.surfaces.slice(0, settings.maxFullPageSurfaces), { pageUrl, isTopFrame })) {
       logger.info("manual selection ignored outside reader page");
       return;
     }
@@ -426,8 +476,11 @@ async function bootstrap(): Promise<boolean> {
   async function setOverlayVisibility(visible: boolean): Promise<void> {
     settings = setTranslationOverlayVisible(settings, visible);
     renderer.setVisible(visible);
+    if (!isTopFrame) return;
     floatingPanel?.setOverlayVisible(visible);
     await saveSettings(settings).catch((error) => logger.error("save overlay visibility failed", error));
+    // Only the tab's owner writes the choice down, and it forwards it to the reader frames.
+    relayToFrames("setOverlayVisibility", visible);
   }
 
   async function toggleOverlayVisibility(): Promise<void> {
@@ -454,8 +507,11 @@ async function bootstrap(): Promise<boolean> {
     resetProgress("等待开始");
     if (clearOverlay) {
       renderer.clearAll();
-      await chapterCache.clear(cacheContext()).catch((error) => logger.error("clear chapter cache failed", error));
-      await manualSelectionCache.clear(manualSelectionCacheContext()).catch((error) => logger.error("clear manual selection cache failed", error));
+      // Caches are keyed by the page, so the frame that owns the tab clears them for every frame.
+      if (isTopFrame) {
+        await chapterCache.clear(cacheContext()).catch((error) => logger.error("clear chapter cache failed", error));
+        await manualSelectionCache.clear(manualSelectionCacheContext()).catch((error) => logger.error("clear manual selection cache failed", error));
+      }
     }
     debugRenderer.clear();
     for (const control of controls.values()) control.remove();
@@ -480,8 +536,10 @@ async function bootstrap(): Promise<boolean> {
     debugRenderer.clear();
     for (const control of controls.values()) control.remove();
     controls.clear();
-    floatingPanel.setEnabled(false);
-    progress.remove();
+    if (isTopFrame) {
+      floatingPanel.setEnabled(false);
+      progress.remove();
+    }
     readerUiMounted = false;
     logger.info("site revoked", "stopped queue and cleared overlays");
   }
@@ -494,7 +552,7 @@ async function bootstrap(): Promise<boolean> {
     const previousGlossaryHash = settings.glossaryHash;
     const previousTargetLanguage = settings.targetLanguage;
     settings = await loadSettings();
-    if (!isSiteEnabled(settings, window.location.href)) {
+    if (!isSiteEnabled(settings, pageUrl)) {
       await teardownForRevokedSite();
       return;
     }
@@ -541,25 +599,42 @@ async function bootstrap(): Promise<boolean> {
 
   function mountReaderUi(): void {
     if (readerUiMounted) return;
+    readerUiMounted = true;
+    renderer.setVisible(settings.translationOverlayVisible);
+    // One button and one progress card per tab: a fixed overlay in the top document also covers
+    // reader frames, while every frame keeps its own per-page controls.
+    if (!isTopFrame) return;
     floatingPanel.mount();
     floatingPanel.setOverlayVisible(settings.translationOverlayVisible);
     floatingPanel.setEnabled(settings.floatingButtonEnabled);
     if (settings.progressWidgetEnabled) void progress.mount();
-    renderer.setVisible(settings.translationOverlayVisible);
-    readerUiMounted = true;
   }
 
   floatingPanel = new FloatingPanel({
-    onRetranslatePage: () => void retranslateVisibleSurfaces(),
+    onRetranslatePage: () => {
+      void retranslateVisibleSurfaces();
+      // The button lives in the top document, but the pages it is meant to refresh may sit in a frame.
+      relayToFrames("retranslateVisible");
+    },
     onSelectRegion: () => startManualSelection(),
     onToggleOverlayVisibility: (visible) => void setOverlayVisibility(visible),
   });
 
-  logger.info("content script started", `${location.hostname} | mode=${settings.runMode} | target=${settings.targetLanguage}`);
+  logger.info("content script started", `${isTopFrame ? "top" : "frame"} ${location.hostname} | page ${pageUrl.replace(/^\w+:\/\//, "").split("/")[0]} | mode=${settings.runMode} | target=${settings.targetLanguage}`);
   scanAndMountControls("load");
   if (shouldAutoTranslate()) void translatePage(false);
 
+  let frameSignature = isTopFrame ? readerFrameSignature() : "";
   const rescan = debounce((reason: string) => {
+    if (isTopFrame) {
+      // Readers that add or re-point their iframe after load leave that frame without a script, and
+      // a new src reloads the frame document, so the worker has to inject the tab again.
+      const next = readerFrameSignature();
+      if (next !== frameSignature) {
+        frameSignature = next;
+        ensureFramesInjected();
+      }
+    }
     scanAndMountControls(reason);
     if (shouldAutoTranslate()) void translatePage(false);
   }, 600);
@@ -581,9 +656,20 @@ async function bootstrap(): Promise<boolean> {
   });
 
   chrome.runtime?.onMessage?.addListener((message, _sender, sendResponse) => {
+    if (isUmtFrameProgressMessage(message)) {
+      if (!isTopFrame) return false;
+      childSnapshot = message.snapshot;
+      // Pages that exist only in a reader frame still need the tab's button and progress card.
+      if (message.snapshot.total > 0) mountReaderUi();
+      updateProgress();
+      return false;
+    }
     if (!isUmtContentCommand(message)) return false;
+    // A relayed command was started by this frame's own button, so the top frame must not run it twice.
+    if (message.frameScoped === true && message.source === "umt-service-worker" && isTopFrame) return false;
+    if (isControllerOnlyCommand(message.command) && !isTopFrame && !(message.command === "sampleOcrSelfTest" && message.frameScoped === true)) return false;
     if (message.command === "sampleOcrSelfTest") {
-      void sampleOcrSelfTest().then(sendResponse);
+      void sampleOcrSelfTest(message.frameScoped !== true).then(sendResponse);
       return true;
     }
     if (message.command === "translate") { queue.resume(); void translatePage(false); }
@@ -601,7 +687,7 @@ async function bootstrap(): Promise<boolean> {
     if (message.command === "setOverlayVisibility") void setOverlayVisibility(message.visible !== false);
     if (message.command === "toggleOverlayVisibility") void toggleOverlayVisibility();
     if (message.command === "applySiteSettings") {
-      settings = setSiteSettings(settings, window.location.href, { autoTranslate: message.autoTranslate === true });
+      settings = setSiteSettings(settings, pageUrl, { autoTranslate: message.autoTranslate === true });
       if (message.autoTranslate === true) void translatePage(false);
       else void cancelCurrentQueue("auto-off");
     }
@@ -625,8 +711,9 @@ async function bootstrap(): Promise<boolean> {
     activeSelection = null;
     eventSocket?.close();
     eventSocket = null;
-    void cancelCurrentQueue("page-hide");
+    void cancelCurrentQueue("page-hide").then(() => { if (!isTopFrame) notifyFrameGone(); });
   });
+  if (isTopFrame) void syncChildProgress();
   return true;
 }
 

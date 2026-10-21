@@ -23,6 +23,14 @@ export function createJobSessionId(): string {
   return `session:${Date.now()}:${Math.random().toString(36).slice(2)}`;
 }
 
+/**
+ * Identity of the frames the top document embeds. A reader that adds an iframe later, or points an
+ * existing one at a new chapter, leaves that frame without a content script until it is injected again.
+ */
+export function readerFrameSignature(root: Document = document): string {
+  return [...root.querySelectorAll<HTMLIFrameElement>("iframe")].map((frame) => frame.src).join("|").slice(0, 2048);
+}
+
 export interface Debounced<A extends unknown[]> {
   (...args: A): void;
   cancel(): void;

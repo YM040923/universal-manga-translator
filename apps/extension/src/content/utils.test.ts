@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
-import { debounce, isUmtOwnedMutation, reclaimOrphanUmtNodes } from "./utils.js";
+import { debounce, isUmtOwnedMutation, readerFrameSignature, reclaimOrphanUmtNodes } from "./utils.js";
 
 function useDom(): JSDOM {
   const dom = new JSDOM("<!doctype html><html><body></body></html>", { url: "https://manga.example" });
@@ -67,4 +67,21 @@ test("debounced collapses a burst into one trailing invocation", async () => {
   await new Promise((resolve) => setTimeout(resolve, 40));
 
   assert.deepEqual(seen, [3]);
+});
+
+test("readerFrameSignature notices a reader iframe appearing or changing chapter", () => {
+  const dom = new JSDOM(`<!doctype html><html><body><iframe id="reader" src="https://embed.example/page?id=1"></iframe></body></html>`, { url: "https://manga.example/chapter/1" });
+  globalThis.document = dom.window.document;
+  globalThis.window = dom.window as unknown as Window & typeof globalThis;
+
+  const first = readerFrameSignature();
+  dom.window.document.querySelector<HTMLIFrameElement>("#reader")!.src = "https://embed.example/page?id=2";
+  const second = readerFrameSignature();
+  const extra = document.createElement("iframe");
+  extra.src = "https://embed.example/other";
+  document.body.append(extra);
+
+  assert.equal(first, "https://embed.example/page?id=1");
+  assert.notEqual(second, first);
+  assert.equal(readerFrameSignature(), `${second}|https://embed.example/other`);
 });
