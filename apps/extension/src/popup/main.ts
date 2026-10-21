@@ -1,4 +1,4 @@
-ï»¿import {
+import {
   DEFAULT_SETTINGS,
   defaultSettingsStores,
   disableSiteForUrl,
@@ -29,13 +29,13 @@ const TEXT = {
   backendOk: "\u540e\u7aef\u5df2\u8fde\u63a5",
   backendBad: "\u540e\u7aef\u79bb\u7ebf",
   backendChecking: "\u6b63\u5728\u68c0\u6d4b\u540e\u7aef",
-  directMode: "æ’ä»¶ç›´è¿",
-  backendMode: "æœ¬åœ°åç«¯",
-  apiReady: "API å·²é…ç½®",
-  apiMissing: "API æœªé…ç½®",
-  selfTest: "è‡ªæ£€",
-  activate: "å¯ç”¨æ­¤ç½‘ç«™",
-  deactivate: "åœç”¨æ­¤ç½‘ç«™",
+  directMode: "²å¼şÖ±Á¬",
+  backendMode: "±¾µØºó¶Ë",
+  apiReady: "API ÒÑÅäÖÃ",
+  apiMissing: "API Î´ÅäÖÃ",
+  selfTest: "×Ô¼ì",
+  activate: "ÆôÓÃ´ËÍøÕ¾",
+  deactivate: "Í£ÓÃ´ËÍøÕ¾",
   translate: "\u7ffb\u8bd1\u672c\u9875",
   retranslate: "\u91cd\u7ffb\u672c\u9875",
   pause: "\u6682\u505c",
@@ -103,11 +103,11 @@ async function mountPage(root: HTMLElement, deps: PopupDeps, settingsPage: boole
     if (settings.runMode !== "backend") return;
     try { backendOnline = await (deps.checkBackend ?? defaultCheckBackend)(settings.backendUrl); }
     catch { backendOnline = false; }
-    root.querySelectorAll<HTMLElement>("[data-backend-status]").forEach((status) => { status.textContent = backendOnline ? "æœ¬åœ°åç«¯å·²è¿æ¥" : "æœ¬åœ°åç«¯ç¦»çº¿"; });
+    root.querySelectorAll<HTMLElement>("[data-backend-status]").forEach((status) => { status.textContent = backendOnline ? "±¾µØºó¶ËÒÑÁ¬½Ó" : "±¾µØºó¶ËÀëÏß"; });
     const health = root.querySelector<HTMLElement>(".health");
     if (health) {
       health.textContent = settingsPage
-        ? backendOnline ? "æœ¬åœ°åç«¯å·²è¿æ¥" : "æœ¬åœ°åç«¯ç¦»çº¿"
+        ? backendOnline ? "±¾µØºó¶ËÒÑÁ¬½Ó" : "±¾µØºó¶ËÀëÏß"
         : backendOnline ? TEXT.backendOk : TEXT.backendBad;
       health.classList.toggle("ok", backendOnline);
       health.classList.toggle("bad", !backendOnline);
@@ -177,16 +177,16 @@ async function mountPage(root: HTMLElement, deps: PopupDeps, settingsPage: boole
       const next = readDirectConfigFromDom(root, settings);
       const button = event.currentTarget as HTMLButtonElement;
       button.disabled = true;
-      setSaveFeedback(root, "æ­£åœ¨ä¿å­˜è®¾ç½®â€¦");
+      setSaveFeedback(root, "ÕıÔÚ±£´æÉèÖÃ¡­");
       try {
         settings = await saveSettings(next, stores);
         backendOnline = null;
-        saveSummary = "è®¾ç½®å·²ä¿å­˜";
+        saveSummary = "ÉèÖÃÒÑ±£´æ";
         setSaveFeedback(root, saveSummary);
         button.disabled = false;
         if (settings.runMode === "backend") void refreshBackendStatus();
       } catch {
-        saveSummary = "ä¿å­˜å¤±è´¥ï¼Œè¯·æ£€æŸ¥æµè§ˆå™¨æ‰©å±•å­˜å‚¨åé‡è¯•ã€‚";
+        saveSummary = "±£´æÊ§°Ü£¬Çë¼ì²éä¯ÀÀÆ÷À©Õ¹´æ´¢ºóÖØÊÔ¡£";
         setSaveFeedback(root, saveSummary);
         button.disabled = false;
       }
@@ -196,12 +196,12 @@ async function mountPage(root: HTMLElement, deps: PopupDeps, settingsPage: boole
         const candidate = readDirectConfigFromDom(root, settings);
         const button = event.currentTarget as HTMLButtonElement;
         button.disabled = true;
-        selfTestResults[scope] = "æ­£åœ¨æµ‹è¯•â€¦";
+        selfTestResults[scope] = "ÕıÔÚ²âÊÔ¡­";
         setApiFeedback(root, scope, selfTestResults[scope]);
         try {
           selfTestResults[scope] = await runSelfTest(candidate, deps, tab, enabled, !settingsPage || !!tab, scope === "backend" ? "all" : scope);
         } catch {
-          selfTestResults[scope] = "è‡ªæ£€æœªå®Œæˆï¼Œè¯·æ£€æŸ¥ç½‘ç»œå’Œæ¥å£åœ°å€åé‡è¯•ã€‚";
+          selfTestResults[scope] = "×Ô¼ìÎ´Íê³É£¬Çë¼ì²éÍøÂçºÍ½Ó¿ÚµØÖ·ºóÖØÊÔ¡£";
         }
         setApiFeedback(root, scope, selfTestResults[scope]);
         button.disabled = false;
@@ -253,6 +253,23 @@ async function mountPage(root: HTMLElement, deps: PopupDeps, settingsPage: boole
       const next = normalizeSettings({ ...settings, progressWidgetEnabled });
       void persist(next);
       void sendCommand("applyWidgetSettings", { progressWidgetEnabled });
+    });
+    root.querySelector<HTMLInputElement>("[data-field='enable-image-description']")?.addEventListener("change", (event) => {
+      const enableImageDescription = (event.currentTarget as HTMLInputElement).checked;
+      const next = normalizeSettings({ ...settings, enableImageDescription });
+      void persist(next);
+      // Re-render to show/hide API key field
+      render({ preserveScroll: true });
+    });
+    root.querySelector<HTMLSelectElement>("[data-field='confidence-threshold']")?.addEventListener("change", (event) => {
+      const confidenceThreshold = parseFloat((event.currentTarget as HTMLSelectElement).value) as 0.5 | 0.6 | 0.7;
+      const next = normalizeSettings({ ...settings, confidenceThreshold });
+      void persist(next);
+    });
+    root.querySelector<HTMLInputElement>("[data-field='mark-uncertain-ocr']")?.addEventListener("change", (event) => {
+      const markUncertainOcr = (event.currentTarget as HTMLInputElement).checked;
+      const next = normalizeSettings({ ...settings, markUncertainOcr });
+      void persist(next);
     });
     root.querySelector<HTMLSelectElement>("[data-field='overlay-mask-shape']")?.addEventListener("change", (event) => {
       const next = normalizeSettings({ ...settings, overlayAppearance: { ...settings.overlayAppearance, maskShape: (event.currentTarget as HTMLSelectElement).value as never } });
@@ -313,11 +330,11 @@ function popupMarkup(input: { settings: ExtensionSettings; backendOnline: boolea
   const status = unsupported ? TEXT.unsupported : enabled ? TEXT.enabled : TEXT.disabled;
   const directReady = Boolean(settings.directOcr.apiUrl && settings.directOcr.apiKeys.length && settings.directTranslator.baseUrl && settings.directTranslator.apiKey && settings.directTranslator.model);
   const healthClass = settings.runMode === "direct" ? directReady ? "ok" : "bad" : backendOnline === true ? "ok" : backendOnline === null ? "checking" : "bad";
-  const healthText = settings.runMode === "direct" ? `${TEXT.directMode} Â· ${directReady ? TEXT.apiReady : TEXT.apiMissing}` : backendOnline === true ? TEXT.backendOk : backendOnline === null ? TEXT.backendChecking : TEXT.backendBad;
+  const healthText = settings.runMode === "direct" ? `${TEXT.directMode} ¡¤ ${directReady ? TEXT.apiReady : TEXT.apiMissing}` : backendOnline === true ? TEXT.backendOk : backendOnline === null ? TEXT.backendChecking : TEXT.backendBad;
   return `<style>${popupStyles()}</style><section class="umt-popup">
-    <header class="topbar"><div class="brand"><span class="logo">è¯‘</span><div><b>${TEXT.brand}</b></div></div><button class="muted settings-button" data-action="open-settings">è®¾ç½®</button></header>
-    <div class="site-meta"><small title="${escapeAttr(domain ?? "éç½‘é¡µ")}">${escapeHtml(domain ?? "éç½‘é¡µ")}</small><span class="health ${healthClass}">${healthText}</span></div>
-    <main class="card site-card"><div><div class="site-state ${enabled ? "on" : "off"}">${status}</div><small>${enabled ? "æ­¤ç½‘ç«™å·²å…è®¸æ’ä»¶è¿è¡Œ" : "å¯ç”¨åæ‰ä¼šåœ¨è¯¥ç½‘ç«™æ³¨å…¥åŠŸèƒ½"}</small></div>${unsupported ? "" : enabled ? `<button class="danger" data-action="deactivate-site">${TEXT.deactivate}</button>` : `<button class="primary" data-action="activate-site">${TEXT.activate}</button>`}</main>
+    <header class="topbar"><div class="brand"><span class="logo">Òë</span><div><b>${TEXT.brand}</b></div></div><button class="muted settings-button" data-action="open-settings">ÉèÖÃ</button></header>
+    <div class="site-meta"><small title="${escapeAttr(domain ?? "·ÇÍøÒ³")}">${escapeHtml(domain ?? "·ÇÍøÒ³")}</small><span class="health ${healthClass}">${healthText}</span></div>
+    <main class="card site-card"><div><div class="site-state ${enabled ? "on" : "off"}">${status}</div><small>${enabled ? "´ËÍøÕ¾ÒÑÔÊĞí²å¼şÔËĞĞ" : "ÆôÓÃºó²Å»áÔÚ¸ÃÍøÕ¾×¢Èë¹¦ÄÜ"}</small></div>${unsupported ? "" : enabled ? `<button class="danger" data-action="deactivate-site">${TEXT.deactivate}</button>` : `<button class="primary" data-action="activate-site">${TEXT.activate}</button>`}</main>
     <section class="card controls">
       <button class="primary wide" data-action="translate" data-requires-enabled>${TEXT.translate}</button>
       <button data-action="retranslate" data-requires-enabled>${TEXT.retranslate}</button>
@@ -337,45 +354,53 @@ function settingsMarkup(input: { settings: ExtensionSettings; backendOnline: boo
   const { settings, backendOnline, selfTestResults, saveSummary } = input;
   const directReady = Boolean(settings.directOcr.apiUrl && settings.directOcr.apiKeys.length && settings.directTranslator.baseUrl && settings.directTranslator.apiKey && settings.directTranslator.model);
   const healthClass = settings.runMode === "direct" ? directReady ? "ok" : "bad" : backendOnline === true ? "ok" : backendOnline === null ? "checking" : "bad";
-  const healthText = settings.runMode === "direct" ? `æ’ä»¶ç›´è¿ Â· ${directReady ? TEXT.apiReady : TEXT.apiMissing}` : backendOnline === true ? "æœ¬åœ°åç«¯å·²è¿æ¥" : backendOnline === null ? "æ­£åœ¨æ£€æµ‹åç«¯" : "æœ¬åœ°åç«¯ç¦»çº¿";
+  const healthText = settings.runMode === "direct" ? `²å¼şÖ±Á¬ ¡¤ ${directReady ? TEXT.apiReady : TEXT.apiMissing}` : backendOnline === true ? "±¾µØºó¶ËÒÑÁ¬½Ó" : backendOnline === null ? "ÕıÔÚ¼ì²âºó¶Ë" : "±¾µØºó¶ËÀëÏß";
   return `<style>${popupStyles()}</style><section class="umt-settings">
     <header class="settings-header">
-      <div class="brand"><span class="logo">è¯‘</span><div><b>æ¼«è¯‘è®¾ç½®</b><small>å…¨å±€é…ç½® Â· ä»…åœ¨å·²å¯ç”¨çš„ç½‘ç«™è¿è¡Œ</small></div></div>
+      <div class="brand"><span class="logo">Òë</span><div><b>ÂşÒëÉèÖÃ</b><small>È«¾ÖÅäÖÃ ¡¤ ½öÔÚÒÑÆôÓÃµÄÍøÕ¾ÔËĞĞ</small></div></div>
       <span class="health ${healthClass}" data-backend-status>${healthText}</span>
     </header>
     <div class="settings-layout">
-      <nav class="settings-nav" aria-label="è®¾ç½®åˆ†ç±»">
-        <a href="#settings-service" data-settings-nav aria-current="location">æœåŠ¡ä¸æ¨¡å‹</a>
-        <a href="#settings-translation" data-settings-nav>ç¿»è¯‘ç­–ç•¥</a>
-        <a href="#settings-display" data-settings-nav>é˜…è¯»æ˜¾ç¤º</a>
+      <nav class="settings-nav" aria-label="ÉèÖÃ·ÖÀà">
+        <a href="#settings-service" data-settings-nav aria-current="location">·şÎñÓëÄ£ĞÍ</a>
+        <a href="#settings-translation" data-settings-nav>·­Òë²ßÂÔ</a>
+        <a href="#settings-display" data-settings-nav>ÔÄ¶ÁÏÔÊ¾</a>
       </nav>
       <main class="settings-content">
         <section class="settings-section" id="settings-service" aria-labelledby="settings-service-title">
-          <div class="section-heading"><h1 id="settings-service-title">æœåŠ¡ä¸æ¨¡å‹</h1><p>é…ç½®ç¿»è¯‘è¿è¡Œæ–¹å¼ï¼Œä»¥åŠ OCR å’Œ AI æ¥å£ã€‚</p></div>
+          <div class="section-heading"><h1 id="settings-service-title">·şÎñÓëÄ£ĞÍ</h1><p>ÅäÖÃ·­ÒëÔËĞĞ·½Ê½£¬ÒÔ¼° OCR ºÍ AI ½Ó¿Ú¡£</p></div>
           ${apiSettingsMarkup(settings, backendOnline, selfTestResults)}
-          <p class="settings-help">OCR ä¸ AI å¯åˆ†åˆ«æµ‹è¯•ã€‚å¯ç”¨ç½‘ç«™å¹¶ä»æ¼«ç”»é¡µæ‰“å¼€æ—¶ï¼ŒOCR æµ‹è¯•è¿˜ä¼šæ£€æŸ¥å½“å‰é¡µæ ·æœ¬ã€‚</p>
+          <p class="settings-help">OCR Óë AI ¿É·Ö±ğ²âÊÔ¡£ÆôÓÃÍøÕ¾²¢´ÓÂş»­Ò³´ò¿ªÊ±£¬OCR ²âÊÔ»¹»á¼ì²éµ±Ç°Ò³Ñù±¾¡£</p>
         </section>
         <section class="settings-section" id="settings-translation" aria-labelledby="settings-translation-title">
-          <div class="section-heading"><h1 id="settings-translation-title">ç¿»è¯‘ç­–ç•¥</h1><p>æ§åˆ¶è‡ªåŠ¨è¯†åˆ«çš„ç”¨é‡ä¸Šé™ï¼Œå¹¶ç»Ÿä¸€æ¼«ç”»ä¸­çš„äººåä¸æœ¯è¯­è¯‘æ³•ã€‚</p></div>
+          <div class="section-heading"><h1 id="settings-translation-title">·­Òë²ßÂÔ</h1><p>¿ØÖÆ×Ô¶¯Ê¶±ğµÄÓÃÁ¿ÉÏÏŞ£¬²¢Í³Ò»Âş»­ÖĞµÄÈËÃûÓëÊõÓïÒë·¨¡£</p></div>
           <div class="preference-grid">
             <section class="api-section">
-              <h2>OCR ç”¨é‡ä¿æŠ¤</h2>
-              <p>è¾¾åˆ°é™åˆ¶æ—¶æš‚åœè‡ªåŠ¨ç¿»è¯‘ï¼Œé¿å…æŒç»­å‘é€æ— æ•ˆè¯·æ±‚ã€‚</p>
-              <label class="api-field"><span>æ¯æ¬¡è‡ªåŠ¨æœ€å¤šå¤„ç†å›¾ç‰‡</span><input data-field="direct-ocr-max-auto-pages" type="number" min="1" max="120" value="${settings.directOcr.maxAutoOcrPages}"></label>
-              <label class="api-field"><span>è¿ç»­å¤±è´¥ååœæ­¢</span><input data-field="direct-ocr-stop-after-failures" type="number" min="1" max="10" value="${settings.directOcr.stopAfterConsecutiveFailures}"></label>
+              <h2>OCR ÓÃÁ¿±£»¤</h2>
+              <p>´ïµ½ÏŞÖÆÊ±ÔİÍ£×Ô¶¯·­Òë£¬±ÜÃâ³ÖĞø·¢ËÍÎŞĞ§ÇëÇó¡£</p>
+              <label class="api-field"><span>Ã¿´Î×Ô¶¯×î¶à´¦ÀíÍ¼Æ¬</span><input data-field="direct-ocr-max-auto-pages" type="number" min="1" max="120" value="${settings.directOcr.maxAutoOcrPages}"></label>
+              <label class="api-field"><span>Á¬ĞøÊ§°ÜºóÍ£Ö¹</span><input data-field="direct-ocr-stop-after-failures" type="number" min="1" max="10" value="${settings.directOcr.stopAfterConsecutiveFailures}"></label>
             </section>
             <section class="api-section">
-              <h2>äººåä¸æœ¯è¯­è¡¨</h2>
-              <p>æ¯è¡Œå¡«å†™â€œåŸæ–‡ = å›ºå®šè¯‘åâ€ï¼Œå¸®åŠ©ä¿æŒè§’è‰²åã€åœ°åå’Œæ‹›å¼åä¸€è‡´ã€‚</p>
-              <label class="api-field"><span>æœ¯è¯­</span><textarea data-field="glossary-text" rows="6" placeholder="Clark = å…‹æ‹‰å…‹&#10;Murim = æ­¦æ—">${escapeHtml(settings.glossaryText)}</textarea></label>
+              <h2>¸ß¼¶·­ÒëÑ¡Ïî</h2>
+              <p>µ÷ÕûÆøÅİºÏ²¢¡¢ÊÓ¾õÉÏÏÂÎÄºÍÖÃĞÅ¶È¹ıÂËĞĞÎª¡£</p>
+              ${toggle("ÆôÓÃÍ¼ÏñÃèÊöÄ£ĞÍ", "enable-image-description", settings.enableImageDescription === true, false)}
+              ${settings.enableImageDescription ? `<label class="secret-field"><span>Í¼ÏñÃèÊö API Key</span><div class="secret-control"><input data-field="image-description-api-key" type="password" autocomplete="off" placeholder="ÊäÈë API Key" value="${escapeAttr(settings.imageDescriptionApiKey ?? "")}"><button type="button" class="muted" data-action="toggle-secret" aria-label="ÏÔÊ¾Í¼ÏñÃèÊö API Key" aria-pressed="false">ÏÔÊ¾</button></div></label>` : ""}
+              ${toggle("±ê¼Ç²»È·¶¨ OCR ÇøÓò", "mark-uncertain-ocr", settings.markUncertainOcr === true, false)}
+              <label class="api-field"><span>OCR ÖÃĞÅ¶ÈãĞÖµ</span><select data-field="confidence-threshold"><option value="0.5" ${settings.confidenceThreshold === 0.5 ? "selected" : ""}>0.5£¨Ä¬ÈÏ£©</option><option value="0.6" ${settings.confidenceThreshold === 0.6 ? "selected" : ""}>0.6£¨ÖĞµÈ£©</option><option value="0.7" ${settings.confidenceThreshold === 0.7 ? "selected" : ""}>0.7£¨ÑÏ¸ñ£©</option></select></label>
+            </section>
+            <section class="api-section">
+              <h2>ÈËÃûÓëÊõÓï±í</h2>
+              <p>Ã¿ĞĞÌîĞ´"Ô­ÎÄ = ¹Ì¶¨ÒëÃû"£¬°ïÖú±£³Ö½ÇÉ«Ãû¡¢µØÃûºÍÕĞÊ½ÃûÒ»ÖÂ¡£</p>
+              <label class="api-field"><span>ÊõÓï</span><textarea data-field="glossary-text" rows="6" placeholder="Clark = ¿ËÀ­¿Ë&#10;Murim = ÎäÁÖ">${escapeHtml(settings.glossaryText)}</textarea></label>
             </section>
           </div>
         </section>
         <section class="settings-section" id="settings-display" aria-labelledby="settings-display-title">
-          <div class="section-heading"><h1 id="settings-display-title">é˜…è¯»æ˜¾ç¤º</h1><p>è°ƒæ•´æ¼«ç”»é˜…è¯»é¡µä¸Šçš„æ§ä»¶å’Œè¯‘æ–‡è¦†ç›–æ•ˆæœã€‚</p></div>
+          <div class="section-heading"><h1 id="settings-display-title">ÔÄ¶ÁÏÔÊ¾</h1><p>µ÷ÕûÂş»­ÔÄ¶ÁÒ³ÉÏµÄ¿Ø¼şºÍÒëÎÄ¸²¸ÇĞ§¹û¡£</p></div>
           <section class="api-section">
-            <h2>é¡µé¢æ§ä»¶</h2>
-            <p>è¿™äº›æ§ä»¶åªå½±å“å·²å¯ç”¨ç½‘ç«™ä¸­çš„æ¼«ç”»é˜…è¯»é¡µã€‚</p>
+            <h2>Ò³Ãæ¿Ø¼ş</h2>
+            <p>ÕâĞ©¿Ø¼şÖ»Ó°ÏìÒÑÆôÓÃÍøÕ¾ÖĞµÄÂş»­ÔÄ¶ÁÒ³¡£</p>
             ${toggle(TEXT.floatingButton, "floating-button-enabled", settings.floatingButtonEnabled, false)}
             ${toggle(TEXT.progressWidget, "progress-widget-enabled", settings.progressWidgetEnabled, false)}
           </section>
@@ -385,8 +410,8 @@ function settingsMarkup(input: { settings: ExtensionSettings; backendOnline: boo
               <label class="api-field"><span>${TEXT.maskShape}</span><select data-field="overlay-mask-shape">${shapeOptions(settings.overlayAppearance.maskShape)}</select></label>
               ${range(TEXT.fontScale, "overlay-font-scale", settings.overlayAppearance.fontScale, 0.5, 1.8)}
               ${range(TEXT.maskScale, "overlay-mask-scale", settings.overlayAppearance.maskScale, 0.2, 4)}
-              ${range(TEXT.ellipseX, "overlay-ellipse-x", settings.overlayAppearance.ellipseX, 10, 50, 1, "è‡ªåŠ¨æ¨¡å¼æŒ‰æ°”æ³¡æ¯”ä¾‹é€‰æ‹©æ¤­åœ†æˆ–åœ†è§’ï¼›å®½æ°”æ³¡ä½¿ç”¨åœ†è§’é®ç½©")}
-              ${range(TEXT.ellipseY, "overlay-ellipse-y", settings.overlayAppearance.ellipseY, 10, 50, 1, "è‡ªåŠ¨æ¨¡å¼æŒ‰æ°”æ³¡æ¯”ä¾‹é€‰æ‹©æ¤­åœ†æˆ–åœ†è§’ï¼›å®½æ°”æ³¡ä½¿ç”¨åœ†è§’é®ç½©")}
+              ${range(TEXT.ellipseX, "overlay-ellipse-x", settings.overlayAppearance.ellipseX, 10, 50, 1, "×Ô¶¯Ä£Ê½°´ÆøÅİ±ÈÀıÑ¡ÔñÍÖÔ²»òÔ²½Ç£»¿íÆøÅİÊ¹ÓÃÔ²½ÇÕÚÕÖ")}
+              ${range(TEXT.ellipseY, "overlay-ellipse-y", settings.overlayAppearance.ellipseY, 10, 50, 1, "×Ô¶¯Ä£Ê½°´ÆøÅİ±ÈÀıÑ¡ÔñÍÖÔ²»òÔ²½Ç£»¿íÆøÅİÊ¹ÓÃÔ²½ÇÕÚÕÖ")}
               ${range(TEXT.opacity, "overlay-opacity", settings.overlayAppearance.opacity, 0.05, 1)}
             </div>
             <button class="muted" data-action="reset-appearance">${TEXT.resetAppearance}</button>
@@ -394,7 +419,7 @@ function settingsMarkup(input: { settings: ExtensionSettings; backendOnline: boo
         </section>
         <footer class="api-footer">
           <div class="self-test" data-save-result role="status" aria-live="polite" ${saveSummary ? "" : "hidden"}>${escapeHtml(saveSummary)}</div>
-          <div class="api-actions"><button type="button" class="primary" data-action="save-api-settings">ä¿å­˜è®¾ç½®</button></div>
+          <div class="api-actions"><button type="button" class="primary" data-action="save-api-settings">±£´æÉèÖÃ</button></div>
         </footer>
       </main>
     </div>
@@ -406,7 +431,7 @@ function toggle(label: string, field: string, checked: boolean, requiresEnabled:
 }
 
 function shapeOptions(selected: string): string {
-  const items = [["auto", "è‡ªåŠ¨"], ["ellipse", "æ¤­åœ†"], ["rounded", "åœ†è§’"], ["transparent", "é€æ˜"]];
+  const items = [["auto", "×Ô¶¯"], ["ellipse", "ÍÖÔ²"], ["rounded", "Ô²½Ç"], ["transparent", "Í¸Ã÷"]];
   return items.map(([value, label]) => `<option value="${value}" ${value === selected ? "selected" : ""}>${label}</option>`).join("");
 }
 
@@ -424,61 +449,61 @@ function apiSettingsMarkup(settings: ExtensionSettings, backendOnline: boolean |
   const isBackend = settings.runMode === "backend";
   const keyInputs = (settings.directOcr.apiKeys.length ? settings.directOcr.apiKeys : [""])
     .map((key, index) => ocrKeyInputMarkup(key, index + 1)).join("");
-  const backendStatus = backendOnline === true ? "æœ¬åœ°åç«¯å·²è¿æ¥" : backendOnline === false ? "æœ¬åœ°åç«¯ç¦»çº¿" : "å°šæœªæ£€æµ‹";
+  const backendStatus = backendOnline === true ? "±¾µØºó¶ËÒÑÁ¬½Ó" : backendOnline === false ? "±¾µØºó¶ËÀëÏß" : "ÉĞÎ´¼ì²â";
   return `<div class="api-page">
     <section class="api-section">
-      <h2>è¿è¡Œæ–¹å¼</h2>
-      <label class="api-field"><span>ç¿»è¯‘å¤„ç†ä½ç½®</span><select data-field="run-mode"><option value="direct" ${!isBackend ? "selected" : ""}>${TEXT.directMode}</option><option value="backend" ${isBackend ? "selected" : ""}>${TEXT.backendMode}</option></select></label>
+      <h2>ÔËĞĞ·½Ê½</h2>
+      <label class="api-field"><span>·­Òë´¦ÀíÎ»ÖÃ</span><select data-field="run-mode"><option value="direct" ${!isBackend ? "selected" : ""}>${TEXT.directMode}</option><option value="backend" ${isBackend ? "selected" : ""}>${TEXT.backendMode}</option></select></label>
     </section>
     <div class="mode-panel" data-mode-panel="backend" ${isBackend ? "" : "hidden"}>
       <section class="api-section">
-        <h2>æœ¬åœ°åç«¯</h2>
-        <label class="api-field"><span>æœåŠ¡åœ°å€</span><input data-field="backend-url" type="url" value="${escapeAttr(settings.backendUrl)}" placeholder="http://127.0.0.1:47831"></label>
-        <p>çŠ¶æ€ï¼š<span data-backend-status>${backendStatus}</span></p>
-        <div class="service-test"><button type="button" class="muted" data-action="self-test-backend">æµ‹è¯•åç«¯</button><div class="self-test" data-self-test-result="backend" role="status" aria-live="polite" ${selfTestResults.backend ? "" : "hidden"}>${escapeHtml(selfTestResults.backend)}</div></div>
+        <h2>±¾µØºó¶Ë</h2>
+        <label class="api-field"><span>·şÎñµØÖ·</span><input data-field="backend-url" type="url" value="${escapeAttr(settings.backendUrl)}" placeholder="http://127.0.0.1:47831"></label>
+        <p>×´Ì¬£º<span data-backend-status>${backendStatus}</span></p>
+        <div class="service-test"><button type="button" class="muted" data-action="self-test-backend">²âÊÔºó¶Ë</button><div class="self-test" data-self-test-result="backend" role="status" aria-live="polite" ${selfTestResults.backend ? "" : "hidden"}>${escapeHtml(selfTestResults.backend)}</div></div>
       </section>
     </div>
     <div class="mode-panel" data-mode-panel="direct" ${isBackend ? "hidden" : ""}>
       <div class="service-grid">
       <section class="api-section">
-        <h2>OCR è¯†åˆ«</h2>
-        <label class="api-field"><span>OCR æ¥å£å®Œæ•´åœ°å€</span><input data-field="direct-ocr-url" type="url" placeholder="https://example.com/api/image/ocr" value="${escapeAttr(settings.directOcr.apiUrl)}"></label>
-        <p class="api-help">å¡«å†™æœåŠ¡å•†æä¾›çš„å®Œæ•´ OCR æ¥å£åœ°å€ã€‚</p>
+        <h2>OCR Ê¶±ğ</h2>
+        <label class="api-field"><span>OCR ½Ó¿ÚÍêÕûµØÖ·</span><input data-field="direct-ocr-url" type="url" placeholder="https://example.com/api/image/ocr" value="${escapeAttr(settings.directOcr.apiUrl)}"></label>
+        <p class="api-help">ÌîĞ´·şÎñÉÌÌá¹©µÄÍêÕû OCR ½Ó¿ÚµØÖ·¡£</p>
         <div class="api-key-list" data-key-list>${keyInputs}</div>
-        <button type="button" class="muted api-add-key" data-action="add-ocr-key">æ·»åŠ  OCR Key</button>
+        <button type="button" class="muted api-add-key" data-action="add-ocr-key">Ìí¼Ó OCR Key</button>
         <div class="config-grid">
-          <div class="api-field"><span id="direct-ocr-input-mode-label">å›¾ç‰‡æäº¤æ–¹å¼</span><div class="api-select-control" data-custom-select="direct-ocr-input-mode">
-            <select class="api-select-native" data-field="direct-ocr-input-mode" tabindex="-1" aria-hidden="true" hidden><option value="image_base64" ${settings.directOcr.inputMode === "image_base64" ? "selected" : ""}>Base64 æ–‡æœ¬</option><option value="file" ${settings.directOcr.inputMode === "file" ? "selected" : ""}>æ–‡ä»¶ä¸Šä¼ </option></select>
-            <button type="button" class="api-select-trigger" id="direct-ocr-input-mode-trigger" role="combobox" aria-labelledby="direct-ocr-input-mode-label" aria-haspopup="listbox" aria-expanded="false" aria-controls="direct-ocr-input-mode-options" aria-activedescendant="direct-ocr-input-mode-option-${settings.directOcr.inputMode}"><span data-select-value>${settings.directOcr.inputMode === "file" ? "æ–‡ä»¶ä¸Šä¼ " : "Base64 æ–‡æœ¬"}</span></button>
+          <div class="api-field"><span id="direct-ocr-input-mode-label">Í¼Æ¬Ìá½»·½Ê½</span><div class="api-select-control" data-custom-select="direct-ocr-input-mode">
+            <select class="api-select-native" data-field="direct-ocr-input-mode" tabindex="-1" aria-hidden="true" hidden><option value="image_base64" ${settings.directOcr.inputMode === "image_base64" ? "selected" : ""}>Base64 ÎÄ±¾</option><option value="file" ${settings.directOcr.inputMode === "file" ? "selected" : ""}>ÎÄ¼şÉÏ´«</option></select>
+            <button type="button" class="api-select-trigger" id="direct-ocr-input-mode-trigger" role="combobox" aria-labelledby="direct-ocr-input-mode-label" aria-haspopup="listbox" aria-expanded="false" aria-controls="direct-ocr-input-mode-options" aria-activedescendant="direct-ocr-input-mode-option-${settings.directOcr.inputMode}"><span data-select-value>${settings.directOcr.inputMode === "file" ? "ÎÄ¼şÉÏ´«" : "Base64 ÎÄ±¾"}</span></button>
             <div class="api-select-listbox" id="direct-ocr-input-mode-options" role="listbox" aria-labelledby="direct-ocr-input-mode-label" hidden>
-              <div class="api-select-option" id="direct-ocr-input-mode-option-image_base64" role="option" aria-selected="${settings.directOcr.inputMode === "image_base64"}" data-option-value="image_base64">Base64 æ–‡æœ¬</div>
-              <div class="api-select-option" id="direct-ocr-input-mode-option-file" role="option" aria-selected="${settings.directOcr.inputMode === "file"}" data-option-value="file">æ–‡ä»¶ä¸Šä¼ </div>
+              <div class="api-select-option" id="direct-ocr-input-mode-option-image_base64" role="option" aria-selected="${settings.directOcr.inputMode === "image_base64"}" data-option-value="image_base64">Base64 ÎÄ±¾</div>
+              <div class="api-select-option" id="direct-ocr-input-mode-option-file" role="option" aria-selected="${settings.directOcr.inputMode === "file"}" data-option-value="file">ÎÄ¼şÉÏ´«</div>
             </div>
           </div></div>
-          <label class="api-field"><span>å›¾ç‰‡å­—æ®µå</span><input type="text" data-field="direct-ocr-image-field" value="${escapeAttr(settings.directOcr.imageField)}"></label>
+          <label class="api-field"><span>Í¼Æ¬×Ö¶ÎÃû</span><input type="text" data-field="direct-ocr-image-field" value="${escapeAttr(settings.directOcr.imageField)}"></label>
         </div>
-        <details class="advanced-config"><summary><span>è‡ªå®šä¹‰ OCR æ¥å£é€‚é…</span><small>ä¸€èˆ¬æ— éœ€ä¿®æ”¹</small></summary>
-          <p class="mapping-help">ä»…å½“æ¥å£èƒ½è¿é€šä½†æ— æ³•è¯†åˆ«è¿”å›ç»“æœæ—¶è°ƒæ•´ã€‚å‰å››é¡¹å¡«å†™å“åº” JSON è·¯å¾„ï¼Œæ¯è¡Œä¸€ä¸ªå€™é€‰ï¼›é¢å¤–è¯·æ±‚å­—æ®µç”¨äºæ¥å£è¦æ±‚æäº¤çš„å‚æ•°ã€‚</p>
+        <details class="advanced-config"><summary><span>×Ô¶¨Òå OCR ½Ó¿ÚÊÊÅä</span><small>Ò»°ãÎŞĞèĞŞ¸Ä</small></summary>
+          <p class="mapping-help">½öµ±½Ó¿ÚÄÜÁ¬Í¨µ«ÎŞ·¨Ê¶±ğ·µ»Ø½á¹ûÊ±µ÷Õû¡£Ç°ËÄÏîÌîĞ´ÏìÓ¦ JSON Â·¾¶£¬Ã¿ĞĞÒ»¸öºòÑ¡£»¶îÍâÇëÇó×Ö¶ÎÓÃÓÚ½Ó¿ÚÒªÇóÌá½»µÄ²ÎÊı¡£</p>
           <div class="mapping-grid">
-            <label class="api-field"><span>æ–‡å­—åŒºåŸŸåˆ—è¡¨è·¯å¾„</span><textarea data-field="direct-ocr-regions-paths" rows="4">${escapeHtml(settings.directOcr.regionsPaths.join("\n"))}</textarea></label>
-            <label class="api-field"><span>è¯†åˆ«æ–‡å­—è·¯å¾„</span><textarea data-field="direct-ocr-text-paths" rows="3">${escapeHtml(settings.directOcr.textPaths.join("\n"))}</textarea></label>
-            <label class="api-field"><span>æ–‡å­—åæ ‡è·¯å¾„</span><textarea data-field="direct-ocr-box-paths" rows="4">${escapeHtml(settings.directOcr.boxPaths.join("\n"))}</textarea></label>
-            <label class="api-field"><span>ç½®ä¿¡åº¦è·¯å¾„</span><textarea data-field="direct-ocr-confidence-paths" rows="3">${escapeHtml(settings.directOcr.confidencePaths.join("\n"))}</textarea></label>
-            <label class="api-field mapping-wide"><span>é¢å¤–è¯·æ±‚å­—æ®µï¼ˆJSONï¼‰</span><textarea data-field="direct-ocr-static-fields" rows="2">${escapeHtml(settings.directOcr.staticFieldsText)}</textarea></label>
+            <label class="api-field"><span>ÎÄ×ÖÇøÓòÁĞ±íÂ·¾¶</span><textarea data-field="direct-ocr-regions-paths" rows="4">${escapeHtml(settings.directOcr.regionsPaths.join("\n"))}</textarea></label>
+            <label class="api-field"><span>Ê¶±ğÎÄ×ÖÂ·¾¶</span><textarea data-field="direct-ocr-text-paths" rows="3">${escapeHtml(settings.directOcr.textPaths.join("\n"))}</textarea></label>
+            <label class="api-field"><span>ÎÄ×Ö×ø±êÂ·¾¶</span><textarea data-field="direct-ocr-box-paths" rows="4">${escapeHtml(settings.directOcr.boxPaths.join("\n"))}</textarea></label>
+            <label class="api-field"><span>ÖÃĞÅ¶ÈÂ·¾¶</span><textarea data-field="direct-ocr-confidence-paths" rows="3">${escapeHtml(settings.directOcr.confidencePaths.join("\n"))}</textarea></label>
+            <label class="api-field mapping-wide"><span>¶îÍâÇëÇó×Ö¶Î£¨JSON£©</span><textarea data-field="direct-ocr-static-fields" rows="2">${escapeHtml(settings.directOcr.staticFieldsText)}</textarea></label>
           </div>
         </details>
-        <div class="service-test"><button type="button" class="muted" data-action="self-test-ocr">æµ‹è¯• OCR</button><div class="self-test" data-self-test-result="ocr" role="status" aria-live="polite" ${selfTestResults.ocr ? "" : "hidden"}>${escapeHtml(selfTestResults.ocr)}</div></div>
+        <div class="service-test"><button type="button" class="muted" data-action="self-test-ocr">²âÊÔ OCR</button><div class="self-test" data-self-test-result="ocr" role="status" aria-live="polite" ${selfTestResults.ocr ? "" : "hidden"}>${escapeHtml(selfTestResults.ocr)}</div></div>
       </section>
       <section class="api-section">
-        <h2>AI ç¿»è¯‘</h2>
-        <label class="api-field"><span>OpenAI å…¼å®¹ Base URL</span><input data-field="direct-translator-base-url" type="url" placeholder="https://api.example/v1" value="${escapeAttr(settings.directTranslator.baseUrl)}"></label>
-        <p class="api-help">å¡«å†™æœåŠ¡æ ¹åœ°å€ï¼Œé€šå¸¸ä»¥ /v1 ç»“å°¾ã€‚</p>
+        <h2>AI ·­Òë</h2>
+        <label class="api-field"><span>OpenAI ¼æÈİ Base URL</span><input data-field="direct-translator-base-url" type="url" placeholder="https://api.example/v1" value="${escapeAttr(settings.directTranslator.baseUrl)}"></label>
+        <p class="api-help">ÌîĞ´·şÎñ¸ùµØÖ·£¬Í¨³£ÒÔ /v1 ½áÎ²¡£</p>
         <div class="secret-field">
-          <label class="secret-label" for="translator-api-key">ç¿»è¯‘ API Key</label>
-          <div class="secret-control"><input id="translator-api-key" data-field="direct-translator-api-key" type="password" autocomplete="off" aria-label="ç¿»è¯‘ API Key" placeholder="è¾“å…¥ API Key" value="${escapeAttr(settings.directTranslator.apiKey)}"><button type="button" class="muted" data-action="toggle-secret" aria-label="æ˜¾ç¤ºç¿»è¯‘ API Key" aria-pressed="false">æ˜¾ç¤º</button></div>
+          <label class="secret-label" for="translator-api-key">·­Òë API Key</label>
+          <div class="secret-control"><input id="translator-api-key" data-field="direct-translator-api-key" type="password" autocomplete="off" aria-label="·­Òë API Key" placeholder="ÊäÈë API Key" value="${escapeAttr(settings.directTranslator.apiKey)}"><button type="button" class="muted" data-action="toggle-secret" aria-label="ÏÔÊ¾·­Òë API Key" aria-pressed="false">ÏÔÊ¾</button></div>
         </div>
-        <label class="api-field"><span>æ¨¡å‹ ID</span><input data-field="direct-translator-model" type="text" placeholder="ä¾‹å¦‚ gpt-4.1-mini" value="${escapeAttr(settings.directTranslator.model)}"></label>
-        <div class="service-test"><button type="button" class="muted" data-action="self-test-ai">æµ‹è¯• AI</button><div class="self-test" data-self-test-result="ai" role="status" aria-live="polite" ${selfTestResults.ai ? "" : "hidden"}>${escapeHtml(selfTestResults.ai)}</div></div>
+        <label class="api-field"><span>Ä£ĞÍ ID</span><input data-field="direct-translator-model" type="text" placeholder="ÀıÈç gpt-4.1-mini" value="${escapeAttr(settings.directTranslator.model)}"></label>
+        <div class="service-test"><button type="button" class="muted" data-action="self-test-ai">²âÊÔ AI</button><div class="self-test" data-self-test-result="ai" role="status" aria-live="polite" ${selfTestResults.ai ? "" : "hidden"}>${escapeHtml(selfTestResults.ai)}</div></div>
       </section>
       </div>
     </div>
@@ -583,7 +608,7 @@ function bindOcrInputModeSelect(root: HTMLElement): void {
 function ocrKeyInputMarkup(value: string, index: number): string {
   return `<div class="secret-field" data-key-row>
     <label class="secret-label" for="ocr-api-key-${index}">OCR API Key ${index}</label>
-    <div class="secret-control"><input id="ocr-api-key-${index}" data-field="direct-ocr-key" type="password" autocomplete="off" spellcheck="false" aria-label="OCR API Key ${index}" placeholder="è¾“å…¥ OCR API Key" value="${escapeAttr(value)}"><button type="button" class="muted" data-action="toggle-secret" aria-label="æ˜¾ç¤º OCR API Key ${index}" aria-pressed="false">æ˜¾ç¤º</button><button type="button" class="muted" data-action="remove-ocr-key" aria-label="ç§»é™¤ OCR API Key ${index}" title="ç§»é™¤">Ã—</button></div>
+    <div class="secret-control"><input id="ocr-api-key-${index}" data-field="direct-ocr-key" type="password" autocomplete="off" spellcheck="false" aria-label="OCR API Key ${index}" placeholder="ÊäÈë OCR API Key" value="${escapeAttr(value)}"><button type="button" class="muted" data-action="toggle-secret" aria-label="ÏÔÊ¾ OCR API Key ${index}" aria-pressed="false">ÏÔÊ¾</button><button type="button" class="muted" data-action="remove-ocr-key" aria-label="ÒÆ³ı OCR API Key ${index}" title="ÒÆ³ı">¡Á</button></div>
   </div>`;
 }
 
@@ -594,9 +619,9 @@ function bindSecretVisibility(root: ParentNode): void {
       if (!input) return;
       const visible = input.type === "password";
       input.type = visible ? "text" : "password";
-      button.textContent = visible ? "éšè—" : "æ˜¾ç¤º";
+      button.textContent = visible ? "Òş²Ø" : "ÏÔÊ¾";
       button.setAttribute("aria-pressed", String(visible));
-      button.setAttribute("aria-label", `${visible ? "éšè—" : "æ˜¾ç¤º"} ${input.getAttribute("aria-label") ?? "å¯†é’¥"}`);
+      button.setAttribute("aria-label", `${visible ? "Òş²Ø" : "ÏÔÊ¾"} ${input.getAttribute("aria-label") ?? "ÃÜÔ¿"}`);
     });
   });
 }
@@ -615,8 +640,8 @@ function bindRemoveOcrKey(row: HTMLElement, root: HTMLElement): void {
       const removeButton = item.querySelector<HTMLButtonElement>("[data-action='remove-ocr-key']");
       if (label) { label.htmlFor = `ocr-api-key-${number}`; label.textContent = `OCR API Key ${number}`; }
       if (input) { input.id = `ocr-api-key-${number}`; input.setAttribute("aria-label", `OCR API Key ${number}`); }
-      showButton?.setAttribute("aria-label", `æ˜¾ç¤º OCR API Key ${number}`);
-      removeButton?.setAttribute("aria-label", `ç§»é™¤ OCR API Key ${number}`);
+      showButton?.setAttribute("aria-label", `ÏÔÊ¾ OCR API Key ${number}`);
+      removeButton?.setAttribute("aria-label", `ÒÆ³ı OCR API Key ${number}`);
     });
   });
 }
@@ -676,4 +701,5 @@ async function defaultSendMessageToTab(tabId: number, message: UmtContentCommand
 async function defaultActivateSite(tabId: number, url: string): Promise<UmtActivateSiteResponse> { return await chrome.runtime.sendMessage({ source: "umt-popup", command: "activateSite", tabId, url }); }
 function escapeHtml(value: string): string { return value.replace(/[&<>"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;" })[char] ?? char); }
 function escapeAttr(value: string): string { return escapeHtml(value); }
+
 

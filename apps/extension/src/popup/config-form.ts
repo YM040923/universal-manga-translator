@@ -28,6 +28,10 @@ export function readDirectConfigFromDom(root: HTMLElement, settings: ExtensionSe
       model: value("direct-translator-model"),
     },
     glossaryText: value("glossary-text"),
+    enableImageDescription: root.querySelector<HTMLInputElement>("[data-field='enable-image-description']")?.checked ?? settings.enableImageDescription,
+    imageDescriptionApiKey: value("image-description-api-key"),
+    markUncertainOcr: root.querySelector<HTMLInputElement>("[data-field='mark-uncertain-ocr']")?.checked ?? settings.markUncertainOcr,
+    confidenceThreshold: parseFloat(value("confidence-threshold")) as 0.5 | 0.6 | 0.7,
   });
 }
 

@@ -88,6 +88,11 @@ export interface ExtensionSettings {
   directTranslator: DirectTranslatorSettings;
   /** @deprecated Use autoTranslateDefault. Kept optional for migration from older UI code. */
   autoTranslate?: boolean;
+  // Advanced translation features (Schemes 2B, 3B+C)
+  enableImageDescription?: boolean;
+  imageDescriptionApiKey?: string;
+  markUncertainOcr?: boolean;
+  confidenceThreshold?: 0.5 | 0.6 | 0.7;
 }
 
 export interface LegacyExtensionSettings extends Partial<ExtensionSettings> {
@@ -112,11 +117,12 @@ export interface PersistedSecrets {
   version: 1;
   ocrApiKeys: string[];
   translatorApiKey: string;
+  imageDescriptionApiKey?: string;
 }
 
 export const SECRET_STORAGE_KEY = "umt.secrets:v1";
 
-const EMPTY_SECRETS: PersistedSecrets = { version: 1, ocrApiKeys: [], translatorApiKey: "" };
+const EMPTY_SECRETS: PersistedSecrets = { version: 1, ocrApiKeys: [], translatorApiKey: "", imageDescriptionApiKey: "" };
 
 export function defaultSettingsStores(): SettingsStores {
   return { preferences: chrome.storage.sync, secrets: chrome.storage.local };
@@ -171,6 +177,11 @@ export const DEFAULT_SETTINGS: ExtensionSettings = {
     apiKey: "",
     model: "gpt-4.1-mini",
   },
+  // Advanced translation features (Schemes 2B, 3B+C)
+  enableImageDescription: false,
+  imageDescriptionApiKey: "",
+  markUncertainOcr: false,
+  confidenceThreshold: 0.5,
 };
 
 const PREFERENCE_KEYS = [...Object.keys(DEFAULT_SETTINGS), "autoTranslate"];
@@ -208,6 +219,11 @@ export function normalizeSettings(input: LegacyExtensionSettings = {}): Extensio
     glossaryHash: glossaryHash(glossary),
     directOcr: normalizeDirectOcr(input.directOcr),
     directTranslator: normalizeDirectTranslator(input.directTranslator),
+    // Advanced translation features (Schemes 2B, 3B+C)
+    enableImageDescription: typeof input.enableImageDescription === "boolean" ? input.enableImageDescription : DEFAULT_SETTINGS.enableImageDescription,
+    imageDescriptionApiKey: typeof input.imageDescriptionApiKey === "string" ? input.imageDescriptionApiKey.trim() : "",
+    markUncertainOcr: typeof input.markUncertainOcr === "boolean" ? input.markUncertainOcr : DEFAULT_SETTINGS.markUncertainOcr,
+    confidenceThreshold: input.confidenceThreshold === 0.6 || input.confidenceThreshold === 0.7 ? input.confidenceThreshold : 0.5,
   };
 }
 
@@ -297,17 +313,19 @@ export async function saveSettings(settings: LegacyExtensionSettings, stores: Se
     version: 1,
     ocrApiKeys: normalized.directOcr.apiKeys,
     translatorApiKey: normalized.directTranslator.apiKey,
+    imageDescriptionApiKey: normalized.imageDescriptionApiKey ?? "",
   } satisfies PersistedSecrets });
   await stores.preferences.set(toPreferences(normalized));
   return normalized;
 }
 
 function toPreferences(settings: ExtensionSettings): Record<string, unknown> {
-  const { directOcr, directTranslator, ...rest } = settings;
+  const { directOcr, directTranslator, imageDescriptionApiKey, ...rest } = settings;
   return {
     ...rest,
     directOcr: { ...directOcr, apiKeys: [] },
     directTranslator: { ...directTranslator, apiKey: "" },
+    imageDescriptionApiKey: "",
   };
 }
 
@@ -334,6 +352,7 @@ async function readSecrets(area: SettingsStorageArea): Promise<PersistedSecrets 
     version: 1,
     ocrApiKeys: Array.isArray(doc.ocrApiKeys) ? doc.ocrApiKeys.filter((key): key is string => typeof key === "string") : [],
     translatorApiKey: typeof doc.translatorApiKey === "string" ? doc.translatorApiKey : "",
+    imageDescriptionApiKey: typeof doc.imageDescriptionApiKey === "string" ? doc.imageDescriptionApiKey : "",
   };
 }
 
@@ -342,6 +361,7 @@ function mergeSecrets(saved: LegacyExtensionSettings, secrets: PersistedSecrets)
     ...saved,
     directOcr: { ...(saved.directOcr ?? {}), apiKeys: secrets.ocrApiKeys },
     directTranslator: { ...(saved.directTranslator ?? {}), apiKey: secrets.translatorApiKey },
+    imageDescriptionApiKey: secrets.imageDescriptionApiKey ?? "",
   };
 }
 

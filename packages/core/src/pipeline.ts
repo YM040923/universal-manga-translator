@@ -19,6 +19,10 @@ export interface CorePipelineInput extends GenericOcrImageInput {
   termCandidates?: string[];
   /** Aborts both the OCR and the translation request for this page. */
   signal?: AbortSignal;
+  /** Minimum OCR confidence threshold (0-1). Regions below this are filtered out. */
+  confidenceThreshold?: number;
+  /** Mark uncertain OCR regions in prompt when enabled */
+  markUncertainOcr?: boolean;
 }
 
 export interface CoreOcrProvider {
@@ -61,8 +65,9 @@ export class OcrTranslatePipeline {
   }
 
   async process(input: CorePipelineInput): Promise<CorePipelineResult> {
+    const confidenceThreshold = input.confidenceThreshold ?? 0.5;
     const ocrRegions = (await this.readOcrRegions(input))
-      .filter((region) => region.confidence >= 0.5)
+      .filter((region) => region.confidence >= confidenceThreshold)
       .map((region) => classifyRegionKind(region, input.width, input.height));
     const textBlocks = groupOcrRegionsIntoTextBlocks(ocrRegions, input.readingDirection);
     const translationOptions: TextTranslationOptions = { retranslate: input.retranslate === true };
@@ -73,7 +78,7 @@ export class OcrTranslatePipeline {
     const termCandidates = mergeUniqueTerms([...(input.termCandidates ?? []), ...extractTermCandidates(textBlocks)]);
     if (termCandidates.length) translationOptions.termCandidates = termCandidates;
     const translated = await this.options.translator.translate(
-      buildTranslationItems(textBlocks),
+      buildTranslationItems(textBlocks, input.width, input.height),
       input.targetLanguage,
       input.sourceLanguage,
       translationOptions,
@@ -126,19 +131,47 @@ export class OcrTranslatePipeline {
 
 const inFlightOcrReads = new Map<string, Promise<GenericOcrRegion[]>>();
 
-function buildTranslationItems(regions: GenericOcrRegion[]): TextTranslationItem[] {
-  return regions.map((region, index) => ({
-    id: region.id,
-    text: region.sourceText,
-    context: [
-      `order ${index + 1}/${regions.length}`,
-      `kind: ${region.kind}`,
-      `orientation: ${region.orientation}`,
-      `box: x=${Math.round(region.box.x)}, y=${Math.round(region.box.y)}, w=${Math.round(region.box.width)}, h=${Math.round(region.box.height)}`,
-      index > 0 ? `previous: ${compactContextText(regions[index - 1]!.sourceText)}` : "",
-      index < regions.length - 1 ? `next: ${compactContextText(regions[index + 1]!.sourceText)}` : "",
-    ].filter(Boolean).join("; "),
-  }));
+function buildTranslationItems(regions: GenericOcrRegion[], imageWidth?: number, imageHeight?: number): TextTranslationItem[] {
+  return regions.map((region, index) => {
+    const locationDesc = describeLocation(region, imageWidth, imageHeight);
+    return {
+      id: region.id,
+      text: region.sourceText,
+      context: [
+        locationDesc,
+        `order ${index + 1}/${regions.length}`,
+        `kind: ${region.kind}`,
+        `orientation: ${region.orientation}`,
+        `box: x=${Math.round(region.box.x)}, y=${Math.round(region.box.y)}, w=${Math.round(region.box.width)}, h=${Math.round(region.box.height)}`,
+        index > 0 ? `previous: ${compactContextText(regions[index - 1]!.sourceText)}` : "",
+        index < regions.length - 1 ? `next: ${compactContextText(regions[index + 1]!.sourceText)}` : "",
+      ].filter(Boolean).join("; "),
+    };
+  });
+}
+
+function describeLocation(region: GenericOcrRegion, imageWidth?: number, imageHeight?: number): string {
+  if (!imageWidth || !imageHeight) return "";
+  
+  // Determine vertical position
+  const centerY = region.box.y + region.box.height / 2;
+  const verticalPos = centerY < imageHeight * 0.3 ? "top" : centerY > imageHeight * 0.7 ? "bottom" : "middle";
+  
+  // Determine horizontal position
+  const centerX = region.box.x + region.box.width / 2;
+  const horizontalPos = centerX < imageWidth * 0.35 ? "left" : centerX > imageWidth * 0.65 ? "right" : "center";
+  
+  // Determine size category
+  const area = region.box.width * region.box.height;
+  const totalArea = imageWidth * imageHeight;
+  const areaRatio = area / totalArea;
+  const sizeDesc = areaRatio > 0.15 ? "large" : areaRatio > 0.05 ? "medium" : "small";
+  
+  // Determine shape
+  const aspectRatio = region.box.width / region.box.height;
+  const shapeDesc = aspectRatio > 3 ? "wide strip" : aspectRatio > 1.5 ? "horizontal box" : aspectRatio < 0.4 ? "tall box" : "box";
+  
+  return `${verticalPos}-${horizontalPos} ${sizeDesc} ${shapeDesc}`;
 }
 
 function compactContextText(text: string): string {
@@ -259,11 +292,11 @@ function shouldJoinGroup(group: GenericOcrRegion[], next: GenericOcrRegion): boo
   if (next.orientation === "vertical") return false;
   const union = unionRect(group.map((region) => region.box));
   const averageHeight = (previous.box.height + next.box.height) / 2;
-  if (verticalOverlap(union, next.box) >= Math.min(union.height, next.box.height) * 0.55) {
+  if (verticalOverlap(union, next.box) >= Math.min(union.height, next.box.height) * 0.60) {
     const horizontalGap = Math.max(0, next.box.x - (union.x + union.width));
     const maxSameLineGap = Math.max(80, averageHeight * 3.5);
     if (next.kind === "narration" && horizontalGap <= maxSameLineGap) return true;
-    if (next.kind === "dialogue" && horizontalGap <= Math.max(60, averageHeight * 2.4)) return true;
+    if (next.kind === "dialogue" && horizontalGap <= Math.max(60, averageHeight * 1.8)) return true;
   }
   const previousBottom = previous.box.y + previous.box.height;
   const verticalGap = next.box.y - previousBottom;

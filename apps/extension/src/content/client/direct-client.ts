@@ -185,6 +185,8 @@ export class DirectClient implements TranslatorClient {
         previousTranslations,
         termCandidates,
         signal: job.controller.signal,
+        confidenceThreshold: this.settings.confidenceThreshold ?? 0.5,
+        markUncertainOcr: this.settings.markUncertainOcr === true,
       });
       const regions = result.regions.map((region) => toOverlayRegion(region));
       const rawSurfaceResult: SurfaceResult = {
