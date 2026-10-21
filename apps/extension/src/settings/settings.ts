@@ -13,6 +13,7 @@ export type ImageRange = "viewport" | "fullPage";
 export type SiteScope = "origin" | "similarPath";
 export type OverlayMaskShape = "auto" | "ellipse" | "rounded" | "transparent";
 export type RunMode = "direct" | "backend";
+export type ReadingMode = "auto" | "normal" | "japanese";
 
 export interface OverlayAppearance {
   maskShape: OverlayMaskShape;
@@ -27,6 +28,7 @@ export interface SiteSettings {
   autoTranslate: boolean;
   scope: SiteScope;
   pathPrefix?: string;
+  readingMode?: ReadingMode;
 }
 
 export interface DirectOcrSettings {
@@ -55,6 +57,7 @@ export interface EffectiveSiteSettings {
   scope: SiteScope;
   pathPrefix: string;
   unsupported: boolean;
+  readingMode: ReadingMode;
 }
 
 export interface ExtensionSettings {
@@ -384,16 +387,18 @@ export function setTranslationOverlayVisible(settings: ExtensionSettings, visibl
 
 export function getEffectiveSiteSettings(settings: ExtensionSettings, pageUrl: string): EffectiveSiteSettings {
   const parsed = parseHttpUrl(pageUrl);
-  if (!parsed) return { origin: "", autoTranslate: false, scope: "origin", pathPrefix: "/", unsupported: true };
+  if (!parsed) return { origin: "", autoTranslate: false, scope: "origin", pathPrefix: "/", unsupported: true, readingMode: "auto" };
   const override = settings.siteSettings[parsed.origin];
   const scope = override?.scope ?? "origin";
   const pathPrefix = scope === "similarPath" ? normalizePathPrefix(override?.pathPrefix ?? deriveSimilarPathPrefix(parsed.pathname)) : "/";
+  const readingMode = override?.readingMode ?? "auto";
   return {
     origin: parsed.origin,
     autoTranslate: override?.autoTranslate ?? settings.autoTranslateDefault,
     scope,
     pathPrefix,
     unsupported: false,
+    readingMode,
   };
 }
 
@@ -403,6 +408,7 @@ export function setSiteSettings(settings: ExtensionSettings, pageUrl: string, pa
   const current = getEffectiveSiteSettings(settings, pageUrl);
   const scope = patch.scope ?? current.scope;
   const pathPrefix = scope === "similarPath" ? normalizePathPrefix(patch.pathPrefix ?? current.pathPrefix) : "/";
+  const readingMode = patch.readingMode ?? current.readingMode;
   return normalizeSettings({
     ...settings,
     siteSettings: {
@@ -411,6 +417,7 @@ export function setSiteSettings(settings: ExtensionSettings, pageUrl: string, pa
         autoTranslate: patch.autoTranslate ?? current.autoTranslate,
         scope,
         pathPrefix,
+        readingMode,
       },
     },
   });
@@ -449,10 +456,14 @@ function normalizeSiteSettings(value: unknown): Record<string, SiteSettings> {
     const candidate = raw as Partial<SiteSettings>;
     if (typeof candidate.autoTranslate !== "boolean") continue;
     const scope: SiteScope = candidate.scope === "similarPath" ? "similarPath" : "origin";
+    const readingMode: ReadingMode = candidate.readingMode === "normal" || candidate.readingMode === "japanese" || candidate.readingMode === "auto"
+      ? candidate.readingMode
+      : "auto";
     normalized[parsed.origin] = {
       autoTranslate: candidate.autoTranslate,
       scope,
       pathPrefix: scope === "similarPath" ? normalizePathPrefix(candidate.pathPrefix) : "/",
+      readingMode,
     };
   }
   return normalized;

@@ -34,6 +34,22 @@ test("groupOcrRegionsIntoTextBlocks dedupes overlapping OCR fragments", () => {
   assert.equal(blocks[0]?.id, "high");
 });
 
+test("groupOcrRegionsIntoTextBlocks respects RTL reading direction for same-row regions", () => {
+  const blocks = groupOcrRegionsIntoTextBlocks(
+    [
+      { ...region("r1", "右", 600, 20), kind: "sfx" as const },
+      { ...region("r2", "中", 300, 20), kind: "sfx" as const },
+      { ...region("r3", "左", 10, 20), kind: "sfx" as const },
+    ],
+    "rtl",
+  );
+
+  assert.equal(blocks.length, 3);
+  assert.equal(blocks[0]?.sourceText, "右");
+  assert.equal(blocks[1]?.sourceText, "中");
+  assert.equal(blocks[2]?.sourceText, "左");
+});
+
 test("OcrTranslatePipeline does not cache empty OCR results", async () => {
   let saves = 0;
   const cache: CoreOcrCache = { get: async () => null, set: async () => { saves += 1; } };
@@ -48,6 +64,33 @@ test("OcrTranslatePipeline does not cache empty OCR results", async () => {
 
   assert.equal(saves, 0);
   assert.equal(pipeline.lastOcrCacheStatus, "miss");
+});
+
+test("OcrTranslatePipeline filters out low-confidence OCR regions", async () => {
+  let translatedItems: TextTranslationItem[] = [];
+  const pipeline = new OcrTranslatePipeline({
+    profile: "network-ocr:image+openai-compatible:gpt",
+    ocr: {
+      recognize: async () => [
+        region("r1", "Good text", 10, 20, 80, 24, 0.9),
+        region("r2", "Bad text", 10, 200, 80, 24, 0.3),
+        region("r3", "Borderline", 10, 380, 80, 24, 0.5),
+      ],
+    },
+    translator: {
+      translate: async (items) => {
+        translatedItems = items;
+        return items.map((item) => ({ id: item.id, translatedText: "译" }));
+      },
+    },
+  });
+
+  await pipeline.process({ imageBytes: new Uint8Array([1]), imageHash: "confidence-test", width: 100, height: 500, targetLanguage: "zh-CN", sourceLanguage: "auto" });
+
+  assert.equal(translatedItems.length, 2);
+  assert.ok(translatedItems.some((item) => item.text === "Good text"));
+  assert.ok(translatedItems.some((item) => item.text === "Borderline"));
+  assert.ok(!translatedItems.some((item) => item.text === "Bad text"));
 });
 
 test("OcrTranslatePipeline can reuse cached OCR regions during retranslate", async () => {
@@ -66,6 +109,45 @@ test("OcrTranslatePipeline can reuse cached OCR regions during retranslate", asy
   assert.equal(ocrCalls, 0);
   assert.equal(pipeline.lastOcrCacheStatus, "hit");
   assert.equal(result.regions[0]?.translatedText, "重新翻译");
+});
+
+test("OcrTranslatePipeline does not cache garbled OCR results", async () => {
+  let saves = 0;
+  const cache: CoreOcrCache = { get: async () => null, set: async () => { saves += 1; } };
+  const pipeline = new OcrTranslatePipeline({
+    profile: "network-ocr:image+openai-compatible:gpt",
+    ocr: { recognize: async () => [region("r1", "ãƒ†ã‚¹ãƒˆ", 10, 20)] },
+    translator: { translate: async (items) => items.map((item) => ({ id: item.id, translatedText: item.text })) },
+    ocrCache: cache,
+  });
+
+  await pipeline.process({ imageBytes: new Uint8Array([1]), imageHash: "garbled-write", width: 100, height: 100, targetLanguage: "zh-CN", sourceLanguage: "auto" });
+
+  assert.equal(saves, 0);
+});
+
+test("OcrTranslatePipeline re-runs OCR when the cache holds garbled regions", async () => {
+  let ocrCalls = 0;
+  const input = { imageBytes: new Uint8Array([1]), imageHash: "garbled-read", width: 100, height: 100, targetLanguage: "zh-CN", sourceLanguage: "auto" };
+  const staleKey = buildOcrCacheKey("network-ocr:image+openai-compatible:gpt", input);
+  const stored = new Map<string, GenericOcrRegion[]>([[staleKey, [region("stale", "ãƒ†ã‚¹ãƒˆ", 10, 20)]]]);
+  const cache: CoreOcrCache = {
+    get: async (key) => stored.get(key) ?? null,
+    set: async (key, regions) => { stored.set(key, regions); },
+  };
+  const pipeline = new OcrTranslatePipeline({
+    profile: "network-ocr:image+openai-compatible:gpt",
+    ocr: { recognize: async () => { ocrCalls += 1; return [region("fresh", "Hello", 10, 20)]; } },
+    translator: { translate: async (items) => items.map((item) => ({ id: item.id, translatedText: item.text })) },
+    ocrCache: cache,
+  });
+
+  const result = await pipeline.process(input);
+
+  assert.equal(ocrCalls, 1);
+  assert.equal(pipeline.lastOcrCacheStatus, "miss");
+  assert.equal(result.regions[0]?.sourceText, "Hello");
+  assert.equal(stored.get(staleKey)?.[0]?.sourceText, "Hello");
 });
 
 test("OcrTranslatePipeline sends reading-order page context to the translator", async () => {
@@ -145,7 +227,7 @@ test("OcrTranslatePipeline coalesces concurrent OCR misses for the same image", 
     },
   };
   const translator: CoreTextTranslator = {
-    translate: async (items) => items.map((item) => ({ id: item.id, translatedText: "���" })),
+    translate: async (items) => items.map((item) => ({ id: item.id, translatedText: "���" })),
   };
   const first = new OcrTranslatePipeline({ profile: "network-ocr:image+openai-compatible:gpt", ocr, translator, ocrCache: cache });
   const second = new OcrTranslatePipeline({ profile: "network-ocr:image+openai-compatible:gpt", ocr, translator, ocrCache: cache });
@@ -170,7 +252,7 @@ test("OcrTranslatePipeline forwards chapter context and previous translations", 
     translator: {
       translate: async (items, _target, _source, options) => {
         optionsSeen = options;
-        return items.map((item) => ({ id: item.id, translatedText: "���" }));
+        return items.map((item) => ({ id: item.id, translatedText: "���" }));
       },
     },
   });
@@ -183,11 +265,11 @@ test("OcrTranslatePipeline forwards chapter context and previous translations", 
     targetLanguage: "zh-CN",
     sourceLanguage: "auto",
     chapterContext: "Earlier: protagonist is angry.",
-    previousTranslations: [{ id: "old", translatedText: "֮ǰ����" }],
+    previousTranslations: [{ id: "old", translatedText: "֮ǰ����" }],
   });
 
   assert.equal(optionsSeen?.chapterContext, "Earlier: protagonist is angry.");
-  assert.deepEqual(optionsSeen?.previousTranslations, [{ id: "old", translatedText: "֮ǰ����" }]);
+  assert.deepEqual(optionsSeen?.previousTranslations, [{ id: "old", translatedText: "֮ǰ����" }]);
 });
 
 test("buildOcrCacheKey ignores text style and glossary cache versions", () => {

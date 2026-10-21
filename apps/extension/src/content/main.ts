@@ -328,7 +328,8 @@ async function bootstrap(): Promise<boolean> {
       const target = registry.surfaces.find((item) => item.surfaceId === surface.surfaceId) ?? surface;
       const detected = toDetectedSurface(target);
       eventResultRouter.track(target.surfaceId, target.element, target.naturalSize);
-      const task = await createSurfaceTaskWithImageData(detected, "p2", settings.targetLanguage, { allowImageUrlFallback: settings.runMode !== "direct" });
+      const effectiveSite = getEffectiveSiteSettings(settings, pageUrl);
+      const task = await createSurfaceTaskWithImageData(detected, "p2", settings.targetLanguage, effectiveSite.readingMode, { allowImageUrlFallback: settings.runMode !== "direct" });
       logger.info("submit surface", `${target.surfaceId} | #${target.index} | ${task.imageData ? "imageData" : "imageUrl"}`);
       markSurface(target.surfaceId, "ocr");
       const response = force ? await client.retranslate(task, jobSessionId) : await client.submit(task, jobSessionId);
@@ -410,7 +411,8 @@ async function bootstrap(): Promise<boolean> {
       }
       const surface = surfaces[0];
       if (!surface) return { ok: false, status: "no-surface", detail: "当前页没有可用于 OCR 自检的漫画图片", elapsedMs: Date.now() - startedAt, providerProfile: currentProviderProfile() };
-      const task = await createSurfaceTaskWithImageData(toDetectedSurface(surface), "p2", settings.targetLanguage, { allowImageUrlFallback: settings.runMode !== "direct" });
+      const effectiveSite = getEffectiveSiteSettings(settings, pageUrl);
+      const task = await createSurfaceTaskWithImageData(toDetectedSurface(surface), "p2", settings.targetLanguage, effectiveSite.readingMode, { allowImageUrlFallback: settings.runMode !== "direct" });
       const response = await client.submit({ ...task, surfaceId: `selftest:${surface.surfaceId}:${Date.now()}` }, jobSessionId);
       const elapsedMs = Date.now() - startedAt;
       if (!response.ok) return { ok: false, status: "failed", detail: response.error, surfaceId: surface.surfaceId, surfaceIndex: surface.index, elapsedMs, providerProfile: currentProviderProfile() };
@@ -456,7 +458,8 @@ async function bootstrap(): Promise<boolean> {
         surfaceId: `manual:${Date.now()}:${Math.round(rect.x)}:${Math.round(rect.y)}`,
         element: document.body,
       });
-      const response = await client.submit(createSurfaceTask(surface, "p0", settings.targetLanguage), jobSessionId);
+      const effectiveSite = getEffectiveSiteSettings(settings, pageUrl);
+      const response = await client.submit(createSurfaceTask(surface, "p0", settings.targetLanguage, effectiveSite.readingMode), jobSessionId);
       const result = response.ok ? renderableSurfaceResult(response.result) : undefined;
       if (result) {
         const applied = await manualOverrides.applyToResult(result, settings.targetLanguage);

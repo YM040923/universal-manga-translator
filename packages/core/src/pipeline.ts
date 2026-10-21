@@ -1,6 +1,6 @@
 import type { Rect, TextRegion } from "@umt/shared";
 import type { ApiKeyPoolStatus } from "./api-key-pool.js";
-import type { GenericOcrImageInput, GenericOcrRegion } from "./generic-ocr.js";
+import { looksLikeGarbledOcrRegions, type GenericOcrImageInput, type GenericOcrRegion } from "./generic-ocr.js";
 import type { TextTranslationItem, TextTranslationOptions, TextTranslationProvider, TextTranslationResult } from "./openai-translator.js";
 
 export type { GenericOcrRegion, TextTranslationItem, TextTranslationOptions, TextTranslationResult };
@@ -11,6 +11,7 @@ export interface CorePipelineInput extends GenericOcrImageInput {
   height: number;
   targetLanguage: string;
   sourceLanguage: string;
+  readingDirection?: "auto" | "ltr" | "rtl";
   retranslate?: boolean;
   glossary?: Record<string, string>;
   chapterContext?: string;
@@ -60,8 +61,10 @@ export class OcrTranslatePipeline {
   }
 
   async process(input: CorePipelineInput): Promise<CorePipelineResult> {
-    const ocrRegions = (await this.readOcrRegions(input)).map((region) => classifyRegionKind(region, input.width, input.height));
-    const textBlocks = groupOcrRegionsIntoTextBlocks(ocrRegions);
+    const ocrRegions = (await this.readOcrRegions(input))
+      .filter((region) => region.confidence >= 0.5)
+      .map((region) => classifyRegionKind(region, input.width, input.height));
+    const textBlocks = groupOcrRegionsIntoTextBlocks(ocrRegions, input.readingDirection);
     const translationOptions: TextTranslationOptions = { retranslate: input.retranslate === true };
     if (input.signal) translationOptions.signal = input.signal;
     if (input.glossary && Object.keys(input.glossary).length) translationOptions.glossary = input.glossary;
@@ -96,7 +99,8 @@ export class OcrTranslatePipeline {
     }
     const key = buildOcrCacheKey(this.profile, input);
     const cached = await this.options.ocrCache.get(key);
-    if (cached) {
+    // Older builds may have cached mojibake before the provider-level retry existed.
+    if (cached && !looksLikeGarbledOcrRegions(cached)) {
       this.lastOcrCacheStatus = "hit";
       return cached;
     }
@@ -108,7 +112,7 @@ export class OcrTranslatePipeline {
     this.lastOcrCacheStatus = "miss";
     const read = (async () => {
       const regions = await this.options.ocr.recognize(input);
-      if (regions.length > 0) await this.options.ocrCache!.set(key, regions);
+      if (regions.length > 0 && !looksLikeGarbledOcrRegions(regions)) await this.options.ocrCache!.set(key, regions);
       return regions;
     })();
     inFlightOcrReads.set(key, read);
@@ -234,10 +238,10 @@ export function buildOcrCacheKey(profile: string, input: { imageHash: string; wi
   });
 }
 
-export function groupOcrRegionsIntoTextBlocks(regions: GenericOcrRegion[]): GenericOcrRegion[] {
-  const candidates = dedupeOcrRegions(regions)
+export function groupOcrRegionsIntoTextBlocks(regions: GenericOcrRegion[], readingDirection: "auto" | "ltr" | "rtl" = "auto"): GenericOcrRegion[] {
+  const candidates = dedupeOcrRegions(regions, readingDirection)
     .filter((region) => region.sourceText.trim().length > 0 && region.box.width > 1 && region.box.height > 1)
-    .sort(compareOcrReadingOrder);
+    .sort((a, b) => compareOcrReadingOrder(a, b, readingDirection));
   const groups: GenericOcrRegion[][] = [];
   for (const region of candidates) {
     const lastGroup = groups.at(-1);
@@ -329,19 +333,22 @@ function verticalOverlap(a: Rect, b: Rect): number {
   return Math.max(0, Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y));
 }
 
-function dedupeOcrRegions(regions: GenericOcrRegion[]): GenericOcrRegion[] {
+function dedupeOcrRegions(regions: GenericOcrRegion[], readingDirection: "auto" | "ltr" | "rtl" = "auto"): GenericOcrRegion[] {
   const sorted = [...regions].sort((a, b) => b.confidence - a.confidence);
   const kept: GenericOcrRegion[] = [];
   for (const region of sorted) {
     const duplicate = kept.some((existing) => normalizeText(existing.sourceText) === normalizeText(region.sourceText) && rectIoU(existing.box, region.box) > 0.65);
     if (!duplicate) kept.push(region);
   }
-  return kept.sort(compareOcrReadingOrder);
+  return kept.sort((a, b) => compareOcrReadingOrder(a, b, readingDirection));
 }
 
-function compareOcrReadingOrder(a: GenericOcrRegion, b: GenericOcrRegion): number {
+function compareOcrReadingOrder(a: GenericOcrRegion, b: GenericOcrRegion, readingDirection: "auto" | "ltr" | "rtl" = "auto"): number {
   const sameHorizontalBand = Math.abs(a.box.y - b.box.y) <= Math.max(a.box.height, b.box.height) * 0.35;
-  if (sameHorizontalBand) return a.box.x - b.box.x;
+  if (sameHorizontalBand) {
+    if (readingDirection === "rtl") return b.box.x - a.box.x;
+    return a.box.x - b.box.x;
+  }
   return a.box.y - b.box.y || a.box.x - b.box.x;
 }
 

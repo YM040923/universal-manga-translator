@@ -46,7 +46,7 @@ export interface GenericOcrParseOptions {
   confidencePathCandidates?: string[];
 }
 
-export type GenericOcrErrorKind = "quota" | "auth" | "rate_limit" | "network" | "empty" | "server" | "unknown";
+export type GenericOcrErrorKind = "quota" | "auth" | "rate_limit" | "network" | "empty" | "server" | "unknown" | "garbled";
 
 export interface GenericOcrErrorClassification {
   kind: GenericOcrErrorKind;
@@ -57,6 +57,7 @@ const DEFAULT_REGIONS_PATHS = ["words_result", "data.words_result", "data.result
 const DEFAULT_TEXT_PATHS = ["words", "text", "content"];
 const DEFAULT_BOX_PATHS = ["location", "box", "bbox", "vertexes_location"];
 const DEFAULT_CONFIDENCE_PATHS = ["score", "confidence"];
+const GARBLED_OCR_MESSAGE = "Garbled OCR text: the OCR provider returned text that looks like encoding corruption.";
 
 export class GenericNetworkOcrClient {
   readonly profile = "network-ocr";
@@ -75,6 +76,7 @@ export class GenericNetworkOcrClient {
     const keyCount = Math.max(1, this.keyPool.status().count);
     const maxAttempts = attempts + Math.max(0, keyCount - 1);
     let lastError: unknown;
+    let lastGarbled: GenericOcrRegion[] | undefined;
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       try {
         const lease = this.keyPool.next();
@@ -84,6 +86,10 @@ export class GenericNetworkOcrClient {
         try {
           const regions = await this.recognizeOnce(input, lease?.value);
           if (lease) this.keyPool.reportSuccess(lease);
+          if (looksLikeGarbledOcrRegions(regions)) {
+            lastGarbled = regions;
+            throw new Error(GARBLED_OCR_MESSAGE);
+          }
           return regions;
         } catch (error) {
           const severity = keyFailureSeverity(error);
@@ -98,6 +104,10 @@ export class GenericNetworkOcrClient {
         await delay((this.options.retryDelayMs ?? 900) * attempt);
       }
     }
+    if (input.signal?.aborted) throw lastError instanceof Error ? lastError : new Error(String(lastError));
+    // A provider that keeps returning mojibake still gets its last result shown, but the pipeline
+    // refuses to cache it so a later manual retry really asks the provider again.
+    if (lastGarbled) return lastGarbled;
     throw lastError instanceof Error ? lastError : new Error(String(lastError));
   }
 
@@ -152,6 +162,47 @@ export function parseGenericOcrRegions(payload: unknown, options: GenericOcrPars
       kind: "dialogue" as const,
     }];
   });
+}
+
+const GARBLED_STRONG_PATTERNS: readonly RegExp[] = [
+  /\uFFFD/,
+  /ï¿½/,
+  // C0/C1 controls and private-use code points do not occur in real manga text.
+  /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\uE000-\uF8FF]/,
+  // UTF-8 bytes decoded as Latin-1/CP1252: "é" -> "Ã©", "€" -> "â‚¬".
+  /[\u00C2\u00C3][\u00A0-\u00FF\u2018-\u2122]/,
+  /â€/,
+  // CJK lead bytes decoded as CP1252: "ãƒ", "æ—", "ï½".
+  /[\u00E2\u00E3\u00E6\u00EF][^\p{L}\s]/u,
+];
+
+const MOJIBAKE_LETTERS = /[\u00E2-\u00EF]/;
+const MOJIBAKE_SYMBOLS = /[\u00A1-\u00BF\u00D7\u00F7\u0152\u0153\u0160\u0161\u0178\u017D\u017E\u0192\u02C6\u02DC\u2013\u2014\u2018\u2019\u201A\u201C\u201D\u201E\u2020\u2021\u2022\u2026\u2030\u2039\u203A\u20AC\u2122]/;
+const CJK_TEXT = /[\u3040-\u30FF\u3400-\u9FFF\uAC00-\uD7AF\uF900-\uFAFF]/;
+
+/**
+ * OCR providers occasionally answer HTTP 200 with mojibake (UTF-8 bytes decoded as Latin-1 or
+ * CP1252). That text cannot be translated, so callers retry and refuse to cache it.
+ */
+export function looksLikeGarbledOcrRegions(regions: readonly Pick<GenericOcrRegion, "sourceText">[]): boolean {
+  const texts = regions.map((region) => region.sourceText);
+  return texts.some(looksLikeGarbledOcrText) || looksLikeGarbledOcrText(texts.join("\n"));
+}
+
+export function looksLikeGarbledOcrText(text: string): boolean {
+  if (!text.trim()) return false;
+  if (GARBLED_STRONG_PATTERNS.some((pattern) => pattern.test(text))) return true;
+  return looksLikeDenseMojibake(text);
+}
+
+function looksLikeDenseMojibake(text: string): boolean {
+  if (CJK_TEXT.test(text)) return false;
+  const compact = Array.from(text).filter((char) => !/\s/.test(char));
+  if (compact.length < 6) return false;
+  const asciiLetters = compact.filter((char) => /[A-Za-z]/.test(char)).length;
+  if (asciiLetters > compact.length * 0.35) return false;
+  const suspicious = compact.filter((char) => MOJIBAKE_LETTERS.test(char) || MOJIBAKE_SYMBOLS.test(char)).length;
+  return suspicious >= 4 && suspicious / compact.length >= 0.5;
 }
 
 export function getByPath(value: unknown, path: string): unknown {
@@ -279,6 +330,7 @@ function formatGenericOcrError(status: number, payload: unknown): string {
 
 export function classifyGenericOcrError(error: unknown): GenericOcrErrorClassification {
   const message = error instanceof Error ? error.message : String(error);
+  if (/garbled ocr/i.test(message)) return { kind: "garbled", retryable: true };
   if (/no text regions|no regions|empty/i.test(message)) return { kind: "empty", retryable: false };
   if (/\b402\b|quota|balance|insufficient|exhaust|credits?|账户积分不足|余额不足/i.test(message)) return { kind: "quota", retryable: false };
   if (/\b401\b|\b403\b|INVALID_API_KEY|unauthorized|forbidden|permission|无权限/i.test(message)) return { kind: "auth", retryable: false };

@@ -21,6 +21,26 @@ test("DirectOcrCache does not save empty OCR results", async () => {
   assert.equal(await cache.get("empty"), null);
 });
 
+test("DirectOcrCache does not save garbled OCR results", async () => {
+  const storage = fakeStorage();
+  const cache = new DirectOcrCache(storage);
+
+  await cache.set("garbled", [region("r1", "ãƒ†ã‚¹ãƒˆ")]);
+
+  assert.equal(await cache.get("garbled"), null);
+});
+
+test("DirectOcrCache evicts a legacy garbled entry on read", async () => {
+  const storage = fakeStorage();
+  const storageKey = "umt.direct-ocr-cache:v1:legacy";
+  await storage.set({ [storageKey]: { version: 1, regions: [region("r1", "ãƒ†ã‚¹ãƒˆ")], savedAt: 1 } });
+  const cache = new DirectOcrCache(storage);
+
+  assert.equal(await cache.get("legacy"), null);
+  const remaining = await storage.get(storageKey);
+  assert.equal((remaining ?? {})[storageKey], undefined);
+});
+
 test("DirectOcrCache clears only direct OCR entries and reports stats", async () => {
   const storage = fakeStorage();
   const cache = new DirectOcrCache(storage);
@@ -52,11 +72,11 @@ function fakeStorage(): DirectOcrCacheStorage {
   };
 }
 
-function region(id: string): GenericOcrRegion {
+function region(id: string, sourceText = "HELLO"): GenericOcrRegion {
   return {
     id,
     box: { x: 1, y: 2, width: 30, height: 12 },
-    sourceText: "HELLO",
+    sourceText,
     confidence: 0.99,
     orientation: "horizontal",
     kind: "dialogue",

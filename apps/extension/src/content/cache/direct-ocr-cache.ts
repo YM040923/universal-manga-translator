@@ -1,4 +1,4 @@
-import type { GenericOcrRegion } from "@umt/core";
+import { looksLikeGarbledOcrRegions, type GenericOcrRegion } from "@umt/core";
 import type { CoreOcrCache } from "@umt/core";
 
 export interface DirectOcrCacheStorage {
@@ -27,11 +27,18 @@ export class DirectOcrCache implements CoreOcrCache {
     const raw = await this.storage.get(storageKey);
     const doc = raw?.[storageKey] as DirectOcrCacheDocument | undefined;
     if (!doc || doc.version !== 1 || !Array.isArray(doc.regions)) return null;
-    return doc.regions.filter(isGenericOcrRegion);
+    const regions = doc.regions.filter(isGenericOcrRegion);
+    // Evict entries written before garbled responses were rejected: keeping them would make a
+    // manual retry replay the same mojibake instead of asking the provider again.
+    if (looksLikeGarbledOcrRegions(regions)) {
+      await this.storage.remove(storageKey);
+      return null;
+    }
+    return regions;
   }
 
   async set(key: string, regions: GenericOcrRegion[]): Promise<void> {
-    if (!regions.length) return;
+    if (!regions.length || looksLikeGarbledOcrRegions(regions)) return;
     await this.storage.set({ [toStorageKey(key)]: { version: 1, regions, savedAt: Date.now() } satisfies DirectOcrCacheDocument });
   }
 

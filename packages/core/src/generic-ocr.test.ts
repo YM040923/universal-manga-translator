@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { GenericNetworkOcrClient, classifyGenericOcrError, getByPath, parseGenericOcrRegions } from "./generic-ocr.js";
+import { GenericNetworkOcrClient, classifyGenericOcrError, getByPath, looksLikeGarbledOcrText, parseGenericOcrRegions } from "./generic-ocr.js";
 
 test("getByPath reads nested dot paths and array indexes", () => {
   assert.equal(getByPath({ data: { items: [{ text: "hello" }] } }, "data.items.0.text"), "hello");
@@ -151,7 +151,87 @@ test("classifyGenericOcrError labels common provider failures", () => {
   assert.deepEqual(classifyGenericOcrError(new Error("Network OCR failed: 429 rate limit")), { kind: "rate_limit", retryable: true });
   assert.deepEqual(classifyGenericOcrError(new Error("fetch failed")), { kind: "network", retryable: true });
   assert.deepEqual(classifyGenericOcrError(new Error("Network OCR returned no text regions")), { kind: "empty", retryable: false });
+  assert.deepEqual(classifyGenericOcrError(new Error("Garbled OCR text: the OCR provider returned text that looks like encoding corruption.")), { kind: "garbled", retryable: true });
 });
+
+test("looksLikeGarbledOcrText detects encoding corruption but keeps real text", () => {
+  assert.equal(looksLikeGarbledOcrText("ãƒ†ã‚¹ãƒˆ"), true);
+  assert.equal(looksLikeGarbledOcrText("æ—¥æœ¬èªž"), true);
+  assert.equal(looksLikeGarbledOcrText("Ã©tÃ©"), true);
+  assert.equal(looksLikeGarbledOcrText("テスト"), false);
+  assert.equal(looksLikeGarbledOcrText("Café — Très — Déjà vu"), false);
+  assert.equal(looksLikeGarbledOcrText("HELLO WORLD"), false);
+});
+
+test("GenericNetworkOcrClient retries a garbled OCR response and returns the clean retry", async () => {
+  let calls = 0;
+  const client = new GenericNetworkOcrClient({
+    endpoint: "https://ocr.example.test/ocr",
+    attempts: 3,
+    retryDelayMs: 1,
+    regionsPathCandidates: ["words_result"],
+    textPathCandidates: ["words"],
+    boxPathCandidates: ["location"],
+    fetch: async () => {
+      calls += 1;
+      return ocrResponse(calls === 1 ? "ãƒ†ã‚¹ãƒˆ" : "HELLO");
+    },
+  });
+
+  const regions = await client.recognize({ imageBytes: new TextEncoder().encode("image") });
+
+  assert.equal(calls, 2);
+  assert.equal(regions[0]?.sourceText, "HELLO");
+});
+
+test("GenericNetworkOcrClient returns the last garbled result once retries are exhausted", async () => {
+  let calls = 0;
+  const client = new GenericNetworkOcrClient({
+    endpoint: "https://ocr.example.test/ocr",
+    attempts: 2,
+    retryDelayMs: 1,
+    regionsPathCandidates: ["words_result"],
+    textPathCandidates: ["words"],
+    boxPathCandidates: ["location"],
+    fetch: async () => {
+      calls += 1;
+      return ocrResponse("ãƒ†ã‚¹ãƒˆ");
+    },
+  });
+
+  const regions = await client.recognize({ imageBytes: new TextEncoder().encode("image") });
+
+  assert.equal(calls, 2);
+  assert.equal(regions[0]?.sourceText, "ãƒ†ã‚¹ãƒˆ");
+});
+
+test("GenericNetworkOcrClient keeps accented prose without retrying it", async () => {
+  let calls = 0;
+  const client = new GenericNetworkOcrClient({
+    endpoint: "https://ocr.example.test/ocr",
+    attempts: 3,
+    retryDelayMs: 1,
+    regionsPathCandidates: ["words_result"],
+    textPathCandidates: ["words"],
+    boxPathCandidates: ["location"],
+    fetch: async () => {
+      calls += 1;
+      return ocrResponse("Café — Très — Déjà vu");
+    },
+  });
+
+  const regions = await client.recognize({ imageBytes: new TextEncoder().encode("image") });
+
+  assert.equal(calls, 1);
+  assert.equal(regions[0]?.sourceText, "Café — Très — Déjà vu");
+});
+
+function ocrResponse(text: string): Response {
+  return new Response(JSON.stringify({ words_result: [{ words: text, location: { left: 1, top: 2, width: 60, height: 20 } }] }), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
+}
 
 test("GenericNetworkOcrClient tries all configured keys on quota even when retries are disabled", async () => {
   const authorizations: string[] = [];
