@@ -89,10 +89,10 @@ export interface ExtensionSettings {
   /** @deprecated Use autoTranslateDefault. Kept optional for migration from older UI code. */
   autoTranslate?: boolean;
   // Advanced translation features (Schemes 2B, 3B+C)
-  enableImageDescription?: boolean;
-  imageDescriptionApiKey?: string;
-  markUncertainOcr?: boolean;
-  confidenceThreshold?: 0.5 | 0.6 | 0.7;
+  enableImageDescription: boolean;
+  imageDescriptionApiKey: string;
+  markUncertainOcr: boolean;
+  confidenceThreshold: 0.5 | 0.6 | 0.7;
 }
 
 export interface LegacyExtensionSettings extends Partial<ExtensionSettings> {

@@ -24,7 +24,7 @@ import {
 } from "./frame/frame-context.js";
 import type { ServerEvent } from "@umt/shared/protocol";
 import { EventResultRouter } from "./events/event-result-router";
-import { isControllerOnlyCommand, isUmtContentCommand, isUmtFrameProgressMessage, type UmtPageSampleSelfTestResponse } from "./messages";
+import { isControllerOnlyCommand, isUmtContentCommand, isUmtFrameProgressMessage, type UmtPageInventoryResponse, type UmtPageSampleSelfTestResponse } from "./messages";
 import { OverlayRenderer } from "./overlay/overlay-renderer";
 import { createDocumentRectOverlayAnchor } from "./overlay/rect-anchor";
 import { ChapterProgress } from "./progress/chapter-progress";
@@ -39,7 +39,7 @@ import { toDetectedSurface } from "./surface/detected-surface";
 import { selectVisibleSurfaces } from "./surface/visible-surfaces";
 import { isLikelyReaderPage, SurfaceRegistry, type RegisteredSurface } from "./surface/surface-registry";
 import { renderableSurfaceResult } from "./translation-result";
-import { createJobSessionId, debounce, formatShortError, isUmtOwnedMutation, readerFrameSignature, reclaimOrphanUmtNodes, requestBackendHttp } from "./utils";
+import { createJobSessionId, debounce, formatShortError, isDocumentDisplayedFullscreen, isFrameAloneOnScreen, isUmtOwnedMutation, readerFrameSignature, reclaimOrphanUmtNodes, requestBackendHttp } from "./utils";
 import { getEffectiveSiteSettings, isSiteEnabled, loadSettings, saveSettings, setSiteSettings, setTranslationOverlayVisible, SECRET_STORAGE_KEY, type ExtensionSettings } from "../settings/settings";
 
 const bootstrapWindow = window as Window & { __umtContentBootstrapState?: "starting" | "running" | undefined };
@@ -79,6 +79,12 @@ async function bootstrap(): Promise<boolean> {
   let eventsConnected = false;
   let registry: SurfaceRegistry = SurfaceRegistry.scan(document);
   let readerUiMounted = false;
+  let widgetsMounted = false;
+  // A reader drawn by a closed shadow root or an unusual layout can fail every heuristic while the
+  // reader knows perfectly well they are on a chapter page, so an explicit override has to outlive
+  // the resize and mutation rescans that would otherwise drop it.
+  let readerPageForced = false;
+  let readerPageActive = false;
   let childSnapshot: QueueSnapshot | undefined;
   let controls = new Map<string, SurfaceControl>();
   let activeSelection: ManualSelectionController | null = null;
@@ -168,7 +174,7 @@ async function bootstrap(): Promise<boolean> {
   async function restoreCachedChapterResults(surfaces: RegisteredSurface[]): Promise<void> {
     const doc = await chapterCache.read(cacheContext());
     for (const surface of surfaces) {
-      const entry = doc.entries[surface.imageUrl];
+      const entry = doc.entries[surface.cacheKey];
       if (!entry) continue;
       const result = await manualOverrides.applyToResult({ ...entry.result, surfaceId: surface.surfaceId, status: "cached" as const }, settings.targetLanguage);
       renderer.render(surface.element, surface.naturalSize, result);
@@ -205,16 +211,20 @@ async function bootstrap(): Promise<boolean> {
 
   function scanAndMountControls(reason: string): RegisteredSurface[] {
     registry = SurfaceRegistry.scan(document);
+    const detectedCount = registry.surfaces.length;
+    queue.setDetected(detectedCount);
     const surfaces = registry.surfaces.slice(0, settings.maxFullPageSurfaces);
     // A revoked site stays mounted until the page reloads, so every re-scan path (popup
     // commands, resize, observer callbacks) has to be refused here rather than trusting setup.
     if (!isSiteEnabled(settings, pageUrl)) {
+      readerPageActive = false;
       queue.setSurfaces([]);
       updateProgress();
       logger.info("site revoked", `${reason} | surfaces ignored`);
       return [];
     }
-    if (!isLikelyReaderPage(document, surfaces, { pageUrl, isTopFrame })) {
+    readerPageActive = readerPageForced || isLikelyReaderPage(document, surfaces, { pageUrl, isTopFrame });
+    if (!readerPageActive) {
       queue.setSurfaces([]);
       updateProgress();
       logger.info("reader page inactive", `${reason} | found=${surfaces.length}`);
@@ -304,7 +314,7 @@ async function bootstrap(): Promise<boolean> {
     settings = { ...settings, progressWidgetEnabled: enabled };
     if (!isTopFrame) return;
     if (enabled) {
-      await progress.mount();
+      await progress.mount(widgetHost());
       progress.update(tabSnapshot());
     } else {
       progress.remove();
@@ -340,7 +350,7 @@ async function bootstrap(): Promise<boolean> {
         renderer.render(target.element, target.naturalSize, applied);
         renderer.setVisible(settings.translationOverlayVisible);
         debugRenderer.markResult(target.element, target.naturalSize, applied);
-        void chapterCache.save(cacheContext(), target.imageUrl, applied).catch((error) => logger.error("save chapter cache failed", error));
+        void chapterCache.save(cacheContext(), target.cacheKey, applied).catch((error) => logger.error("save chapter cache failed", error));
         return result.status === "cached" ? "cached" : "completed";
       }
       if (response.ok && response.result?.status === "empty") return "empty";
@@ -375,6 +385,23 @@ async function bootstrap(): Promise<boolean> {
     }
     await queue.startAuto();
     updateProgress();
+  }
+
+  /**
+   * Overrides the reader-page gate for the rest of this frame's life. The reader clicked because
+   * they can see pages the heuristics cannot, so the override must survive the rescans that follow.
+   */
+  async function forceTranslatePage(): Promise<void> {
+    if (!readerPageForced) {
+      readerPageForced = true;
+      logger.info("reader page forced", `detected=${registry.surfaces.length}`);
+    }
+    await translatePage(true);
+  }
+
+  function pageInventory(): UmtPageInventoryResponse {
+    const merged = tabSnapshot();
+    return { ok: true, detected: merged.detected, queued: merged.total, forced: readerPageForced, readerPage: readerPageActive };
   }
 
   async function retranslateVisibleSurfaces(): Promise<void> {
@@ -425,10 +452,9 @@ async function bootstrap(): Promise<boolean> {
   }
 
   function startManualSelection(): void {
-    if (!isLikelyReaderPage(document, registry.surfaces.slice(0, settings.maxFullPageSurfaces), { pageUrl, isTopFrame })) {
-      logger.info("manual selection ignored outside reader page");
-      return;
-    }
+    // Box selection crops the visible tab, so it works on any page and is the escape hatch for a
+    // reader whose pages the heuristics cannot see. Refusing it when detection failed hid the one
+    // control that could still translate the page.
     mountReaderUi();
     activeSelection?.cancel();
     const controller = new ManualSelectionController({
@@ -600,17 +626,72 @@ async function bootstrap(): Promise<boolean> {
     renderer.refreshAll();
   }
 
+  function mountWidgets(): void {
+    const host = widgetHost();
+    if (widgetsMounted) {
+      floatingPanel.mount(host);
+      if (settings.progressWidgetEnabled) void progress.mount(host);
+      return;
+    }
+    widgetsMounted = true;
+    floatingPanel.mount(host);
+    floatingPanel.setOverlayVisible(settings.translationOverlayVisible);
+    floatingPanel.setEnabled(settings.floatingButtonEnabled);
+    if (settings.progressWidgetEnabled) void progress.mount(host);
+  }
+
+  /**
+   * Fullscreening a container element renders only that subtree, so widgets parked on the root would
+   * vanish with the rest of the page. Moving them inside keeps the button clickable, except for a
+   * fullscreened frame itself, where this document is not rendered at all.
+   */
+  function widgetHost(): Element {
+    const doc = document as Document & { webkitFullscreenElement?: Element | null; webkitCurrentFullScreenElement?: Element | null };
+    const target = doc.fullscreenElement ?? doc.webkitFullscreenElement ?? doc.webkitCurrentFullScreenElement;
+    if (!target || target === doc.documentElement || target === doc.body || target instanceof HTMLIFrameElement) return doc.documentElement;
+    return target;
+  }
+
+  function unmountWidgets(): void {
+    if (!widgetsMounted) return;
+    widgetsMounted = false;
+    floatingPanel.remove();
+    progress.remove();
+  }
+
+  /**
+   * Which document owes the tab a widget. The frame keeps its own copy because a fullscreened frame
+   * or container is the only thing the reader can still see and reach.
+   */
+  function syncWidgetOwnership(): void {
+    if (isTopFrame) {
+      if (widgetsMounted) mountWidgets();
+      return;
+    }
+    if (isFrameDisplayedAlone()) {
+      mountWidgets();
+      return;
+    }
+    // Leaving fullscreen puts the page back under the top frame's own widgets.
+    unmountWidgets();
+  }
+
+  /**
+   * Whether this frame is all the reader shows, so the top document's widgets are out of reach and
+   * the frame has to host its own.
+   */
+  function isFrameDisplayedAlone(): boolean {
+    return isDocumentDisplayedFullscreen() || isFrameAloneOnScreen(window);
+  }
+
   function mountReaderUi(): void {
     if (readerUiMounted) return;
     readerUiMounted = true;
     renderer.setVisible(settings.translationOverlayVisible);
     // One button and one progress card per tab: a fixed overlay in the top document also covers
     // reader frames, while every frame keeps its own per-page controls.
-    if (!isTopFrame) return;
-    floatingPanel.mount();
-    floatingPanel.setOverlayVisible(settings.translationOverlayVisible);
-    floatingPanel.setEnabled(settings.floatingButtonEnabled);
-    if (settings.progressWidgetEnabled) void progress.mount();
+    if (!isTopFrame && !isFrameDisplayedAlone()) return;
+    mountWidgets();
   }
 
   floatingPanel = new FloatingPanel({
@@ -619,11 +700,18 @@ async function bootstrap(): Promise<boolean> {
       // The button lives in the top document, but the pages it is meant to refresh may sit in a frame.
       relayToFrames("retranslateVisible");
     },
+    onForceTranslate: () => {
+      void forceTranslatePage();
+      relayToFrames("forceTranslate");
+    },
     onSelectRegion: () => startManualSelection(),
     onToggleOverlayVisibility: (visible) => void setOverlayVisibility(visible),
   });
 
   logger.info("content script started", `${isTopFrame ? "top" : "frame"} ${location.hostname} | page ${pageUrl.replace(/^\w+:\/\//, "").split("/")[0]} | mode=${settings.runMode} | target=${settings.targetLanguage}`);
+  // The tab's button is the entry a reader uses when detection found nothing, so it cannot itself
+  // wait for a page that looks like a reader.
+  if (isTopFrame) mountWidgets();
   scanAndMountControls("load");
   if (shouldAutoTranslate()) void translatePage(false);
 
@@ -649,7 +737,13 @@ async function bootstrap(): Promise<boolean> {
   observer.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ["src", "srcset", "data-src", "data-original", "style"] });
 
   window.addEventListener("scroll", () => refreshControls(), { passive: true });
-  window.addEventListener("resize", () => refreshLayout());
+  window.addEventListener("resize", () => {
+    refreshLayout();
+    // A frame fullscreened by its parent sees no event at all, so its new viewport is the notice.
+    syncWidgetOwnership();
+  });
+  document.addEventListener("fullscreenchange", syncWidgetOwnership);
+  document.addEventListener("webkitfullscreenchange", syncWidgetOwnership);
 
   chrome.storage?.onChanged?.addListener((changes, areaName) => {
     const relevant = areaName === "sync"
@@ -675,6 +769,11 @@ async function bootstrap(): Promise<boolean> {
       void sampleOcrSelfTest(message.frameScoped !== true).then(sendResponse);
       return true;
     }
+    if (message.command === "pageInventory") {
+      sendResponse(pageInventory());
+      return false;
+    }
+    if (message.command === "forceTranslate") void forceTranslatePage();
     if (message.command === "translate") { queue.resume(); void translatePage(false); }
     if (message.command === "refresh") void resetPageState("popup-refresh", false);
     if (message.command === "togglePause") {

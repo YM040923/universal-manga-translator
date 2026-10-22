@@ -82,6 +82,32 @@ test("FloatingPanel right click opens compact menu for retranslate and selection
   assert.equal(menu.style.display, "none");
 });
 
+test("FloatingPanel menu offers the forced translation entry only when the page can act on it", () => {
+  setupDom();
+  let forced = 0;
+  const panel = new FloatingPanel({
+    onToggleOverlayVisibility: () => undefined,
+    onRetranslatePage: () => undefined,
+    onSelectRegion: () => undefined,
+    onForceTranslate: () => { forced += 1; },
+  });
+  panel.mount();
+
+  document.querySelector<HTMLButtonElement>("[data-umt-floating-button]")!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+  const force = document.querySelector<HTMLButtonElement>("[data-umt-force-translate-button]")!;
+  assert.equal(force.textContent, "强制翻译本页");
+
+  force.click();
+  assert.equal(forced, 1);
+  assert.equal(document.querySelector<HTMLElement>("[data-umt-floating-menu]")!.style.display, "none");
+
+  const withoutAction = new FloatingPanel({ onToggleOverlayVisibility: () => undefined });
+  withoutAction.mount();
+  withoutAction.root.querySelector<HTMLButtonElement>("[data-umt-floating-button]")!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+  assert.equal(withoutAction.root.querySelector("[data-umt-force-translate-button]"), null);
+  assert.equal(withoutAction.root.querySelector("[data-umt-floating-menu]"), null);
+});
+
 test("FloatingPanel hides the right-click menu with inline display so page CSS cannot keep it expanded", () => {
   setupDom();
   const panel = new FloatingPanel({
@@ -159,6 +185,21 @@ test("FloatingPanel can be dragged freely and persists its position without firi
   assert.equal(panel.root.style.bottom, "auto");
   assert.deepEqual(saved.umtFloatingPanelPosition, { left: 934, top: 658 });
   assert.equal(toggles, 0);
+});
+
+test("FloatingPanel moves into the element a reader fullscreened and back out again", () => {
+  setupDom();
+  const container = document.createElement("div");
+  document.body.append(container);
+  const panel = new FloatingPanel({ onToggleOverlayVisibility: () => undefined });
+  panel.mount();
+
+  panel.mount(container);
+  assert.equal(panel.root.parentElement, container);
+  panel.mount(container);
+  assert.equal(panel.root.parentElement, container);
+  panel.mount();
+  assert.equal(panel.root.parentElement, document.documentElement);
 });
 
 function setupDom(): void {

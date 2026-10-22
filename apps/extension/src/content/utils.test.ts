@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
-import { debounce, isUmtOwnedMutation, readerFrameSignature, reclaimOrphanUmtNodes } from "./utils.js";
+import { debounce, isDocumentDisplayedFullscreen, isFrameAloneOnScreen, isUmtOwnedMutation, readerFrameSignature, reclaimOrphanUmtNodes } from "./utils.js";
 
 function useDom(): JSDOM {
   const dom = new JSDOM("<!doctype html><html><body></body></html>", { url: "https://manga.example" });
@@ -84,4 +84,24 @@ test("readerFrameSignature notices a reader iframe appearing or changing chapter
   assert.equal(first, "https://embed.example/page?id=1");
   assert.notEqual(second, first);
   assert.equal(readerFrameSignature(), `${second}|https://embed.example/other`);
+});
+
+test("isFrameAloneOnScreen needs a frame that fills the screen, not just a wide one", () => {
+  const screen = { width: 1280, height: 720 };
+  assert.equal(isFrameAloneOnScreen({ innerWidth: 1280, innerHeight: 720, screen }), true);
+  assert.equal(isFrameAloneOnScreen({ innerWidth: 1153, innerHeight: 649, screen }), true);
+  assert.equal(isFrameAloneOnScreen({ innerWidth: 860, innerHeight: 1000, screen }), false);
+  assert.equal(isFrameAloneOnScreen({ innerWidth: 1280, innerHeight: 500, screen }), false);
+  assert.equal(isFrameAloneOnScreen({ innerWidth: 1280, innerHeight: 720, screen: null }), false);
+  assert.equal(isFrameAloneOnScreen({ innerWidth: 1280, innerHeight: 720 }), false);
+});
+
+test("isDocumentDisplayedFullscreen reads the flags Chrome and WebKit each expose", () => {
+  assert.equal(isDocumentDisplayedFullscreen({ fullscreen: true, fullscreenElement: null }), true);
+  assert.equal(isDocumentDisplayedFullscreen({ webkitIsFullscreen: true }), true);
+  assert.equal(isDocumentDisplayedFullscreen({ fullscreenElement: { } as Element }), true);
+  assert.equal(isDocumentDisplayedFullscreen({ webkitFullscreenElement: { } as Element }), true);
+  assert.equal(isDocumentDisplayedFullscreen({ webkitCurrentFullScreenElement: { } as Element }), true);
+  assert.equal(isDocumentDisplayedFullscreen({ fullscreen: false, fullscreenElement: null }), false);
+  assert.equal(isDocumentDisplayedFullscreen({}), false);
 });

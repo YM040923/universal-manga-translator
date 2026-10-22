@@ -13,7 +13,7 @@ import {
 } from "./frame-context.js";
 import type { QueueSnapshot } from "../queue/translation-queue.js";
 
-const emptySnapshot: QueueSnapshot = { total: 0, queued: 0, processing: 0, completed: 0, cached: 0, empty: 0, failed: 0, cancelled: 0, paused: false };
+const emptySnapshot: QueueSnapshot = { total: 0, detected: 0, queued: 0, processing: 0, completed: 0, cached: 0, empty: 0, failed: 0, cancelled: 0, paused: false };
 
 function recordingRuntime(response: unknown = { ok: true }): { messages: unknown[]; sendMessage: (message: unknown) => Promise<unknown> } {
   const messages: unknown[] = [];

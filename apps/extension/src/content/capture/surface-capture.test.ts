@@ -114,7 +114,7 @@ test("createSurfaceTaskWithImageData can reject URL fallback so backend does not
   };
 
   await assert.rejects(
-    () => createSurfaceTaskWithImageData(surface, "p0", "zh-CN", { allowImageUrlFallback: false }),
+    () => createSurfaceTaskWithImageData(surface, "p0", "zh-CN", "auto", { allowImageUrlFallback: false }),
     /image data fetch unavailable|429/,
   );
 });

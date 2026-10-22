@@ -5,9 +5,10 @@ import type { QueueSnapshot } from "./translation-queue.js";
  * so each frame's queue is summed into one tab-level view.
  */
 export function mergeQueueSnapshots(snapshots: QueueSnapshot[]): QueueSnapshot {
-  const merged: QueueSnapshot = { total: 0, queued: 0, processing: 0, completed: 0, cached: 0, empty: 0, failed: 0, cancelled: 0, paused: false };
+  const merged: QueueSnapshot = { total: 0, detected: 0, queued: 0, processing: 0, completed: 0, cached: 0, empty: 0, failed: 0, cancelled: 0, paused: false };
   for (const snapshot of snapshots) {
     merged.total += snapshot.total;
+    merged.detected += snapshot.detected;
     merged.queued += snapshot.queued;
     merged.processing += snapshot.processing;
     merged.completed += snapshot.completed;

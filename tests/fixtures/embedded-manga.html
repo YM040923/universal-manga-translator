@@ -6,9 +6,19 @@
     <title>Embedded Manga Fixture</title>
   </head>
   <body>
-    <main class="reader-shell">
+    <main class="reader-shell" id="shell">
       <h1>Embedded reader shell</h1>
+      <button id="fullscreen-frame" type="button">全屏阅读器</button>
+      <button id="fullscreen-shell" type="button">全屏外壳</button>
       <iframe class="reader-frame" src="./frame-reader.html" title="Manga reader frame"></iframe>
     </main>
+    <script>
+      document.querySelector("#fullscreen-frame").addEventListener("click", () => {
+        document.querySelector("iframe.reader-frame")?.requestFullscreen();
+      });
+      document.querySelector("#fullscreen-shell").addEventListener("click", () => {
+        document.querySelector("#shell")?.requestFullscreen();
+      });
+    </script>
   </body>
 </html>

@@ -4,6 +4,7 @@ export interface FloatingPanelActions {
   onToggleOverlayVisibility: (visible: boolean) => void;
   onRetranslatePage?: () => void;
   onSelectRegion?: () => void;
+  onForceTranslate?: () => void;
 }
 
 import { currentPanelPosition, DRAG_THRESHOLD_PX, loadStoredPosition, saveStoredPosition, type FloatingPanelPosition, clampPosition } from "./floating-position.js";
@@ -86,13 +87,19 @@ export class FloatingPanel {
     this.button.append(this.icon, this.status);
     this.root.append(this.button);
 
-    if (actions.onRetranslatePage || actions.onSelectRegion) {
+    if (actions.onRetranslatePage || actions.onSelectRegion || actions.onForceTranslate) {
       this.menu = document.createElement("div");
       this.menu.dataset.umtFloatingMenu = "true";
       this.menu.style.cssText = FLOATING_MENU_STYLE;
       if (actions.onRetranslatePage) {
         this.menu.append(createMenuButton("重翻本页", "重新翻译当前页面/章节", "umtRetranslateButton", () => {
           actions.onRetranslatePage?.();
+          this.closeMenu();
+        }));
+      }
+      if (actions.onForceTranslate) {
+        this.menu.append(createMenuButton("强制翻译本页", "跳过漫画页判定，把本页所有图片送去翻译", "umtForceTranslateButton", () => {
+          actions.onForceTranslate?.();
           this.closeMenu();
         }));
       }
@@ -107,9 +114,14 @@ export class FloatingPanel {
     this.setOverlayVisible(true);
   }
 
-  mount(): void {
-    if (!document.documentElement.contains(this.root)) document.documentElement.append(this.root);
+  /** Re-mounting with a different host moves the button, which is how it survives a reader's fullscreen element. */
+  mount(host: Element = document.documentElement): void {
+    if (this.root.parentElement !== host) host.append(this.root);
     void this.restorePosition();
+  }
+
+  remove(): void {
+    this.root.remove();
   }
 
   setStatus(text: string, state: FloatingPanelState = "idle"): void {
@@ -203,7 +215,7 @@ export class FloatingPanel {
   }
 }
 
-function createMenuButton(text: string, title: string, datasetName: "umtRetranslateButton" | "umtSelectButton", onClick: () => void): HTMLButtonElement {
+function createMenuButton(text: string, title: string, datasetName: "umtRetranslateButton" | "umtSelectButton" | "umtForceTranslateButton", onClick: () => void): HTMLButtonElement {
   const button = document.createElement("button");
   button.dataset[datasetName] = "true";
   button.type = "button";

@@ -1,18 +1,19 @@
 ﻿import type { OverlayAppearance } from "../settings/settings.js";
 import type { QueueSnapshot } from "./queue/translation-queue.js";
 
-export type UmtContentCommandName = "translate" | "refresh" | "togglePause" | "clearPage" | "selectRegion" | "retranslate" | "retranslateVisible" | "cancelQueue" | "setOverlayVisibility" | "toggleOverlayVisibility" | "applyOverlayAppearance" | "applySiteSettings" | "applyWidgetSettings" | "sampleOcrSelfTest";
+export type UmtContentCommandName = "translate" | "refresh" | "togglePause" | "clearPage" | "selectRegion" | "retranslate" | "retranslateVisible" | "cancelQueue" | "setOverlayVisibility" | "toggleOverlayVisibility" | "applyOverlayAppearance" | "applySiteSettings" | "applyWidgetSettings" | "sampleOcrSelfTest" | "forceTranslate" | "pageInventory";
 
-const CONTENT_COMMAND_NAMES: readonly UmtContentCommandName[] = ["translate", "refresh", "togglePause", "clearPage", "selectRegion", "retranslate", "retranslateVisible", "cancelQueue", "setOverlayVisibility", "toggleOverlayVisibility", "applyOverlayAppearance", "applySiteSettings", "applyWidgetSettings", "sampleOcrSelfTest"];
+const CONTENT_COMMAND_NAMES: readonly UmtContentCommandName[] = ["translate", "refresh", "togglePause", "clearPage", "selectRegion", "retranslate", "retranslateVisible", "cancelQueue", "setOverlayVisibility", "toggleOverlayVisibility", "applyOverlayAppearance", "applySiteSettings", "applyWidgetSettings", "sampleOcrSelfTest", "forceTranslate", "pageInventory"];
 
 /**
  * Commands only the top frame may act on: the selection crop is measured against the tab
- * viewport, the widgets are mounted once per tab, and the popup's sample test expects one answer.
+ * viewport, the widgets are mounted once per tab, the popup's sample test expects one answer, and
+ * the inventory is answered from the tab-level merge rather than one frame's queue.
  */
-const CONTROLLER_ONLY_COMMANDS = new Set<UmtContentCommandName>(["selectRegion", "applyWidgetSettings", "sampleOcrSelfTest"]);
+const CONTROLLER_ONLY_COMMANDS = new Set<UmtContentCommandName>(["selectRegion", "applyWidgetSettings", "sampleOcrSelfTest", "pageInventory"]);
 
 /** Page commands the top frame's floating button may forward to the frames that hold the pages. */
-const RELAYABLE_PAGE_COMMANDS = new Set<UmtContentCommandName>(["retranslateVisible", "setOverlayVisibility"]);
+const RELAYABLE_PAGE_COMMANDS = new Set<UmtContentCommandName>(["retranslateVisible", "setOverlayVisibility", "forceTranslate"]);
 
 export function isUmtContentCommandName(value: unknown): value is UmtContentCommandName {
   return typeof value === "string" && (CONTENT_COMMAND_NAMES as readonly string[]).includes(value);
@@ -36,6 +37,22 @@ export interface UmtContentCommand {
   progressWidgetEnabled?: boolean;
   /** Set on commands the worker routed itself: the top frame already ran the action, so it must not run it again. */
   frameScoped?: boolean;
+}
+
+/**
+ * What the tab's scanner saw, answered by the top frame from its merged view. Detection is silent
+ * by design, so a page that never looked like a reader gave the reader no way to tell "no images"
+ * from "images I refused to translate".
+ */
+export interface UmtPageInventoryResponse {
+  ok: boolean;
+  /** Surfaces accepted by the size and layout gates, across every frame of the tab. */
+  detected: number;
+  /** Surfaces actually queued for translation. */
+  queued: number;
+  /** This tab is already translating under a manual override. */
+  forced: boolean;
+  readerPage: boolean;
 }
 
 export type UmtPageSampleSelfTestResponse =
@@ -159,8 +176,17 @@ export function isUmtContentCommand(value: unknown): value is UmtContentCommand 
   return candidate.frameScoped === undefined || typeof candidate.frameScoped === "boolean";
 }
 
-export function isUmtCaptureVisibleTabRequest(value: unknown): value is UmtCaptureVisibleTabRequest {
+export function isUmtPageInventoryResponse(value: unknown): value is UmtPageInventoryResponse {
   if (!value || typeof value !== "object") return false;
+  const candidate = value as Partial<UmtPageInventoryResponse>;
+  return typeof candidate.ok === "boolean"
+    && typeof candidate.detected === "number"
+    && typeof candidate.queued === "number"
+    && typeof candidate.forced === "boolean"
+    && typeof candidate.readerPage === "boolean";
+}
+
+export function isUmtCaptureVisibleTabRequest(value: unknown): value is UmtCaptureVisibleTabRequest {  if (!value || typeof value !== "object") return false;
   const candidate = value as Partial<UmtCaptureVisibleTabRequest>;
   return candidate.source === "umt-content" && candidate.command === "captureVisibleTab";
 }
@@ -321,6 +347,7 @@ function isQueueSnapshot(value: unknown): value is QueueSnapshot {
   if (!value || typeof value !== "object") return false;
   const snapshot = value as Partial<QueueSnapshot>;
   return typeof snapshot.total === "number"
+    && typeof snapshot.detected === "number"
     && typeof snapshot.queued === "number"
     && typeof snapshot.processing === "number"
     && typeof snapshot.completed === "number"

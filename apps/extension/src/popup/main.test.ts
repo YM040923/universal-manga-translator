@@ -62,7 +62,7 @@ test("popup sends page commands only after site is enabled", async () => {
   root.querySelector<HTMLButtonElement>("[data-action='cancel']")!.click();
   await Promise.resolve();
 
-  assert.deepEqual(sent, [
+  assert.deepEqual(commands(sent), [
     { tabId: 123, message: { source: "umt-popup", command: "translate" } },
     { tabId: 123, message: { source: "umt-popup", command: "retranslateVisible" } },
     { tabId: 123, message: { source: "umt-popup", command: "cancelQueue" } },
@@ -92,6 +92,77 @@ test("popup does not inject content script before a site is enabled", async () =
   assert.deepEqual(ensured, []);
 });
 
+test("popup reports what the scanner saw and offers a forced page translation", async () => {
+  const dom = setupDom();
+  const sent: unknown[] = [];
+  const storage = fakeStorage(enableSiteForUrl(DEFAULT_SETTINGS, "https://asurascans.com/a"));
+  const root = dom.window.document.querySelector<HTMLElement>("#app")!;
+
+  await mountPopupPage(root, deps({
+    storage,
+    tabUrl: "https://asurascans.com/a",
+    sendMessageToTab: async (tabId, message) => {
+      sent.push({ tabId, message });
+      return message.command === "pageInventory" ? { ok: true, detected: 6, queued: 0, forced: false, readerPage: false } : undefined;
+    },
+  }));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.match(root.querySelector<HTMLElement>("[data-page-inventory]")?.textContent ?? "", /识别到 6 张图片/);
+  const force = root.querySelector<HTMLButtonElement>("[data-action='force-translate']");
+  assert.ok(force);
+
+  force!.click();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.deepEqual(sent.filter((entry) => (entry as { message: { command: string } }).message.command === "forceTranslate"), [
+    { tabId: 123, message: { source: "umt-popup", command: "forceTranslate" } },
+  ]);
+});
+
+test("popup drops the forced entry once the page is translating", async () => {
+  const dom = setupDom();
+  const storage = fakeStorage(enableSiteForUrl(DEFAULT_SETTINGS, "https://asurascans.com/a"));
+  const root = dom.window.document.querySelector<HTMLElement>("#app")!;
+
+  await mountPopupPage(root, deps({
+    storage,
+    tabUrl: "https://asurascans.com/a",
+    sendMessageToTab: async () => ({ ok: true, detected: 5, queued: 5, forced: false, readerPage: true }),
+  }));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(root.querySelector("[data-action='force-translate']"), null);
+  assert.match(root.querySelector<HTMLElement>("[data-page-inventory]")?.textContent ?? "", /已加入队列 5 张/);
+});
+
+test("popup tells an empty scan apart from a refused one", async () => {
+  const dom = setupDom();
+  const storage = fakeStorage(enableSiteForUrl(DEFAULT_SETTINGS, "https://asurascans.com/a"));
+  const root = dom.window.document.querySelector<HTMLElement>("#app")!;
+
+  await mountPopupPage(root, deps({
+    storage,
+    tabUrl: "https://asurascans.com/a",
+    sendMessageToTab: async () => ({ ok: true, detected: 0, queued: 0, forced: false, readerPage: false }),
+  }));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.match(root.querySelector<HTMLElement>("[data-page-inventory]")?.textContent ?? "", /未识别到图片/);
+  assert.equal(root.querySelector("[data-action='force-translate']"), null);
+});
+
+test("popup shows no inventory line when the page cannot answer", async () => {
+  const dom = setupDom();
+  const storage = fakeStorage(enableSiteForUrl(DEFAULT_SETTINGS, "https://asurascans.com/a"));
+  const root = dom.window.document.querySelector<HTMLElement>("#app")!;
+
+  await mountPopupPage(root, deps({ storage, tabUrl: "https://asurascans.com/a" }));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(root.querySelector("[data-page-inventory]"), null);
+});
+
 test("popup primary controls are all wired to page commands", async () => {
   const dom = setupDom();
   const sent: unknown[] = [];
@@ -104,7 +175,7 @@ test("popup primary controls are all wired to page commands", async () => {
   }
   await Promise.resolve();
 
-  assert.deepEqual(sent.map((entry) => (entry as { message: { command: string } }).message.command), [
+  assert.deepEqual(commands(sent).map((entry) => (entry as { message: { command: string } }).message.command), [
     "translate",
     "retranslateVisible",
     "togglePause",
@@ -138,7 +209,7 @@ test("popup toggles translation overlay visibility and persists it", async () =>
   await Promise.resolve();
 
   assert.equal(storage.current.translationOverlayVisible, false);
-  assert.deepEqual(sent, [{ tabId: 123, message: { source: "umt-popup", command: "setOverlayVisibility", visible: false } }]);
+  assert.deepEqual(commands(sent), [{ tabId: 123, message: { source: "umt-popup", command: "setOverlayVisibility", visible: false } }]);
 });
 
 test("settings widget switches persist and send real page commands", async () => {
@@ -699,6 +770,11 @@ test("popup settings button opens a dedicated page with the active tab context",
 
   assert.equal(openedTab, 123);
 });
+/** The read-only pageInventory probe rides the same channel as the commands these assertions are about. */
+function commands(sent: unknown[]): unknown[] {
+  return sent.filter((entry) => (entry as { message?: { command?: string } }).message?.command !== "pageInventory");
+}
+
 function setupDom(): JSDOM {
   const dom = new JSDOM('<main id="app"></main>', { url: "chrome-extension://umt/popup.html" });
   globalThis.document = dom.window.document;
@@ -779,7 +855,7 @@ test("popup retranslate button targets only visible surfaces", async () => {
   root.querySelector<HTMLButtonElement>("[data-action='retranslate']")!.click();
   await Promise.resolve();
 
-  assert.deepEqual(sent, [{ tabId: 123, message: { source: "umt-popup", command: "retranslateVisible" } }]);
+  assert.deepEqual(commands(sent), [{ tabId: 123, message: { source: "umt-popup", command: "retranslateVisible" } }]);
 });
 
 test("popup keeps settings out of the popup and exposes a separate settings entry", async () => {

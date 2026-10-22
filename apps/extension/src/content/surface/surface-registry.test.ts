@@ -197,6 +197,136 @@ function setupEmbedFrameDom(): { doc: Document; surfaces: ReturnType<typeof Surf
   return { doc: dom.window.document, surfaces: SurfaceRegistry.scan(dom.window.document).surfaces };
 }
 
+function boxDom(html: string, url: string, boxes: Record<string, { x?: number; y?: number; width: number; height: number }>): Document {
+  const dom = new JSDOM(`<!doctype html><html><body>${html}</body></html>`, { url });
+  globalThis.window = dom.window as unknown as Window & typeof globalThis;
+  globalThis.document = dom.window.document;
+  globalThis.HTMLElement = dom.window.HTMLElement;
+  globalThis.HTMLImageElement = dom.window.HTMLImageElement;
+  globalThis.HTMLCanvasElement = dom.window.HTMLCanvasElement;
+  for (const [id, box] of Object.entries(boxes)) {
+    const element = dom.window.document.getElementById(id)!;
+    const rect = { x: box.x ?? 0, y: box.y ?? 0, width: box.width, height: box.height };
+    element.getBoundingClientRect = () => ({ ...rect, left: rect.x, top: rect.y, right: rect.x + rect.width, bottom: rect.y + rect.height, toJSON: () => ({}) });
+    if ("naturalWidth" in element) {
+      Object.defineProperty(element, "naturalWidth", { value: rect.width, configurable: true });
+      Object.defineProperty(element, "naturalHeight", { value: rect.height, configurable: true });
+    }
+  }
+  return dom.window.document;
+}
+
+test("SurfaceRegistry keeps a large page image and ignores a small icon", () => {
+  const doc = boxDom(
+    `<img id="icon" src="/icon.png"><img id="page" src="/chapter/page-001.jpg">`,
+    "https://example.test/reader",
+    { icon: { width: 32, height: 32 }, page: { width: 800, height: 1200 } },
+  );
+
+  const surfaces = SurfaceRegistry.scan(doc).surfaces;
+
+  assert.deepEqual(surfaces.map((surface) => surface.element.id), ["page"]);
+  assert.equal(surfaces[0]?.kind, "image");
+});
+
+test("SurfaceRegistry detects a page painted as a CSS background image", () => {
+  const doc = boxDom(
+    `<div id="bg" style="background-image:url('/chapter/bg-page-001.jpg')"></div>`,
+    "https://example.test/reader",
+    { bg: { x: 20, y: 40, width: 760, height: 1180 } },
+  );
+
+  const surfaces = SurfaceRegistry.scan(doc).surfaces;
+
+  assert.equal(surfaces.length, 1);
+  assert.equal(surfaces[0]?.kind, "background");
+  assert.equal(surfaces[0]?.imageUrl, "https://example.test/chapter/bg-page-001.jpg");
+});
+
+test("SurfaceRegistry exports a canvas painter into pixel data", () => {
+  const doc = boxDom(`<canvas id="c"></canvas>`, "https://example.test/reader", { c: { width: 900, height: 1300 } });
+  Object.defineProperty(doc.querySelector("#c")!, "toDataURL", { value: () => "data:image/png;base64,abc123" });
+  Object.defineProperty(doc.querySelector("#c")!, "width", { value: 900, configurable: true });
+  Object.defineProperty(doc.querySelector("#c")!, "height", { value: 1300, configurable: true });
+
+  const surfaces = SurfaceRegistry.scan(doc).surfaces;
+
+  assert.equal(surfaces.length, 1);
+  assert.equal(surfaces[0]?.kind, "canvas");
+  assert.equal(surfaces[0]?.imageData, "data:image/png;base64,abc123");
+  assert.equal(surfaces[0]?.cacheKey, surfaces[0]?.surfaceId);
+});
+
+test("SurfaceRegistry ignores a canvas whose context is tainted", () => {
+  const doc = boxDom(`<canvas id="c"></canvas>`, "https://example.test/reader", { c: { width: 900, height: 1300 } });
+  Object.defineProperty(doc.querySelector("#c")!, "toDataURL", { value: () => { throw new Error("tainted"); } });
+
+  assert.deepEqual(SurfaceRegistry.scan(doc).surfaces, []);
+});
+
+test("SurfaceRegistry finds pages painted inside an open shadow root", () => {
+  const doc = boxDom(`<div id="reader"></div>`, "https://example.test/reader", {});
+  const host = doc.querySelector<HTMLElement>("#reader")!;
+  const shadow = host.attachShadow({ mode: "open" });
+  shadow.innerHTML = `<img id="shadow-page" src="/chapter/page-007.jpg">`;
+  const page = shadow.querySelector<HTMLImageElement>("#shadow-page")!;
+  page.getBoundingClientRect = () => ({ x: 0, y: 100, left: 0, top: 100, right: 800, bottom: 1300, width: 800, height: 1200, toJSON: () => ({}) });
+  Object.defineProperty(page, "naturalWidth", { value: 800, configurable: true });
+  Object.defineProperty(page, "naturalHeight", { value: 1200, configurable: true });
+
+  const surfaces = SurfaceRegistry.scan(doc).surfaces;
+
+  assert.equal(surfaces.length, 1);
+  assert.equal(surfaces[0]?.element.id, "shadow-page");
+  assert.equal(surfaces[0]?.imageUrl, "https://example.test/chapter/page-007.jpg");
+});
+
+test("SurfaceRegistry keeps the img when a wrapper repeats its url as a background", () => {
+  const doc = boxDom(
+    `<div id="wrap" style="background-image:url('/chapter/page-003.jpg')"><img id="page" src="/chapter/page-003.jpg"></div>`,
+    "https://example.test/reader",
+    { wrap: { width: 800, height: 1200 }, page: { width: 800, height: 1200 } },
+  );
+
+  const surfaces = SurfaceRegistry.scan(doc).surfaces;
+
+  assert.equal(surfaces.length, 1);
+  assert.equal(surfaces[0]?.kind, "image");
+  assert.equal(surfaces[0]?.element.id, "page");
+});
+
+test("SurfaceRegistry accepts a wide landscape spread and reads it as a chapter page", () => {
+  const doc = boxDom(`<img id="spread" src="/chapter/page-004.jpg">`, "https://example.test/reader", { spread: { width: 2400, height: 1400 } });
+
+  const surfaces = SurfaceRegistry.scan(doc).surfaces;
+
+  assert.equal(surfaces.length, 1);
+  assert.equal(isLikelyReaderPage(doc, surfaces), true);
+});
+
+test("isLikelyReaderPage treats a canvas that paints the viewport as the page itself", () => {
+  const doc = boxDom(`<canvas id="reader"></canvas>`, "https://example.test/watch/12345", { reader: { width: 900, height: 1200 } });
+  const canvas = doc.getElementById("reader")! as unknown as HTMLCanvasElement;
+  canvas.width = 900;
+  canvas.height = 1200;
+  canvas.toDataURL = () => "data:image/png;base64,AAAA";
+
+  const surfaces = SurfaceRegistry.scan(doc).surfaces;
+
+  assert.equal(surfaces.length, 1);
+  assert.equal(surfaces[0]!.kind, "canvas");
+  assert.equal(isLikelyReaderPage(doc, surfaces), true);
+});
+
+test("isLikelyReaderPage keeps an unrelated tall image dormant without url evidence", () => {
+  const doc = boxDom(`<img id="banner" src="/assets/hero-art.jpg">`, "https://example.test/series/the-title", { banner: { width: 800, height: 12000 } });
+
+  const surfaces = SurfaceRegistry.scan(doc).surfaces;
+
+  assert.equal(surfaces.length, 1);
+  assert.equal(isLikelyReaderPage(doc, surfaces, { pageUrl: "https://example.test/series/the-title", isTopFrame: true }), false);
+});
+
 test("isLikelyReaderPage lets a reader frame inherit the chapter page that embeds it", () => {
   const { doc, surfaces } = setupEmbedFrameDom();
 

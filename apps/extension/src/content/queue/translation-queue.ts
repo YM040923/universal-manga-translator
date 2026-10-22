@@ -3,6 +3,8 @@ import type { RegisteredSurface } from "../surface/surface-registry.js";
 
 export interface QueueSnapshot {
   total: number;
+  /** Surfaces the scanner accepted in this frame, even when the reader-page gate refused to queue them. */
+  detected: number;
   queued: number;
   processing: number;
   completed: number;
@@ -32,11 +34,18 @@ export class TranslationQueue {
   private generation = 0;
   private autoRun: Promise<void> | null = null;
   private followUpAutoRunRequested = false;
+  private detected = 0;
 
   constructor(private readonly options: TranslationQueueOptions) {}
 
+  /** Recorded even when the reader-page gate refuses to queue anything, so the UI can say why. */
+  setDetected(count: number): void {
+    this.detected = Math.max(0, Math.trunc(count));
+  }
+
   setSurfaces(surfaces: RegisteredSurface[]): void {
     this.surfaces = [...surfaces].sort((a, b) => a.index - b.index);
+    this.detected = Math.max(this.detected, this.surfaces.length);
     for (const surface of this.surfaces) {
       if (!this.statuses.has(surface.surfaceId)) this.mark(surface.surfaceId, "idle");
     }
@@ -78,6 +87,7 @@ export class TranslationQueue {
     this.statuses.clear();
     this.processing.clear();
     this.paused = false;
+    this.detected = 0;
   }
 
   async startAuto(): Promise<void> {
@@ -131,7 +141,7 @@ export class TranslationQueue {
       if (status === "cancelled") cancelled += 1;
       if (ACTIVE_STATUSES.has(status)) processingIds.add(surface.surfaceId);
     }
-    return { total: this.surfaces.length, queued, processing: processingIds.size, completed, cached, empty, failed, cancelled, paused: this.paused };
+    return { total: this.surfaces.length, detected: this.detected, queued, processing: processingIds.size, completed, cached, empty, failed, cancelled, paused: this.paused };
   }
 
   private async runPending(pending: RegisteredSurface[], generation: number, concurrencyOverride?: number): Promise<void> {

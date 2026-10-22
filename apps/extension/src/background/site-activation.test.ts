@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createScriptingInjectionDeps, handleActivateSiteMessage, injectContentScriptsIntoEnabledTabs, maybeInjectContentScriptForTab } from "./site-activation.js";
+import { createScriptingInjectionDeps, handleActivateSiteMessage, injectContentScriptsIntoEnabledTabs, maybeInjectContentScriptForFrame, maybeInjectContentScriptForTab, registerFrameNavigationInjection } from "./site-activation.js";
 import { DEFAULT_SETTINGS, type SettingsStorageArea } from "../settings/settings.js";
 
 test("createScriptingInjectionDeps reaches the frames an embedded reader keeps its pages in", async () => {
@@ -10,6 +10,15 @@ test("createScriptingInjectionDeps reaches the frames an embedded reader keeps i
   await createScriptingInjectionDeps(scripting).executeScript({ tabId: 12, files: ["content.js"] });
 
   assert.deepEqual(calls, [{ target: { tabId: 12, allFrames: true }, files: ["content.js"] }]);
+});
+
+test("createScriptingInjectionDeps addresses one navigating frame without restarting the others", async () => {
+  const calls: Array<{ target: unknown; files: string[] }> = [];
+  const scripting = { executeScript: async (details: { target: unknown; files: string[] }) => { calls.push(details); } } as unknown as typeof chrome.scripting;
+
+  await createScriptingInjectionDeps(scripting).executeScript({ tabId: 12, frameId: 7, files: ["content.js"] });
+
+  assert.deepEqual(calls, [{ target: { tabId: 12, frameIds: [7] }, files: ["content.js"] }]);
 });
 
 test("handleActivateSiteMessage enables the primary domain and injects content script", async () => {
@@ -35,6 +44,42 @@ test("maybeInjectContentScriptForTab injects only enabled http tabs", async () =
   await maybeInjectContentScriptForTab(7, "chrome://extensions", { storage, executeScript: async (details: { tabId: number; files: string[] }) => { injected.push(details); } });
 
   assert.deepEqual(injected, [{ tabId: 5, files: ["content.js"] }]);
+});
+
+test("maybeInjectContentScriptForFrame re-injects a navigating reader frame of an enabled site", async () => {
+  const storage = fakeStorage({ enabledSites: { "asurascans.com": true } });
+  const injected: Array<{ tabId: number; frameId?: number; files: string[] }> = [];
+  const deps = { storage, executeScript: async (details: { tabId: number; frameId?: number; files: string[] }) => { injected.push(details); } };
+
+  await maybeInjectContentScriptForFrame(5, 3, "https://asurascans.com/chapter/1", deps);
+  await maybeInjectContentScriptForFrame(6, 3, "https://other.example/chapter/1", deps);
+  await maybeInjectContentScriptForFrame(7, 0, "https://asurascans.com/chapter/1", deps);
+
+  assert.deepEqual(injected, [{ tabId: 5, frameId: 3, files: ["content.js"] }]);
+});
+
+test("frame navigation listeners re-inject only the frame of an enabled tab", async () => {
+  const storage = fakeStorage({ enabledSites: { "asurascans.com": true } });
+  const injected: Array<{ tabId: number; frameId?: number | undefined }> = [];
+  const listeners: Array<(details: { tabId: number; frameId: number }) => void> = [];
+  const webNavigation = {
+    onCompleted: { addListener: (listener: (details: { tabId: number; frameId: number }) => void) => { listeners.push(listener); } },
+    onHistoryStateUpdated: { addListener: (listener: (details: { tabId: number; frameId: number }) => void) => { listeners.push(listener); } },
+  };
+
+  registerFrameNavigationInjection(
+    { storage, executeScript: async (details: { tabId: number; frameId?: number }) => { injected.push({ tabId: details.tabId, frameId: details.frameId }); } },
+    { get: async (tabId: number) => ({ url: tabId === 8 ? "https://other.example/a" : "https://asurascans.com/chapter/1" }) },
+    webNavigation,
+  );
+  assert.equal(listeners.length, 2);
+
+  listeners[0]!({ tabId: 9, frameId: 3 });
+  listeners[1]!({ tabId: 8, frameId: 4 });
+  listeners[0]!({ tabId: 9, frameId: 0 });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.deepEqual(injected, [{ tabId: 9, frameId: 3 }]);
 });
 
 test("injectContentScriptsIntoEnabledTabs restores enabled manga tabs after extension reload", async () => {

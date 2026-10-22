@@ -15,7 +15,7 @@ import type { UmtDelegateSelfTestResponse, UmtFrameContextResponse, UmtFrameProg
 const CHAPTER_URL = "https://asurascans.com/secret/chapter/12";
 
 function snapshot(overrides: Partial<QueueSnapshot> = {}): QueueSnapshot {
-  return { total: 0, queued: 0, processing: 0, completed: 0, cached: 0, empty: 0, failed: 0, cancelled: 0, paused: false, ...overrides };
+  return { total: 0, detected: 0, queued: 0, processing: 0, completed: 0, cached: 0, empty: 0, failed: 0, cancelled: 0, paused: false, ...overrides };
 }
 
 function topFrame(tabId = 1): FrameMessageSender {

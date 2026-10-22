@@ -1,74 +1,47 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
-import { detectImageSurfaces } from "./surface-detector.js";
+import {
+  canvasDataUrl,
+  extractBackgroundImageUrl,
+  extractImageElementUrl,
+  isPlaceholderImageUrl,
+} from "./surface-detector.js";
 
-test("keeps large manga-like images and ignores small icons", () => {
-  const dom = new JSDOM(`<body><img id="icon" src="/icon.png" width="32" height="32" /><img id="page" src="/chapter/page-001.jpg" width="800" height="1200" /></body>`, { url: "https://example.test" });
-  const doc = dom.window.document;
-  Object.defineProperty(doc.querySelector("#icon"), "getBoundingClientRect", { value: () => ({ x: 0, y: 0, width: 32, height: 32 }) });
-  Object.defineProperty(doc.querySelector("#page"), "getBoundingClientRect", { value: () => ({ x: 0, y: 0, width: 800, height: 1200 }) });
-  const surfaces = detectImageSurfaces(doc);
-  assert.equal(surfaces.length, 1);
-  assert.equal(surfaces[0]?.kind, "image");
-  assert.equal(surfaces[0]?.element.id, "page");
+function image(html: string): HTMLImageElement {
+  const dom = new JSDOM(`<body>${html}</body>`, { url: "https://example.test" });
+  return dom.window.document.querySelector<HTMLImageElement>("img")!;
+}
+
+test("reads the real page from a lazy-loading data attribute", () => {
+  const img = image(`<img src="/placeholder.gif" data-src="/chapter/page-002.jpg">`);
+  assert.equal(extractImageElementUrl(img), "https://example.test/chapter/page-002.jpg");
 });
 
-test("detects large CSS background manga surfaces", () => {
-  const dom = new JSDOM(`<body><main><div id="bg" style="background-image:url('/chapter/bg-page-001.jpg')"></div></main></body>`, { url: "https://example.test" });
-  const doc = dom.window.document;
-  const bg = doc.querySelector<HTMLElement>("#bg")!;
-  Object.defineProperty(bg, "getBoundingClientRect", { value: () => ({ x: 20, y: 40, width: 760, height: 1180 }) });
-  const surfaces = detectImageSurfaces(doc);
-  assert.equal(surfaces.length, 1);
-  assert.equal(surfaces[0]?.kind, "background");
-  assert.equal(surfaces[0]?.imageUrl, "https://example.test/chapter/bg-page-001.jpg");
-  assert.equal(surfaces[0]?.naturalSize.width, 760);
+test("prefers the widest srcset candidate when no data attribute is set", () => {
+  const img = image(`<img src="/placeholder.gif" srcset="/chapter/small.jpg 400w, /chapter/large.jpg 1200w">`);
+  assert.equal(extractImageElementUrl(img), "https://example.test/chapter/large.jpg");
 });
 
-test("detects exportable canvas manga surfaces", () => {
-  const dom = new JSDOM(`<body><canvas id="canvas" width="900" height="1300"></canvas></body>`, { url: "https://example.test" });
-  const doc = dom.window.document;
-  const canvas = doc.querySelector<HTMLCanvasElement>("#canvas")!;
-  Object.defineProperty(canvas, "getBoundingClientRect", { value: () => ({ x: 0, y: 100, width: 900, height: 1300 }) });
-  Object.defineProperty(canvas, "toDataURL", { value: () => "data:image/png;base64,abc123" });
-  const surfaces = detectImageSurfaces(doc);
-  assert.equal(surfaces.length, 1);
-  assert.equal(surfaces[0]?.kind, "canvas");
-  assert.equal(surfaces[0]?.imageData, "data:image/png;base64,abc123");
+test("falls back to src when no lazy source exists", () => {
+  const img = image(`<img src="/chapter/page-001.jpg">`);
+  assert.equal(extractImageElementUrl(img), "https://example.test/chapter/page-001.jpg");
 });
 
-test("detects lazy-loaded manga image urls from common data attributes", () => {
-  const dom = new JSDOM(`<body><img id="lazy" src="/placeholder.gif" data-src="/chapter/page-002.jpg" width="800" height="1200" /></body>`, { url: "https://example.test" });
-  const doc = dom.window.document;
-  Object.defineProperty(doc.querySelector("#lazy"), "getBoundingClientRect", { value: () => ({ x: 0, y: 0, width: 800, height: 1200 }) });
-
-  const surfaces = detectImageSurfaces(doc);
-
-  assert.equal(surfaces.length, 1);
-  assert.equal(surfaces[0]?.imageUrl, "https://example.test/chapter/page-002.jpg");
+test("resolves a background image url against the page", () => {
+  assert.equal(extractBackgroundImageUrl(`url("/chapter/bg-page-001.jpg")`, "https://example.test/reader"), "https://example.test/chapter/bg-page-001.jpg");
+  assert.equal(extractBackgroundImageUrl("none", "https://example.test/reader"), "");
 });
 
-test("detects manga image urls from srcset when currentSrc is unavailable", () => {
-  const dom = new JSDOM(`<body><img id="srcset" src="/placeholder.gif" srcset="/chapter/page-small.jpg 400w, /chapter/page-large.jpg 1200w" width="800" height="1200" /></body>`, { url: "https://example.test" });
-  const doc = dom.window.document;
-  Object.defineProperty(doc.querySelector("#srcset"), "getBoundingClientRect", { value: () => ({ x: 0, y: 0, width: 800, height: 1200 }) });
-
-  const surfaces = detectImageSurfaces(doc);
-
-  assert.equal(surfaces.length, 1);
-  assert.equal(surfaces[0]?.imageUrl, "https://example.test/chapter/page-large.jpg");
+test("treats a tainted canvas as unreadable instead of throwing", () => {
+  const dom = new JSDOM(`<body><canvas id="c" width="900" height="1300"></canvas></body>`, { url: "https://example.test" });
+  const canvas = dom.window.document.querySelector<HTMLCanvasElement>("#c")!;
+  Object.defineProperty(canvas, "toDataURL", { value: () => { throw new Error("tainted"); } });
+  assert.equal(canvasDataUrl(canvas), "");
 });
 
-
-test("deduplicates surfaces that point to the same manga image url", () => {
-  const dom = new JSDOM(`<body><img id="a" src="/chapter/page-003.jpg" width="800" height="1200" /><img id="b" data-src="/chapter/page-003.jpg" src="/placeholder.gif" width="800" height="1200" /></body>`, { url: "https://example.test" });
-  const doc = dom.window.document;
-  Object.defineProperty(doc.querySelector("#a"), "getBoundingClientRect", { value: () => ({ x: 0, y: 0, width: 800, height: 1200 }) });
-  Object.defineProperty(doc.querySelector("#b"), "getBoundingClientRect", { value: () => ({ x: 0, y: 0, width: 800, height: 1200 }) });
-
-  const surfaces = detectImageSurfaces(doc);
-
-  assert.equal(surfaces.length, 1);
-  assert.equal(surfaces[0]?.imageUrl, "https://example.test/chapter/page-003.jpg");
+test("recognises placeholder urls so a lazy shell is never submitted", () => {
+  assert.equal(isPlaceholderImageUrl("/img/spacer.gif"), true);
+  assert.equal(isPlaceholderImageUrl("data:image/gif;base64,R0lGOD"), true);
+  assert.equal(isPlaceholderImageUrl("/chapter/page-001.jpg"), false);
 });

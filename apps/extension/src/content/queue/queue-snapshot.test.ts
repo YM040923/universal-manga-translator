@@ -4,7 +4,7 @@ import { mergeQueueSnapshots } from "./queue-snapshot.js";
 import type { QueueSnapshot } from "./translation-queue.js";
 
 function snapshot(overrides: Partial<QueueSnapshot> = {}): QueueSnapshot {
-  return { total: 0, queued: 0, processing: 0, completed: 0, cached: 0, empty: 0, failed: 0, cancelled: 0, paused: false, ...overrides };
+  return { total: 0, detected: 0, queued: 0, processing: 0, completed: 0, cached: 0, empty: 0, failed: 0, cancelled: 0, paused: false, ...overrides };
 }
 
 test("mergeQueueSnapshots adds up the counters of every frame", () => {

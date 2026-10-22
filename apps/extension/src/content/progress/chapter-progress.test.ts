@@ -25,7 +25,7 @@ test("ChapterProgress mounts a draggable translucent widget and renders counts",
   const widget = new ChapterProgress();
 
   await widget.mount();
-  widget.update({ total: 5, queued: 2, processing: 1, completed: 1, cached: 1, empty: 0, failed: 0, cancelled: 0, paused: false });
+  widget.update({ total: 5, detected: 5, queued: 2, processing: 1, completed: 1, cached: 1, empty: 0, failed: 0, cancelled: 0, paused: false });
 
   const root = document.querySelector<HTMLElement>("[data-umt-chapter-progress='true']")!;
   assert.ok(root);
@@ -45,7 +45,7 @@ test("ChapterProgress includes cancelled jobs in terminal progress and state", a
   const widget = new ChapterProgress();
 
   await widget.mount();
-  widget.update({ total: 4, queued: 0, processing: 0, completed: 1, cached: 0, empty: 0, failed: 1, cancelled: 2, paused: false });
+  widget.update({ total: 4, detected: 4, queued: 0, processing: 0, completed: 1, cached: 0, empty: 0, failed: 1, cancelled: 2, paused: false });
 
   const root = document.querySelector<HTMLElement>("[data-umt-chapter-progress='true']")!;
   const bar = document.querySelector<HTMLElement>("[data-umt-progress-bar='true']")!;
@@ -54,11 +54,33 @@ test("ChapterProgress includes cancelled jobs in terminal progress and state", a
   assert.equal(root.dataset.progressState, "failed");
 });
 
+test("ChapterProgress names the detected pages when the reader heuristics refused the page", async () => {
+  setupDom();
+  const widget = new ChapterProgress();
+  await widget.mount();
+  widget.update({ total: 0, detected: 4, queued: 0, processing: 0, completed: 0, cached: 0, empty: 0, failed: 0, cancelled: 0, paused: false });
+
+  const text = document.querySelector<HTMLElement>("[data-umt-chapter-progress='true']")!.textContent ?? "";
+  assert.match(text, /识别到 4 张图片/);
+  assert.match(text, /强制翻译/);
+});
+
+test("ChapterProgress tells an empty scan apart from a refused one", async () => {
+  setupDom();
+  const widget = new ChapterProgress();
+  await widget.mount();
+  widget.update({ total: 0, detected: 0, queued: 0, processing: 0, completed: 0, cached: 0, empty: 0, failed: 0, cancelled: 0, paused: false });
+
+  const text = document.querySelector<HTMLElement>("[data-umt-chapter-progress='true']")!.textContent ?? "";
+  assert.match(text, /未识别到图片/);
+  assert.doesNotMatch(text, /强制翻译/);
+});
+
 test("ChapterProgress can be reset to an idle waiting state", async () => {
   setupDom();
   const widget = new ChapterProgress();
   await widget.mount();
-  widget.update({ total: 4, queued: 0, processing: 0, completed: 4, cached: 0, empty: 0, failed: 0, cancelled: 0, paused: false });
+  widget.update({ total: 4, detected: 4, queued: 0, processing: 0, completed: 4, cached: 0, empty: 0, failed: 0, cancelled: 0, paused: false });
 
   widget.reset("等待开始");
 
@@ -88,4 +110,16 @@ test("ChapterProgress folds to a dot and persists drag position", async () => {
   const next = roots[roots.length - 1]!;
   assert.equal(next.style.left, "48px");
   assert.equal(next.style.top, "125px");
+});
+
+test("ChapterProgress follows the element a reader fullscreened and returns to the root", async () => {
+  setupDom();
+  const container = document.createElement("div");
+  document.body.append(container);
+  const widget = new ChapterProgress();
+
+  await widget.mount(container);
+  assert.equal(document.querySelector<HTMLElement>("[data-umt-chapter-progress='true']")!.parentElement, container);
+  await widget.mount();
+  assert.equal(document.querySelector<HTMLElement>("[data-umt-chapter-progress='true']")!.parentElement, document.documentElement);
 });

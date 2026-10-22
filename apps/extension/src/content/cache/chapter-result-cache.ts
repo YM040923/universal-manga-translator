@@ -5,7 +5,8 @@ const MAX_CACHED_PAGES = 60;
 
 export interface ChapterResultCacheEntry {
   surfaceId: string;
-  imageUrl: string;
+  /** Page url for an `<img>` or background surface, the surface id for a canvas that has no url. */
+  cacheKey: string;
   result: SurfaceResult;
   savedAt: number;
 }
@@ -49,10 +50,10 @@ export class ChapterResultCache {
     return doc;
   }
 
-  async save(context: ChapterResultCacheContext, imageUrl: string, result: SurfaceResult): Promise<void> {
-    if (!imageUrl || result.status === "empty" || result.regions.length === 0) return;
+  async save(context: ChapterResultCacheContext, cacheKey: string, result: SurfaceResult): Promise<void> {
+    if (!cacheKey || result.status === "empty" || result.regions.length === 0) return;
     const key = chapterResultCacheKey(context);
-    const entry: ChapterResultCacheEntry = { surfaceId: result.surfaceId, imageUrl, result, savedAt: Date.now() };
+    const entry: ChapterResultCacheEntry = { surfaceId: result.surfaceId, cacheKey, result, savedAt: Date.now() };
     const previous = this.pendingWrites.get(key) ?? Promise.resolve();
     const write = previous.then(() => this.writeEntry(key, context, entry), () => this.writeEntry(key, context, entry));
     const tracked = write.catch(() => undefined);
@@ -65,7 +66,7 @@ export class ChapterResultCache {
 
   private async writeEntry(key: string, context: ChapterResultCacheContext, entry: ChapterResultCacheEntry): Promise<void> {
     const doc = await this.read(context);
-    doc.entries[entry.imageUrl] = entry;
+    doc.entries[entry.cacheKey] = entry;
     evictOldestPages(doc.entries);
     await this.storage.set({ [key]: doc });
   }
@@ -76,8 +77,8 @@ export class ChapterResultCache {
 }
 
 function evictOldestPages(entries: Record<string, ChapterResultCacheEntry>): void {
-  const imageUrls = Object.keys(entries);
-  if (imageUrls.length <= MAX_CACHED_PAGES) return;
-  imageUrls.sort((a, b) => (entries[a]?.savedAt ?? 0) - (entries[b]?.savedAt ?? 0));
-  for (const imageUrl of imageUrls.slice(0, imageUrls.length - MAX_CACHED_PAGES)) delete entries[imageUrl];
+  const cacheKeys = Object.keys(entries);
+  if (cacheKeys.length <= MAX_CACHED_PAGES) return;
+  cacheKeys.sort((a, b) => (entries[a]?.savedAt ?? 0) - (entries[b]?.savedAt ?? 0));
+  for (const cacheKey of cacheKeys.slice(0, cacheKeys.length - MAX_CACHED_PAGES)) delete entries[cacheKey];
 }

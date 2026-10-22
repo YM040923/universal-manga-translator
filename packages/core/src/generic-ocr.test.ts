@@ -146,7 +146,7 @@ test("GenericNetworkOcrClient retires a rejected key until the settings are save
 });
 
 test("classifyGenericOcrError labels common provider failures", () => {
-  assert.deepEqual(classifyGenericOcrError(new Error("Network OCR failed: 402 INSUFFICIENT_CREDITS �˻����ֲ���")), { kind: "quota", retryable: false });
+  assert.deepEqual(classifyGenericOcrError(new Error("Network OCR failed: 402 INSUFFICIENT_CREDITS 账户余额不足")), { kind: "quota", retryable: false });
   assert.deepEqual(classifyGenericOcrError(new Error("Network OCR failed: 401 INVALID_API_KEY")), { kind: "auth", retryable: false });
   assert.deepEqual(classifyGenericOcrError(new Error("Network OCR failed: 429 rate limit")), { kind: "rate_limit", retryable: true });
   assert.deepEqual(classifyGenericOcrError(new Error("fetch failed")), { kind: "network", retryable: true });

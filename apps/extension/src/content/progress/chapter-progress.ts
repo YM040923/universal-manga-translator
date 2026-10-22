@@ -76,9 +76,10 @@ export class ChapterProgress {
     });
   }
 
-  async mount(): Promise<void> {
+  /** Re-mounting with a different host moves the card, which is how it survives a reader's fullscreen element. */
+  async mount(host: Element = document.documentElement): Promise<void> {
     await this.restorePosition();
-    if (!document.documentElement.contains(this.root)) document.documentElement.append(this.root);
+    if (this.root.parentElement !== host) host.append(this.root);
   }
 
   remove(): void {
@@ -93,13 +94,15 @@ export class ChapterProgress {
     this.title.textContent = progressTitle(snapshot, pct, state);
     this.bar.style.width = `${pct}%`;
     this.bar.style.background = progressColor(state);
-    this.body.textContent = [
-      `总计 ${snapshot.total} | ${pct}%`,
-      `完成 ${snapshot.completed}  缓存 ${snapshot.cached}`,
-      `处理中 ${snapshot.processing}  排队 ${snapshot.queued}`,
-      `空 ${snapshot.empty}  失败 ${snapshot.failed}  取消 ${snapshot.cancelled}`,
-      progressStage(snapshot, state),
-    ].join("\n");
+    this.body.textContent = snapshot.total
+      ? [
+          `总计 ${snapshot.total} | ${pct}%`,
+          `完成 ${snapshot.completed}  缓存 ${snapshot.cached}`,
+          `处理中 ${snapshot.processing}  排队 ${snapshot.queued}`,
+          `空 ${snapshot.empty}  失败 ${snapshot.failed}  取消 ${snapshot.cancelled}`,
+          progressStage(snapshot, state),
+        ].join("\n")
+      : detectionHint(snapshot);
   }
 
   reset(message = "等待扫描"): void {
@@ -179,8 +182,16 @@ function terminalCount(snapshot: QueueSnapshot): number {
   return snapshot.completed + snapshot.cached + snapshot.empty + snapshot.failed + snapshot.cancelled;
 }
 
-function progressState(snapshot: QueueSnapshot): ProgressState {
-  if (!snapshot.total) return "idle";
+/**
+ * Nothing is queued, so say what the scanner saw instead of an empty progress bar: a reader whose
+ * pages were rejected needs to know the difference between no images and an unrecognised reader.
+ */
+function detectionHint(snapshot: QueueSnapshot): string {
+  if (!snapshot.detected) return "未识别到图片\n右键按钮可框选翻译";
+  return `本页识别到 ${snapshot.detected} 张图片\n未判定为漫画页\n右键按钮选择强制翻译本页`;
+}
+
+function progressState(snapshot: QueueSnapshot): ProgressState {  if (!snapshot.total) return "idle";
   if (snapshot.paused) return "paused";
   const done = terminalCount(snapshot);
   if (done >= snapshot.total) {

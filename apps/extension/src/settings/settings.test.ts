@@ -72,7 +72,7 @@ test("saveSettings normalizes and persists extended settings", async () => {
     floatingButtonEnabled: false,
     progressWidgetEnabled: false,
     siteSettings: {
-      "https://example.com": { autoTranslate: true, scope: "similarPath", pathPrefix: "/comic" },
+      "https://example.com": { autoTranslate: true, scope: "similarPath", pathPrefix: "/comic", readingMode: "auto" },
     },
   });
 });
@@ -230,6 +230,7 @@ test("getEffectiveSiteSettings uses origin override", () => {
     scope: "origin",
     pathPrefix: "/",
     unsupported: false,
+    readingMode: "auto",
   });
 });
 
@@ -246,6 +247,7 @@ test("getEffectiveSiteSettings computes similar path prefix", () => {
     scope: "similarPath",
     pathPrefix: "/series/name",
     unsupported: false,
+    readingMode: "auto",
   });
 });
 
@@ -428,6 +430,7 @@ test("saveSettings keeps API keys out of the synced preferences area", async () 
     version: 1,
     ocrApiKeys: ["ocr-secret-a", "ocr-secret-b"],
     translatorApiKey: "llm-secret",
+    imageDescriptionApiKey: "",
   });
   assert.doesNotMatch(JSON.stringify(preferences.writes), /ocr-secret-a|ocr-secret-b|llm-secret/);
   assert.equal((preferences.writes.at(-1) as { directTranslator: { apiKey: string } }).directTranslator.apiKey, "");

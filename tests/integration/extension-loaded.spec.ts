@@ -110,7 +110,9 @@ test("loaded extension stays inactive until the manga site is explicitly enabled
 
     await expect(page.locator("[data-umt-panel]")).toBeVisible({ timeout: 10000 });
     await expect(page.locator("[data-umt-chapter-progress='true']")).toBeVisible();
-    await expect(page.locator("[data-umt-surface-button]")).toHaveCount(1);
+    // The background div repeats the <img> url, so it dedupes into the image and only the canvas
+    // adds a third surface of its own.
+    await expect(page.locator("[data-umt-surface-button]")).toHaveCount(2);
   });
 });
 
@@ -149,7 +151,9 @@ test("reader frame added after activation is injected without a reload", async (
   await runWithFixtures(async (page, context, origin) => {
     await page.goto(`${origin}/lazy-embedded-manga.html`);
     await activateCurrentPage(context, page);
-    await expect(page.locator("[data-umt-panel]")).toHaveCount(0);
+    // The shell holds no pages yet, but the button is the entry a reader uses when detection finds none.
+    await expect(page.locator("[data-umt-panel]")).toBeVisible();
+    await expect(page.locator("[data-umt-surface-button]")).toHaveCount(0);
 
     await page.evaluate(() => {
       const frame = document.createElement("iframe");
@@ -162,5 +166,46 @@ test("reader frame added after activation is injected without a reload", async (
     const reader = page.frameLocator("iframe.reader-frame");
     await expect(reader.locator("[data-umt-surface-button]")).toHaveCount(2, { timeout: 20000 });
     await expect(page.locator("[data-umt-panel]")).toBeVisible({ timeout: 20000 });
+  });
+});
+
+test("reader frame that navigates to the next chapter is injected again without a tab reload", async () => {
+  await runWithFixtures(async (page, context, origin) => {
+    await page.goto(`${origin}/embedded-manga.html`);
+    await activateCurrentPage(context, page);
+    const reader = page.frameLocator("iframe.reader-frame");
+    await expect(reader.locator("[data-umt-surface-button]")).toHaveCount(2, { timeout: 15000 });
+
+    // A chapter change inside the frame swaps its document while the tab keeps reporting "complete",
+    // so only a frame-level navigation listener can put a script back there.
+    await page.evaluate(() => {
+      document.querySelector<HTMLIFrameElement>("iframe.reader-frame")!.src = "./frame-reader-chapter-2.html";
+    });
+
+    await expect(reader.locator("[data-umt-surface-button]")).toHaveCount(3, { timeout: 20000 });
+  });
+});
+
+test("fullscreened reader keeps the tab widget reachable", async () => {
+  await runWithFixtures(async (page, context, origin) => {
+    await page.goto(`${origin}/embedded-manga.html`);
+    await activateCurrentPage(context, page);
+    const reader = page.frameLocator("iframe.reader-frame");
+    await expect(reader.locator("[data-umt-surface-button]")).toHaveCount(2, { timeout: 15000 });
+    await expect(reader.locator("[data-umt-panel]")).toHaveCount(0);
+    await expect(page.locator("[data-umt-panel]")).toHaveCount(1);
+
+    await page.click("#fullscreen-frame");
+    // Chrome sends a frame no event when its parent fullscreened the frame element, so the takeover
+    // is noticed through the viewport the frame just grew into.
+    await expect(reader.locator("[data-umt-panel]")).toHaveCount(1, { timeout: 15000 });
+    await page.evaluate(() => document.exitFullscreen());
+    await expect(reader.locator("[data-umt-panel]")).toHaveCount(0, { timeout: 15000 });
+
+    await page.click("#fullscreen-shell");
+    // A fullscreened container hides the page's own fixed widgets unless they move inside it.
+    await expect(page.locator("#shell [data-umt-panel]")).toHaveCount(1, { timeout: 15000 });
+    await page.evaluate(() => document.exitFullscreen());
+    await expect.poll(() => page.evaluate(() => document.querySelector("[data-umt-panel]")?.parentElement?.tagName)).toBe("HTML");
   });
 });

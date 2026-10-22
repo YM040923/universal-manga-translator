@@ -8,7 +8,9 @@ function surface(index: number): RegisteredSurface {
     index,
     surfaceId: `s${index}`,
     element: {} as HTMLElement,
+    kind: "image",
     imageUrl: `https://cdn.example/${index}.webp`,
+    cacheKey: `https://cdn.example/${index}.webp`,
     rect: { x: 0, y: index * 1000, width: 800, height: 1000 },
     naturalSize: { width: 800, height: 1000 },
   };
@@ -58,6 +60,19 @@ test("TranslationQueue can pause, clear, and ignore queued work", async () => {
 
   queue.clear("test");
   assert.equal(queue.snapshot().total, 0);
+});
+
+test("TranslationQueue keeps the scanned count visible when nothing is queued", () => {
+  const queue = new TranslationQueue({ concurrency: 1, worker: async () => "completed" });
+  queue.setDetected(7);
+
+  assert.deepEqual(queue.snapshot(), { total: 0, detected: 7, queued: 0, processing: 0, completed: 0, cached: 0, empty: 0, failed: 0, cancelled: 0, paused: false });
+
+  queue.setSurfaces([surface(1), surface(2)]);
+  assert.equal(queue.snapshot().detected, 7);
+
+  queue.clear("new page");
+  assert.equal(queue.snapshot().detected, 0);
 });
 
 test("TranslationQueue notifies status changes for controls and progress", async () => {

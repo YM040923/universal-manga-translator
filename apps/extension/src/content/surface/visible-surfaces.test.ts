@@ -7,7 +7,9 @@ function surface(index: number, top: number, height = 1000): RegisteredSurface {
   return {
     index,
     surfaceId: `s${index}`,
+    kind: "image",
     imageUrl: `https://cdn.example/${index}.webp`,
+    cacheKey: `https://cdn.example/${index}.webp`,
     rect: { x: 0, y: top, width: 800, height },
     naturalSize: { width: 800, height },
     element: {
